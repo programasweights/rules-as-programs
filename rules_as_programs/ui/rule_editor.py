@@ -128,6 +128,8 @@ class RAPRuleEditorDocument(NSObject):
         self.show_examples = False
         self.on: list[str] = []
         self.inputs: list[str] = []
+        self.probes: dict[str, str] = {}
+        self.channel = "finding"
         self.severity = "warn"
         self.custom = False
         self.inputs_inferred = False
@@ -188,6 +190,8 @@ class RAPRuleEditorDocument(NSObject):
         self.cases = list(projection.get("cases", []))
         self.on = list(projection.get("on", []))
         self.inputs = list(projection.get("inputs", []))
+        self.probes = dict(projection.get("probes", {}))
+        self.channel = str(projection.get("channel", "finding"))
         self.inputs_inferred = bool(projection.get("inputs_inferred"))
         self.has_probes = bool(projection.get("has_probes"))
         self.severity = str(projection.get("severity", "warn"))
@@ -322,6 +326,8 @@ class RAPRuleEditorDocument(NSObject):
                     severity=self.severity,
                     on=self.on,
                     inputs=self.inputs,
+                    probes=self.probes,
+                    channel=self.channel,
                     cases=self.cases,
                 )
             except ValueError as exc:

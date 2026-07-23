@@ -34,12 +34,14 @@ class RuleContext:
     def __init__(
         self, ledger: Ledger, runtime: PawRuntime,
         default_inputs: list[str] | None = None,
+        default_probes: dict[str, str] | None = None,
     ):
         self._ledger = ledger
         self._runtime = runtime
         self.project_root = ledger.project_root
         self.conversation_id = ledger.conversation_id
         self._default_inputs = list(default_inputs or [])
+        self._default_probes = dict(default_probes or {})
         self.trace: list[dict[str, Any]] = []
 
     # --- evidence access ------------------------------------------------
@@ -57,6 +59,7 @@ class RuleContext:
             kind for kind in self._default_inputs if kind != "message"
         ]
         return self.evidence(
+            probes=self._default_probes,
             latest=latest, include=include, max_events=max_events)
 
     def run(self, cmd: str) -> str:
@@ -179,7 +182,7 @@ class Engine:
     def evaluate(
         self, rule: LoadedRule, ledger: Ledger, trigger_event: Event | None = None
     ) -> Verdict | None:
-        ctx = RuleContext(ledger, self.runtime, rule.inputs)
+        ctx = RuleContext(ledger, self.runtime, rule.inputs, rule.probes)
         try:
             result = rule.fn(ctx)
         except Exception:

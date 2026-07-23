@@ -204,7 +204,8 @@ class Daemon:
             rule = self._rule_from(rule_id, event.project_root, None)
             if rule is None or rule.channel != "attention":
                 return
-            context = RuleContext(ledger, self.runtime, rule.inputs)
+            context = RuleContext(
+                ledger, self.runtime, rule.inputs, rule.probes)
             result = rule.fn(context)
             if not result:
                 return

@@ -49,6 +49,7 @@ class RuleDef:
     severity: str
     on: list[str]
     inputs: list[str]
+    probes: dict[str, str]
     channel: str
     fn: Callable
     spec: str | None = None
@@ -57,6 +58,7 @@ class RuleDef:
 
 def rule(*, severity: str = "warn", on: list[str] | None = None,
          inputs: list[str] | None = None,
+         probes: dict[str, str] | None = None,
          channel: str = "finding",
          id: str | None = None, name: str | None = None,
          title: str | None = None,
@@ -82,6 +84,7 @@ def rule(*, severity: str = "warn", on: list[str] | None = None,
         setattr(fn, RULE_ATTR, RuleDef(
             id=rid, title=ttl, severity=severity, on=list(on or []),
             inputs=list(inputs or []),
+            probes=dict(probes or {}),
             channel=channel,
             fn=fn, spec=spec, examples=list(examples or []),
         ))

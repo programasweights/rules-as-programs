@@ -107,9 +107,9 @@ def legacy_rule(ctx):
     ).read_text()
     builtin_projection = rules_api.source_projection(builtin)
     assert builtin_projection["simple_fuzzy"]
-    assert not builtin_projection["managed_fuzzy"]
-    assert builtin_projection["violation_label"] == "UNSYNCED"
-    assert builtin_projection["allowed_label"] in ("SYNCED", "TRIVIAL")
+    assert builtin_projection["managed_fuzzy"]
+    assert builtin_projection["violation_label"] == "VIOLATION"
+    assert builtin_projection["allowed_label"] == "OK"
 
 
 def test_uuid_identity_uses_stable_folder_and_safe_name_updates(
@@ -279,3 +279,17 @@ def test_promote_customize_and_revert_shared_rule(monkeypatch, tmp_path):
     assert reverted["ok"]
     assert not (project / ".cursor" / "rules-as-programs" / "rules"
                 / rule_id / "rule.py").exists()
+
+
+def test_all_builtins_use_managed_fuzzy_format():
+    builtin_dir = Path(__file__).parents[1] / "rules_as_programs" / "builtin_rules"
+    projections = {}
+    for path in builtin_dir.glob("*.py"):
+        source = path.read_text()
+        projection = rules_api.source_projection(source)
+        assert projection["managed_fuzzy"], path.name
+        assert projection["id_persisted"], path.name
+        assert "EXAMPLES =" not in source
+        projections[path.stem] = projection
+    assert projections["github-sync"]["probes"]["git_status"]
+    assert projections["deployment-checklist"]["probes"]["git_status"]

@@ -63,6 +63,7 @@ def _summary(r: LoadedRule, project_root: str | None) -> dict[str, Any]:
         "scope": r.scope,
         "on": r.on,
         "inputs": r.inputs,
+        "probes": r.probes,
         "channel": r.channel,
         "n_examples": len(r.examples),
         "source_path": r.source_path,
@@ -116,6 +117,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
                 "severity": loaded.severity,
                 "on": list(loaded.on),
                 "inputs": list(loaded.inputs),
+                "probes": dict(loaded.probes),
                 "channel": loaded.channel,
                 "n_examples": len(loaded.examples),
                 "paw": bool(loaded.spec),
@@ -143,6 +145,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
                     "severity": bundled_rule.severity,
                     "on": list(bundled_rule.on),
                     "inputs": list(bundled_rule.inputs),
+                    "probes": dict(bundled_rule.probes),
                     "channel": bundled_rule.channel,
                     "n_examples": len(bundled_rule.examples),
                     "paw": bool(bundled_rule.spec),
@@ -178,6 +181,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
             "severity": loaded_rule.severity,
             "on": list(loaded_rule.on),
             "inputs": list(loaded_rule.inputs),
+            "probes": dict(loaded_rule.probes),
             "channel": loaded_rule.channel,
             "n_examples": len(loaded_rule.examples),
             "paw": bool(loaded_rule.spec),
@@ -293,7 +297,10 @@ def source_projection(source: str) -> dict[str, Any]:
     custom = not isinstance(decorator, ast.Call)
     if isinstance(decorator, ast.Call):
         for keyword in decorator.keywords:
-            if keyword.arg in ("id", "name", "title", "on", "inputs", "severity"):
+            if keyword.arg in (
+                "id", "name", "title", "on", "inputs", "probes", "channel",
+                "severity"
+            ):
                 try:
                     values[keyword.arg] = ast.literal_eval(keyword.value)
                     if keyword.arg == "inputs":
@@ -302,7 +309,9 @@ def source_projection(source: str) -> dict[str, Any]:
                     custom = True
     on = values.get("on", [])
     inputs = values.get("inputs", [])
+    probes = values.get("probes", {})
     severity = values.get("severity", "warn")
+    channel = values.get("channel", "finding")
     raw_id = values.get("id", "")
     function_slug = function.name.replace("_", "-")
     resolved_id = raw_id if is_rule_uuid(raw_id) else legacy_rule_uuid(
@@ -312,9 +321,16 @@ def source_projection(source: str) -> dict[str, Any]:
         custom = True
     if not isinstance(inputs, list) or not all(isinstance(item, str) for item in inputs):
         custom = True
+    if not isinstance(probes, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in probes.items()
+    ):
+        custom = True
     if not isinstance(severity, str):
         custom = True
-    has_probes = False
+    if not isinstance(channel, str):
+        custom = True
+    has_probes = bool(probes)
     if not inputs_declared:
         inferred: list[str] = []
         for call in (
@@ -440,9 +456,11 @@ def source_projection(source: str) -> dict[str, Any]:
         ),
         "on": list(on) if isinstance(on, list) else [],
         "inputs": list(inputs) if isinstance(inputs, list) else [],
+        "probes": dict(probes) if isinstance(probes, dict) else {},
         "inputs_inferred": bool(not inputs_declared and inputs),
         "has_probes": has_probes,
         "severity": severity if isinstance(severity, str) else "warn",
+        "channel": channel if isinstance(channel, str) else "finding",
         "spec": spec,
         "simple_fuzzy": bool(spec),
         "managed_fuzzy": managed_fuzzy,
@@ -826,6 +844,8 @@ def generate_managed_fuzzy_source(
     severity: str,
     on: list[str],
     inputs: list[str],
+    probes: dict[str, str] | None = None,
+    channel: str = "finding",
     cases: list[tuple[str, str]] | None = None,
 ) -> str:
     if not is_rule_uuid(rule_id):
@@ -842,6 +862,10 @@ def generate_managed_fuzzy_source(
     function_name = scaffold.slugify(name).replace("-", "_")
     safe_spec = spec.replace('"""', '\\"\\"\\"')
     safe_name = name.replace('"""', '\\"\\"\\"')
+    probe_line = f"    probes={dict(probes)!r},\n" if probes else ""
+    channel_line = (
+        f"    channel={channel!r},\n" if channel != "finding" else ""
+    )
     return (
         "from rules_as_programs import rule\n\n"
         f"{MANAGED_FUZZY_MARKER}\n"
@@ -851,6 +875,8 @@ def generate_managed_fuzzy_source(
         f"    name={name!r},\n"
         f"    on={list(on)!r},\n"
         f"    inputs={list(inputs)!r},\n"
+        f"{probe_line}"
+        f"{channel_line}"
         f"    severity={severity!r},\n"
         "    spec=SPEC,\n"
         ")\n"

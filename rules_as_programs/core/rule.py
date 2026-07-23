@@ -48,6 +48,7 @@ class LoadedRule:
     on: list[str]
     fn: Callable
     inputs: list[str] = field(default_factory=list)
+    probes: dict[str, str] = field(default_factory=dict)
     channel: str = "finding"
     legacy_id: str = ""
     slug: str = ""
@@ -64,6 +65,7 @@ class LoadedRule:
         rule_id = d.id if is_rule_uuid(d.id) else legacy_rule_uuid(legacy_id)
         return cls(id=rule_id, title=d.title, severity=d.severity, on=list(d.on),
                    inputs=list(d.inputs),
+                   probes=dict(d.probes),
                    channel=d.channel,
                    fn=d.fn, spec=d.spec, examples=list(d.examples),
                    scope=scope, source_path=path,

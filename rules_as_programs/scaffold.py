@@ -58,6 +58,8 @@ def install_builtins(scope: str, project_root: str | None, overwrite: bool = Fal
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(source, encoding="utf-8")
+        if overwrite and legacy_target.exists():
+            legacy_target.unlink(missing_ok=True)
         notes.append(f"installed {rule.title}")
     return notes
 
@@ -91,6 +93,8 @@ def add_builtin(
         return None
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source, encoding="utf-8")
+    if overwrite and legacy_target.exists():
+        legacy_target.unlink(missing_ok=True)
     return target
 
 
