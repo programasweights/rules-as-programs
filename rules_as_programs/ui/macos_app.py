@@ -108,7 +108,7 @@ def _status_attributed_title(
     presentation: StatusPresentation,
 ) -> NSMutableAttributedString:
     result = NSMutableAttributedString.alloc().init()
-    font = NSFont.boldSystemFontOfSize_(11)
+    font = NSFont.boldSystemFontOfSize_(13)
 
     def append(text: str, color) -> None:
         piece = NSMutableAttributedString.alloc().initWithString_attributes_(
