@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+
+# Rules as Programs runtime state (in case RAP_STATE_DIR points into the repo)
+.rap-state/

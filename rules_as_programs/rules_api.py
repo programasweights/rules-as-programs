@@ -1,0 +1,1395 @@
+"""Rule-management operations shared by the tray and the CLI.
+
+All file-level operations work on Python rule files (``<id>.py``). Enable/disable,
+mute/snooze, and per-project monitoring are kept in small JSON state files so we
+never rewrite the user's source. Compile + test need a warm PAW runtime, so those
+are driven by the daemon (which keeps one warm).
+"""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import os
+import re
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from . import config, scaffold
+from .core.events import ALL_KINDS
+from .core import revisions
+from .core.rule import (
+    LoadedRule, is_rule_uuid, legacy_rule_uuid, load_rule_file, load_rules,
+    rule_paths,
+)
+from .sdk import RULE_ATTR, RuleDef, SEVERITIES
+
+
+# --- listing / reading -----------------------------------------------------
+
+def _summary(r: LoadedRule, project_root: str | None) -> dict[str, Any]:
+    mute = mute_info(r.id, project_root)
+    assignment = enabled_state(r.id, project_root)
+    customized = bool(
+        project_root
+        and r.scope == "project"
+        and any(item.id == r.id for item in load_rules(None))
+    )
+    if (
+        r.scope == "project"
+        and not customized
+        and assignment.get("project_override") is None
+    ):
+        assignment = {
+            **assignment,
+            "assignment_origin": "project_default",
+            "effective_enabled": True,
+        }
+    try:
+        source = Path(r.source_path).read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    revision = revisions.working_status(r.id, r.source_path, source)
+    return {
+        "id": r.id,
+        "name": r.title,
+        "title": r.title,
+        "legacy_id": r.legacy_id,
+        "slug": r.slug,
+        "severity": r.severity,
+        "scope": r.scope,
+        "on": r.on,
+        "inputs": r.inputs,
+        "channel": r.channel,
+        "n_examples": len(r.examples),
+        "source_path": r.source_path,
+        "enabled": assignment["effective_enabled"],
+        **assignment,
+        "source_origin": r.scope,
+        "customized_from": "shared" if customized else "",
+        "muted": mute["muted"],
+        "mute_until": mute["until"],
+        "mute_scope": mute["scope"],
+        "paw": bool(r.spec),
+        **revision,
+    }
+
+
+def list_rules(project_root: str | None) -> list[dict[str, Any]]:
+    loaded = load_rules(project_root or None)
+    if not any(rule.id == "agent-needs-reply" for rule in loaded):
+        bundled = scaffold.BUILTIN_DIR / "agent-needs-reply.py"
+        if bundled.exists():
+            loaded.extend(load_rule_file(bundled, "builtin"))
+    return [_summary(r, project_root) for r in loaded]
+
+
+def _find_rule_file(rule_id: str, project_root: str | None) -> tuple[Path, str] | None:
+    candidates: list[tuple[Path, str]] = []
+    if project_root:
+        candidates.append((
+            config.project_rules_dir(project_root) / rule_id / "rule.py",
+            "project",
+        ))
+        candidates.append((config.project_rules_dir(project_root) / f"{rule_id}.py", "project"))
+    candidates.append((config.global_rules_dir() / rule_id / "rule.py", "global"))
+    candidates.append((config.global_rules_dir() / f"{rule_id}.py", "global"))
+    for path, scope in candidates:
+        if path.exists():
+            return path, scope
+    # fall back to scanning loaded rules (filename may differ from id)
+    for r in load_rules(project_root or None):
+        if rule_id in (r.id, r.legacy_id, r.slug) and r.source_path:
+            return Path(r.source_path), r.scope
+    return None
+
+
+def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
+    metadata: dict[str, Any] = {}
+    for loaded in load_rules(project_root or None):
+        if loaded.id == rule_id:
+            metadata = {
+                "title": loaded.title,
+                "severity": loaded.severity,
+                "on": list(loaded.on),
+                "inputs": list(loaded.inputs),
+                "channel": loaded.channel,
+                "n_examples": len(loaded.examples),
+                "paw": bool(loaded.spec),
+            }
+            break
+    found = _find_rule_file(rule_id, project_root)
+    if not found:
+        src = None
+        bundled_rule = None
+        for candidate in scaffold.builtin_rules():
+            loaded = load_rule_file(candidate, "builtin")
+            if loaded and rule_id in (
+                loaded[0].id, loaded[0].legacy_id, loaded[0].slug
+            ):
+                src, bundled_rule = candidate, loaded[0]
+                break
+        if src and bundled_rule:
+            source = src.read_text(encoding="utf-8")
+            if not metadata:
+                metadata = {
+                    "name": bundled_rule.title,
+                    "title": bundled_rule.title,
+                    "legacy_id": bundled_rule.legacy_id,
+                    "slug": bundled_rule.slug,
+                    "severity": bundled_rule.severity,
+                    "on": list(bundled_rule.on),
+                    "inputs": list(bundled_rule.inputs),
+                    "channel": bundled_rule.channel,
+                    "n_examples": len(bundled_rule.examples),
+                    "paw": bool(bundled_rule.spec),
+                }
+            return {
+                "id": bundled_rule.id,
+                "scope": "builtin",
+                "source": source,
+                "path": str(src),
+                "enabled": is_enabled(bundled_rule.id, project_root),
+                **enabled_state(bundled_rule.id, project_root),
+                "muted": is_muted(bundled_rule.id, project_root),
+                **revisions.working_status(
+                    bundled_rule.id, str(src), source),
+                **metadata,
+            }
+        return None
+    path, scope = found
+    loaded_rules = load_rule_file(path, scope)
+    loaded_rule = next(
+        (item for item in loaded_rules if rule_id in (
+            item.id, item.legacy_id, item.slug
+        )),
+        loaded_rules[0] if loaded_rules else None,
+    )
+    resolved_id = loaded_rule.id if loaded_rule else resolve_rule_ref(rule_id)
+    if loaded_rule:
+        metadata = {
+            "name": loaded_rule.title,
+            "title": loaded_rule.title,
+            "legacy_id": loaded_rule.legacy_id,
+            "slug": loaded_rule.slug,
+            "severity": loaded_rule.severity,
+            "on": list(loaded_rule.on),
+            "inputs": list(loaded_rule.inputs),
+            "channel": loaded_rule.channel,
+            "n_examples": len(loaded_rule.examples),
+            "paw": bool(loaded_rule.spec),
+        }
+    source = path.read_text(encoding="utf-8")
+    return {
+        "id": resolved_id,
+        "scope": scope,
+        "source": source,
+        "path": str(path),
+        "enabled": is_enabled(resolved_id, project_root),
+        **enabled_state(resolved_id, project_root),
+        "muted": is_muted(resolved_id, project_root),
+        **revisions.working_status(resolved_id, str(path), source),
+        **metadata,
+    }
+
+
+# --- writing ---------------------------------------------------------------
+
+def _rules_dir(scope: str, project_root: str | None) -> Path:
+    if scope == "global":
+        return config.global_rules_dir()
+    return config.project_rules_dir(project_root or Path.cwd())
+
+
+def validate_source(source: str) -> tuple[bool, str, str | None]:
+    """Return (ok, error, rule_id). Executes the source in a throwaway namespace
+    and confirms it defines a @rule-decorated function."""
+    ns: dict[str, Any] = {"__name__": "rap_rule_check"}
+    try:
+        exec(compile(source, "<rule>", "exec"), ns)
+    except Exception as exc:  # syntax or import/runtime error
+        return False, f"{type(exc).__name__}: {exc}", None
+    for value in ns.values():
+        rd = getattr(value, RULE_ATTR, None)
+        if isinstance(rd, RuleDef):
+            return True, "", rd.id
+    return False, "no @rule-decorated function found", None
+
+
+def check_source_syntax(source: str) -> tuple[bool, str]:
+    """Side-effect-free live validation used while the user is typing."""
+    try:
+        tree = ast.parse(source, filename="<rule>")
+    except SyntaxError as exc:
+        location = f"line {exc.lineno}" if exc.lineno else "unknown line"
+        return False, f"SyntaxError at {location}: {exc.msg}"
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if isinstance(target, ast.Name) and target.id == "rule":
+                return True, ""
+            if isinstance(target, ast.Attribute) and target.attr == "rule":
+                return True, ""
+    return False, "no @rule-decorated function found"
+
+
+def spec_examples(spec: str | None) -> list[tuple[str, str]]:
+    """Parse ``Input:``/``Output:`` cases embedded in a PAW spec."""
+    if not spec:
+        return []
+    examples: list[tuple[str, str]] = []
+    current: list[str] | None = None
+    for line in spec.splitlines():
+        if line.startswith("Input:"):
+            current = [line[len("Input:"):].lstrip()]
+            continue
+        if line.startswith("Output:") and current is not None:
+            value = line[len("Output:"):].strip()
+            examples.append(("\n".join(current).strip(), value))
+            current = None
+            continue
+        if current is not None:
+            current.append(line)
+    return [(text, label) for text, label in examples if text and label]
+
+
+def _is_rule_decorator(node: ast.expr) -> bool:
+    target = node.func if isinstance(node, ast.Call) else node
+    return (
+        isinstance(target, ast.Name) and target.id == "rule"
+    ) or (
+        isinstance(target, ast.Attribute) and target.attr == "rule"
+    )
+
+
+def source_projection(source: str) -> dict[str, Any]:
+    """Project canonical Python into safe function/config editor fields."""
+    try:
+        tree = ast.parse(source, filename="<rule>")
+    except SyntaxError as exc:
+        return {"ok": False, "error": f"SyntaxError: {exc.msg}", "source": source}
+    functions = [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_is_rule_decorator(item) for item in node.decorator_list)
+    ]
+    if len(functions) != 1:
+        return {
+            "ok": False,
+            "error": f"Expected exactly one @rule function; found {len(functions)}.",
+            "source": source,
+            "custom": True,
+        }
+    function = functions[0]
+    decorator = next(
+        item for item in function.decorator_list if _is_rule_decorator(item))
+    values: dict[str, Any] = {}
+    inputs_declared = False
+    custom = not isinstance(decorator, ast.Call)
+    if isinstance(decorator, ast.Call):
+        for keyword in decorator.keywords:
+            if keyword.arg in ("id", "name", "title", "on", "inputs", "severity"):
+                try:
+                    values[keyword.arg] = ast.literal_eval(keyword.value)
+                    if keyword.arg == "inputs":
+                        inputs_declared = True
+                except (ValueError, TypeError):
+                    custom = True
+    on = values.get("on", [])
+    inputs = values.get("inputs", [])
+    severity = values.get("severity", "warn")
+    raw_id = values.get("id", "")
+    function_slug = function.name.replace("_", "-")
+    resolved_id = raw_id if is_rule_uuid(raw_id) else legacy_rule_uuid(
+        str(raw_id or function_slug))
+    explicit_name = values.get("name") or values.get("title")
+    if not isinstance(on, list) or not all(isinstance(item, str) for item in on):
+        custom = True
+    if not isinstance(inputs, list) or not all(isinstance(item, str) for item in inputs):
+        custom = True
+    if not isinstance(severity, str):
+        custom = True
+    has_probes = False
+    if not inputs_declared:
+        inferred: list[str] = []
+        for call in (
+            node for node in ast.walk(function) if isinstance(node, ast.Call)
+        ):
+            target = call.func
+            if not (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "ctx"
+            ):
+                continue
+            if target.attr == "evidence":
+                for keyword in call.keywords:
+                    if keyword.arg in ("latest", "include"):
+                        try:
+                            kinds = ast.literal_eval(keyword.value)
+                        except (ValueError, TypeError):
+                            continue
+                        for kind in kinds if isinstance(kinds, list) else []:
+                            if isinstance(kind, str) and kind not in inferred:
+                                inferred.append(kind)
+                    elif keyword.arg == "probes":
+                        has_probes = True
+            elif target.attr in ("latest", "events"):
+                for argument in call.args:
+                    try:
+                        kind = ast.literal_eval(argument)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(kind, str) and kind not in inferred:
+                        inferred.append(kind)
+            elif target.attr == "run":
+                has_probes = True
+        if inferred:
+            inputs = inferred
+    lines = source.splitlines(keepends=True)
+    function_source = "".join(lines[function.lineno - 1:function.end_lineno])
+    spec = ""
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and isinstance(getattr(node, "value", None), ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(target, ast.Name) and target.id == "SPEC" for target in targets):
+                spec = node.value.value
+                break
+    executable_body = function.body[1:] if (
+        function.body
+        and isinstance(function.body[0], ast.Expr)
+        and isinstance(function.body[0].value, ast.Constant)
+        and isinstance(function.body[0].value.value, str)
+    ) else function.body
+    managed_shape = False
+    if len(executable_body) == 1 and isinstance(executable_body[0], ast.If):
+        statement = executable_body[0]
+        try:
+            test_source = ast.unparse(statement.test).replace('"', "'")
+        except Exception:
+            test_source = ""
+        managed_shape = (
+            test_source == "ctx.paw(SPEC)(ctx.input()) == 'VIOLATION'"
+            and len(statement.body) == 1
+            and isinstance(statement.body[0], ast.Return)
+            and isinstance(statement.body[0].value, ast.Constant)
+            and isinstance(statement.body[0].value.value, str)
+            and not statement.orelse
+        )
+    managed_fuzzy = (
+        MANAGED_FUZZY_MARKER in source and bool(spec) and managed_shape
+    )
+    description = ""
+    violation_message = ""
+    output_labels: list[str] = []
+    violation_label = "VIOLATION"
+    if spec:
+        description = spec.split("Return ONLY one of:", 1)[0].strip()
+        match = re.search(
+            r"Return ONLY one of:\s*([^\n]+)", spec)
+        if match:
+            output_labels = [
+                item.strip() for item in match.group(1).split(",")
+                if item.strip()
+            ]
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Compare)
+            and len(node.comparators) == 1
+            and isinstance(node.comparators[0], ast.Constant)
+            and isinstance(node.comparators[0].value, str)
+        ):
+            segment = ast.get_source_segment(source, node.left) or ""
+            if "paw" in segment:
+                violation_label = node.comparators[0].value
+        if not isinstance(node, ast.Return):
+            continue
+        if (
+            isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            violation_message = node.value.value
+            if violation_message:
+                break
+    return {
+        "ok": True,
+        "source": source,
+        "function_source": function_source.rstrip() + "\n",
+        "function_name": function.name,
+        "id": resolved_id,
+        "id_persisted": is_rule_uuid(raw_id),
+        "legacy_id": str(raw_id or function_slug) if not is_rule_uuid(raw_id) else function_slug,
+        "name": explicit_name or (
+            (ast.get_docstring(function) or "").splitlines()[0]
+            if ast.get_docstring(function)
+            else function.name.replace("_", " ").title()
+        ),
+        "title": explicit_name or (
+            (ast.get_docstring(function) or "").splitlines()[0]
+            if ast.get_docstring(function)
+            else function.name.replace("_", " ").title()
+        ),
+        "on": list(on) if isinstance(on, list) else [],
+        "inputs": list(inputs) if isinstance(inputs, list) else [],
+        "inputs_inferred": bool(not inputs_declared and inputs),
+        "has_probes": has_probes,
+        "severity": severity if isinstance(severity, str) else "warn",
+        "spec": spec,
+        "simple_fuzzy": bool(spec),
+        "managed_fuzzy": managed_fuzzy,
+        "description": description,
+        "violation_message": violation_message,
+        "cases": spec_examples(spec) if managed_fuzzy else [],
+        "output_labels": output_labels,
+        "violation_label": violation_label,
+        "allowed_label": next(
+            (label for label in output_labels if label != violation_label),
+            "OK",
+        ),
+        "custom": custom,
+        "source_hash": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+    }
+
+
+def _offset(lines: list[str], lineno: int, col: int) -> int:
+    return sum(len(line) for line in lines[:lineno - 1]) + col
+
+
+def patch_rule_identity(
+    source: str, rule_uuid: str, name: str
+) -> tuple[bool, str, str]:
+    """Persist immutable UUID and mutable Name into canonical Python."""
+    if not is_rule_uuid(rule_uuid):
+        return False, source, "Rule id must be a valid UUID."
+    clean_name = " ".join(str(name).split()).strip()
+    if not clean_name:
+        return False, source, "Rule name is required."
+    try:
+        tree = ast.parse(source, filename="<rule>")
+    except SyntaxError as exc:
+        return False, source, f"SyntaxError: {exc.msg}"
+    functions = [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_is_rule_decorator(item) for item in node.decorator_list)
+    ]
+    if len(functions) != 1:
+        return False, source, "Expected exactly one @rule function."
+    function = functions[0]
+    decorator = next(
+        item for item in function.decorator_list if _is_rule_decorator(item))
+    if not isinstance(decorator, ast.Call) or any(
+        item.arg is None for item in decorator.keywords
+    ):
+        return False, source, "Custom decorator arguments require Advanced Python."
+    unknown = []
+    for keyword in decorator.keywords:
+        if keyword.arg not in ("id", "name", "title"):
+            value = ast.get_source_segment(source, keyword.value)
+            unknown.append((keyword.arg, value or "None"))
+    arguments = [("id", repr(rule_uuid)), ("name", repr(clean_name)), *unknown]
+    decorator_text = "@rule(\n" + "".join(
+        f"    {key}={value},\n" for key, value in arguments
+    ) + ")"
+    function_name = scaffold.slugify(clean_name).replace("-", "_")
+    lines = source.splitlines(keepends=True)
+    definition_line = lines[function.lineno - 1]
+    name_start = definition_line.find(function.name, function.col_offset)
+    if name_start < 0:
+        return False, source, "Could not locate function name."
+    replacements = [
+        (
+            _offset(lines, decorator.lineno, 0),
+            _offset(lines, decorator.end_lineno, decorator.end_col_offset),
+            decorator_text,
+        ),
+        (
+            _offset(lines, function.lineno, name_start),
+            _offset(lines, function.lineno, name_start + len(function.name)),
+            function_name,
+        ),
+    ]
+    if (
+        function.body
+        and isinstance(function.body[0], ast.Expr)
+        and isinstance(function.body[0].value, ast.Constant)
+        and isinstance(function.body[0].value.value, str)
+    ):
+        value = function.body[0].value
+        rendered = '"""' + clean_name.replace('"""', '\\"\\"\\"') + '"""'
+        replacements.append((
+            _offset(lines, value.lineno, value.col_offset),
+            _offset(lines, value.end_lineno, value.end_col_offset),
+            rendered,
+        ))
+    patched = source
+    for start, end, replacement in sorted(replacements, reverse=True):
+        patched = patched[:start] + replacement + patched[end:]
+    ok, error = check_source_syntax(patched)
+    return ok, patched, error
+
+
+def patch_source_projection(
+    source: str,
+    *,
+    on: list[str],
+    inputs: list[str],
+    severity: str,
+    function_source: str,
+    spec: str | None = None,
+) -> tuple[bool, str, str]:
+    """Round-trip safe editor fields back into canonical Python source."""
+    projection = source_projection(source)
+    if not projection.get("ok"):
+        return False, source, projection.get("error", "invalid source")
+    if projection.get("custom"):
+        return False, source, "Metadata is dynamic; edit it in Full Python."
+    try:
+        function_tree = ast.parse(function_source, filename="<rule-function>")
+    except SyntaxError as exc:
+        return False, source, f"Function SyntaxError: {exc.msg}"
+    if (
+        len(function_tree.body) != 1
+        or not isinstance(function_tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
+    ):
+        return False, source, "Function view must contain exactly one function."
+    tree = ast.parse(source, filename="<rule>")
+    function = next(
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_is_rule_decorator(item) for item in node.decorator_list)
+    )
+    decorator = next(
+        item for item in function.decorator_list if _is_rule_decorator(item))
+    if not isinstance(decorator, ast.Call) or any(item.arg is None for item in decorator.keywords):
+        return False, source, "Custom decorator arguments require Full Python."
+    unknown = []
+    for keyword in decorator.keywords:
+        if keyword.arg not in ("on", "inputs", "severity"):
+            value = ast.get_source_segment(source, keyword.value)
+            unknown.append((keyword.arg, value or "None"))
+    arguments = [
+        ("on", repr(list(on))),
+        ("inputs", repr(list(inputs))),
+        ("severity", repr(severity)),
+        *unknown,
+    ]
+    decorator_text = "@rule(\n" + "".join(
+        f"    {name}={value},\n" for name, value in arguments
+    ) + ")"
+    lines = source.splitlines(keepends=True)
+    replacements = [
+        (
+            _offset(lines, decorator.lineno, 0),
+            _offset(lines, decorator.end_lineno, decorator.end_col_offset),
+            decorator_text,
+        ),
+        (
+            _offset(lines, function.lineno, 0),
+            _offset(lines, function.end_lineno, function.end_col_offset),
+            function_source.rstrip(),
+        ),
+    ]
+    if spec is not None:
+        for node in tree.body:
+            value = getattr(node, "value", None)
+            targets = node.targets if isinstance(node, ast.Assign) else (
+                [node.target] if isinstance(node, ast.AnnAssign) else [])
+            if (
+                isinstance(value, ast.Constant) and isinstance(value.value, str)
+                and any(isinstance(target, ast.Name) and target.id == "SPEC"
+                        for target in targets)
+            ):
+                rendered = '"""' + spec.replace('"""', '\\"\\"\\"') + '"""'
+                replacements.append((
+                    _offset(lines, value.lineno, value.col_offset),
+                    _offset(lines, value.end_lineno, value.end_col_offset),
+                    rendered,
+                ))
+                break
+    patched = source
+    for start, end, replacement in sorted(replacements, reverse=True):
+        patched = patched[:start] + replacement + patched[end:]
+    ok, error = check_source_syntax(patched)
+    return ok, patched, error
+
+
+def validate_editor_source(source: str) -> tuple[bool, str]:
+    projection = source_projection(source)
+    if not projection.get("ok"):
+        return False, projection.get("error", "invalid rule")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return False, f"SyntaxError: {exc.msg}"
+    function = next(
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(_is_rule_decorator(item) for item in node.decorator_list)
+    )
+    positional = [*function.args.posonlyargs, *function.args.args]
+    if len(positional) != 1 or positional[0].arg != "ctx":
+        return False, "Rule function must take exactly one parameter named ctx."
+    if not projection.get("on"):
+        return False, "Choose at least one Runs when event."
+    unknown_on = set(projection["on"]) - ALL_KINDS
+    if unknown_on:
+        return False, f"Unknown trigger event(s): {', '.join(sorted(unknown_on))}"
+    unknown_inputs = set(projection.get("inputs", [])) - ALL_KINDS
+    if unknown_inputs:
+        return False, f"Unknown input event(s): {', '.join(sorted(unknown_inputs))}"
+    if projection.get("severity") not in SEVERITIES:
+        return False, f"Unknown severity: {projection.get('severity')}"
+    return True, ""
+
+
+def save_rule(rule_id: str, source: str, scope: str, project_root: str | None) -> dict[str, Any]:
+    previous = _find_rule_file(rule_id, project_root)
+    projection = source_projection(source)
+    if not projection.get("ok"):
+        return {"ok": False, "error": projection.get("error", "invalid rule")}
+    rid = rule_id if is_rule_uuid(rule_id) else projection["id"]
+    if not is_rule_uuid(rid):
+        return {"ok": False, "error": "rule id must be a UUID"}
+    name = str(projection.get("name") or projection.get("title") or "Rule")
+    identity_ok, source, identity_error = patch_rule_identity(source, rid, name)
+    if not identity_ok:
+        return {"ok": False, "error": identity_error}
+    ok, err, found_id = validate_source(source)
+    if not ok:
+        return {"ok": False, "error": err}
+    if found_id != rid:
+        return {"ok": False, "error": "source UUID does not match rule identity"}
+    dest = _rules_dir(scope, project_root)
+    dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
+    folder = (dest / rid).resolve()
+    if folder.parent != root:
+        return {"ok": False, "error": "rule path escaped rules directory"}
+    path = folder / "rule.py"
+    if path.exists() and (not previous or previous[0].resolve() != path):
+        existing = load_rule_file(path, scope)
+        if not existing or existing[0].id != rid:
+            return {"ok": False, "error": "a different rule already uses this UUID"}
+    folder.mkdir(parents=True, exist_ok=True)
+    rendered = source if source.endswith("\n") else source + "\n"
+    temporary = folder / ".rule.py.tmp"
+    temporary.write_text(rendered, encoding="utf-8")
+    os.replace(temporary, path)
+    if previous:
+        previous_path, previous_scope = previous
+        if previous_scope == scope and previous_path != path:
+            revisions.migrate_source_path(rid, previous_path, path)
+            previous_path.unlink(missing_ok=True)
+            try:
+                previous_path.parent.rmdir()
+            except OSError:
+                pass
+    legacy_ref = (
+        str(projection.get("legacy_id") or rule_id)
+        if not projection.get("id_persisted") else ""
+    )
+    if legacy_ref:
+        migrate_legacy_rule_state(str(legacy_ref), rid, project_root)
+    return {
+        "ok": True,
+        "id": rid,
+        "name": name,
+        "title": name,
+        "scope": scope,
+        "path": str(path),
+        "source": rendered,
+        "projection": source_projection(rendered),
+        "source_hash": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        "renamed_from": legacy_ref,
+        **revisions.working_status(rid, path, rendered),
+    }
+
+
+def rename_rule(
+    rule_id: str,
+    name: str,
+    *,
+    project_root: str | None,
+    project_roots: list[str] | None = None,
+    source_override: str | None = None,
+) -> dict[str, Any]:
+    """Atomically rename Name/function across sources sharing one UUID."""
+    rule_uuid = resolve_rule_ref(rule_id)
+    info = get_rule(rule_uuid, project_root)
+    if not info:
+        return {"ok": False, "error": "rule not found"}
+    if info.get("scope") == "builtin":
+        return {
+            "ok": False,
+            "error": "Customize this built-in for the project before renaming it.",
+        }
+    paths: list[tuple[Path, str]] = [(Path(info["path"]), info["scope"])]
+    if info.get("scope") == "global":
+        for root in project_roots or []:
+            for path in rule_paths(config.project_rules_dir(root)):
+                loaded = load_rule_file(path, "project")
+                if loaded and loaded[0].id == rule_uuid:
+                    paths.append((path, "project"))
+    unique: dict[str, tuple[Path, str]] = {
+        str(path.resolve()): (path, scope) for path, scope in paths
+    }
+    originals: dict[Path, str] = {}
+    patched: dict[Path, str] = {}
+    primary_path = Path(info["path"]).resolve()
+    for path, _scope in unique.values():
+        try:
+            source = (
+                source_override
+                if source_override is not None and path.resolve() == primary_path
+                else path.read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+        ok, updated, error = patch_rule_identity(source, rule_uuid, name)
+        if not ok:
+            return {"ok": False, "error": error, "path": str(path)}
+        valid, error = validate_editor_source(updated)
+        if not valid:
+            return {"ok": False, "error": error, "path": str(path)}
+        originals[path] = source
+        patched[path] = updated if updated.endswith("\n") else updated + "\n"
+    replaced: list[Path] = []
+    try:
+        for path, source in patched.items():
+            temporary = path.with_name(".rule.rename.tmp")
+            temporary.write_text(source, encoding="utf-8")
+            os.replace(temporary, path)
+            replaced.append(path)
+    except OSError as exc:
+        for path in replaced:
+            temporary = path.with_name(".rule.rollback.tmp")
+            temporary.write_text(originals[path], encoding="utf-8")
+            os.replace(temporary, path)
+        return {"ok": False, "error": str(exc)}
+    refreshed = get_rule(rule_uuid, project_root) or {}
+    if refreshed.get("source"):
+        refreshed["projection"] = source_projection(refreshed["source"])
+        refreshed["source_hash"] = revisions.hash_source(refreshed["source"])
+    return {
+        "ok": True,
+        "id": rule_uuid,
+        "name": name,
+        "affected_paths": [str(path) for path in patched],
+        "rule": refreshed,
+        **{
+            key: refreshed.get(key)
+            for key in ("path", "source", "scope", "projection", "source_hash")
+            if key in refreshed
+        },
+    }
+
+
+MANAGED_FUZZY_MARKER = "# RAP_MANAGED_FUZZY_V1"
+
+DEFAULT_FUZZY_DESCRIPTION = (
+    "Decide whether rsync or scp was used to synchronize project source code "
+    "instead of Git. Directly copying source code is a violation; transferring "
+    "assets, build artifacts, backups, or release packages is allowed."
+)
+DEFAULT_FUZZY_CASES = [
+    ("## Recent activity\n- (shell_exec) $ git push", "OK"),
+    (
+        "## Recent activity\n"
+        "- (shell_exec) $ rsync -av src/ deploy@host:/srv/app/src/",
+        "VIOLATION",
+    ),
+    (
+        "## Recent activity\n"
+        "- (shell_exec) $ scp public/logo.png cdn@host:/srv/assets/\n"
+        "- (message) Uploaded a static image asset.",
+        "OK",
+    ),
+]
+
+
+def generate_managed_fuzzy_source(
+    rule_id: str,
+    name: str,
+    description: str,
+    violation_message: str,
+    *,
+    severity: str,
+    on: list[str],
+    inputs: list[str],
+    cases: list[tuple[str, str]] | None = None,
+) -> str:
+    if not is_rule_uuid(rule_id):
+        raise ValueError("rule_id must be a UUID")
+    case_text = "\n\n".join(
+        f"Input: {evidence}\nOutput: {label}"
+        for evidence, label in (cases or [])
+    )
+    spec = (
+        description.strip()
+        + "\nReturn ONLY one of: OK, VIOLATION"
+        + (f"\n\n{case_text}" if case_text else "")
+    )
+    function_name = scaffold.slugify(name).replace("-", "_")
+    safe_spec = spec.replace('"""', '\\"\\"\\"')
+    safe_name = name.replace('"""', '\\"\\"\\"')
+    return (
+        "from rules_as_programs import rule\n\n"
+        f"{MANAGED_FUZZY_MARKER}\n"
+        f'SPEC = """{safe_spec}"""\n\n\n'
+        "@rule(\n"
+        f"    id={rule_id!r},\n"
+        f"    name={name!r},\n"
+        f"    on={list(on)!r},\n"
+        f"    inputs={list(inputs)!r},\n"
+        f"    severity={severity!r},\n"
+        "    spec=SPEC,\n"
+        ")\n"
+        f"def {function_name}(ctx):\n"
+        f'    """{safe_name}"""\n'
+        "    if ctx.paw(SPEC)(ctx.input()) == \"VIOLATION\":\n"
+        f"        return {violation_message!r}\n"
+    )
+
+
+def draft_rule_source(rule_id: str, title: str | None = None) -> str:
+    if not is_rule_uuid(rule_id):
+        raise ValueError("rule_id must be a UUID")
+    title = title or "Use Git for source synchronization."
+    return generate_managed_fuzzy_source(
+        rule_id,
+        title,
+        DEFAULT_FUZZY_DESCRIPTION,
+        "Project source appears to have been copied directly instead of synced with Git.",
+        severity="warn",
+        on=["shell_exec", "session_stop"],
+        inputs=["shell_exec", "message"],
+        cases=DEFAULT_FUZZY_CASES,
+    )
+
+
+PLAIN_RULE_TEMPLATE = '''from rules_as_programs import rule
+
+
+@rule(id="{rule_uuid}", name="{title}",
+      on=["message"], inputs=["message"], severity="warn")
+def {func}(ctx):
+    """{title}"""
+    if "unsafe phrase" in ctx.input().lower():
+        return "The agent used the unsafe phrase."
+'''
+
+
+def draft_plain_rule_source(rule_id: str, title: str | None = None) -> str:
+    if not is_rule_uuid(rule_id):
+        raise ValueError("rule_id must be a UUID")
+    title = title or "Flag a deterministic text pattern."
+    func = scaffold.slugify(title).replace("-", "_")
+    return PLAIN_RULE_TEMPLATE.format(
+        rule_uuid=rule_id, title=title, func=func)
+
+
+def create_rule(rule_id: str, scope: str, project_root: str | None,
+                title: str | None = None) -> dict[str, Any]:
+    legacy_ref = rule_id if not is_rule_uuid(rule_id) else ""
+    rule_uuid = rule_id if is_rule_uuid(rule_id) else str(uuid.uuid4())
+    destination = _rules_dir(scope, project_root) / rule_uuid / "rule.py"
+    same_scope = any(
+        loaded.id == rule_uuid
+        and loaded.scope == scope
+        and Path(loaded.source_path).parent == destination.parent
+        for loaded in load_rules(project_root or None)
+    )
+    if destination.exists() or same_scope:
+        return {"ok": False, "error": f"rule {rule_uuid!r} already exists"}
+    title = title or (
+        legacy_ref.replace("-", " ").replace("_", " ").title()
+        if legacy_ref else "Use Git for source synchronization."
+    )
+    text = draft_rule_source(rule_uuid, title)
+    res = save_rule(rule_uuid, text, scope, project_root)
+    if res.get("ok"):
+        if legacy_ref:
+            migrate_legacy_rule_state(legacy_ref, rule_uuid, project_root)
+        set_enabled(
+            res["id"], False,
+            project_root if scope == "project" else None,
+        )  # new rules start disabled until reviewed
+    return res
+
+
+def delete_rule(rule_id: str, project_root: str | None) -> dict[str, Any]:
+    found = _find_rule_file(rule_id, project_root)
+    if not found:
+        return {"ok": False, "error": "not found"}
+    path, scope = found
+    revisions.remove_source(path)
+    path.unlink(missing_ok=True)
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
+    return {"ok": True, "id": rule_id, "scope": scope}
+
+
+def customize_for_project(rule_id: str, project_root: str) -> dict[str, Any]:
+    rule_uuid = resolve_rule_ref(rule_id)
+    global_info = get_rule(rule_uuid, None)
+    if not global_info:
+        return {"ok": False, "error": "shared rule not found"}
+    result = save_rule(
+        rule_uuid, global_info["source"], "project", project_root)
+    if result.get("ok"):
+        set_enabled(rule_uuid, True, project_root, global_info.get("name"))
+    return result
+
+
+def revert_to_shared(rule_id: str, project_root: str) -> dict[str, Any]:
+    rule_uuid = resolve_rule_ref(rule_id)
+    project_path = config.project_rules_dir(project_root) / rule_uuid / "rule.py"
+    legacy_path = None
+    for path in rule_paths(config.project_rules_dir(project_root)):
+        loaded = load_rule_file(path, "project")
+        if loaded and loaded[0].id == rule_uuid:
+            legacy_path = path
+            break
+    path = project_path if project_path.exists() else legacy_path
+    if not path:
+        return {"ok": False, "error": "project customization not found"}
+    revisions.remove_source(path)
+    path.unlink(missing_ok=True)
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
+    info = get_rule(rule_uuid, None)
+    set_enabled(rule_uuid, True, project_root, (info or {}).get("name"))
+    return {"ok": True, "id": rule_uuid, "reverted": str(path)}
+
+
+def promote_to_shared(rule_id: str, project_root: str) -> dict[str, Any]:
+    rule_uuid = resolve_rule_ref(rule_id)
+    project_info = get_rule(rule_uuid, project_root)
+    if not project_info or project_info.get("scope") != "project":
+        return {"ok": False, "error": "project rule not found"}
+    target = config.global_rules_dir() / rule_uuid / "rule.py"
+    if target.exists():
+        return {"ok": False, "error": "a shared rule with this UUID already exists"}
+    result = save_rule(
+        rule_uuid, project_info["source"], "global", None)
+    if not result.get("ok"):
+        return result
+    old_path = Path(project_info["path"])
+    active = revisions.active_info(rule_uuid, old_path)
+    if active:
+        revisions.migrate_source_path(rule_uuid, old_path, result["path"])
+    old_path.unlink(missing_ok=True)
+    try:
+        old_path.parent.rmdir()
+    except OSError:
+        pass
+    # Shared/My Rules are opt-in by default; retain this project explicitly.
+    set_enabled(rule_uuid, False, None)
+    set_enabled(rule_uuid, True, project_root, project_info.get("name"))
+    return {
+        **result,
+        "promoted": True,
+        "project_root": project_root,
+    }
+
+
+def attach_to_projects(
+    rule_id: str, project_roots: list[str]
+) -> dict[str, Any]:
+    rule_uuid = resolve_rule_ref(rule_id)
+    info = get_rule(rule_uuid, None)
+    if not info:
+        return {"ok": False, "error": "shared rule not found"}
+    results = []
+    for project_root in project_roots:
+        results.append(set_enabled(
+            rule_uuid, True, project_root, info.get("name")))
+    return {
+        "ok": all(item.get("ok") for item in results),
+        "id": rule_uuid,
+        "results": results,
+    }
+
+
+# --- conversion (prose -> draft) -------------------------------------------
+
+def list_prose_rules(project_root: str) -> list[dict[str, Any]]:
+    return [{"name": n, "prose": p} for n, p in scaffold.discover_prose_rules(project_root)]
+
+
+def draft_from_prose(name: str, prose: str, scope: str,
+                     project_root: str | None) -> dict[str, Any]:
+    fname, text = scaffold.draft_rule_py(name, prose)
+    rule_id = Path(fname).parent.name
+    dest = _rules_dir(scope, project_root)
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / fname
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    set_enabled(rule_id, False, project_root if scope == "project" else None)
+    return {"ok": True, "id": rule_id, "scope": scope, "path": str(target), "source": text}
+
+
+# --- small JSON state helpers ----------------------------------------------
+
+def _load(path: Path) -> dict[str, Any]:
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save(path: Path, data: dict[str, Any]) -> None:
+    try:
+        path.write_text(json.dumps(data, indent=2))
+    except OSError:
+        pass
+
+
+# --- scoped state -----------------------------------------------------------
+
+_STATE_VERSION = 2
+
+
+def _project_key(project_root: str | None) -> str:
+    return str(Path(project_root).expanduser()) if project_root else ""
+
+
+def _load_scoped(path: Path) -> dict[str, Any]:
+    """Load v2 scoped state, treating the old flat map as global defaults."""
+    raw = _load(path)
+    if (
+        raw.get("version") == _STATE_VERSION
+        and isinstance(raw.get("global"), dict)
+        and isinstance(raw.get("projects"), dict)
+    ):
+        return raw
+    legacy = {key: value for key, value in raw.items() if key != "version"}
+    return {"version": _STATE_VERSION, "global": legacy, "projects": {}}
+
+
+def _save_scoped(path: Path, state: dict[str, Any]) -> None:
+    state["version"] = _STATE_VERSION
+    state.setdefault("global", {})
+    state.setdefault("projects", {})
+    _save(path, state)
+
+
+def rule_aliases() -> dict[str, str]:
+    aliases = _load(config.rule_aliases_path())
+    return {
+        str(key): str(value) for key, value in aliases.items()
+        if is_rule_uuid(str(value))
+    }
+
+
+def resolve_rule_ref(rule_ref: str) -> str:
+    if is_rule_uuid(rule_ref):
+        return rule_ref
+    return rule_aliases().get(rule_ref, legacy_rule_uuid(rule_ref))
+
+
+def migrate_legacy_rule_state(
+    legacy_id: str, rule_uuid: str, project_root: str | None = None
+) -> None:
+    if not legacy_id or not is_rule_uuid(rule_uuid):
+        return
+    aliases = _load(config.rule_aliases_path())
+    aliases[legacy_id] = rule_uuid
+    _save(config.rule_aliases_path(), aliases)
+    for path in (config.rule_state_path(), config.mutes_path()):
+        state = _load_scoped(path)
+        if legacy_id in state["global"] and rule_uuid not in state["global"]:
+            state["global"][rule_uuid] = state["global"].pop(legacy_id)
+        for values in state["projects"].values():
+            if legacy_id in values and rule_uuid not in values:
+                values[rule_uuid] = values.pop(legacy_id)
+        _save_scoped(path, state)
+
+
+# --- enable / disable (stops rule execution) -------------------------------
+
+def _state_value(values: dict[str, Any], rule_id: str, default: Any = None):
+    if rule_id in values:
+        return True, values[rule_id]
+    if is_rule_uuid(rule_id):
+        for legacy, value in values.items():
+            if not is_rule_uuid(legacy) and legacy_rule_uuid(legacy) == rule_id:
+                return True, value
+    return False, default
+
+
+def _load_project_config(project_root: str) -> dict[str, Any]:
+    path = config.project_rules_config_path(project_root)
+    if path.exists():
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(value, dict):
+                value.setdefault("version", 1)
+                value.setdefault("rules", {})
+                return value
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {"version": 1, "rules": {}}
+
+
+def _save_project_config(project_root: str, value: dict[str, Any]) -> tuple[bool, str]:
+    path = config.project_rules_config_path(project_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+        return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
+def enabled_state(rule_id: str, project_root: str | None = None) -> dict[str, Any]:
+    state = _load_scoped(config.rule_state_path())
+    assignment_id = resolve_rule_ref(rule_id)
+    _found, global_value = _state_value(state["global"], rule_id, True)
+    global_default = global_value is not False
+    key = _project_key(project_root)
+    if key:
+        project_config = _load_project_config(key)
+        config_entry = (
+            project_config.get("rules", {}).get(assignment_id)
+            or project_config.get("rules", {}).get(rule_id)
+        )
+        if isinstance(config_entry, dict) and "enabled" in config_entry:
+            enabled = bool(config_entry["enabled"])
+            return {
+                "effective_enabled": enabled,
+                "global_default": global_default,
+                "project_override": enabled,
+                "assignment_origin": "project",
+            }
+        legacy_project = state["projects"].get(key, {})
+        found, value = _state_value(legacy_project, rule_id)
+        if found:
+            enabled = bool(value)
+            return {
+                "effective_enabled": enabled,
+                "global_default": global_default,
+                "project_override": enabled,
+                "assignment_origin": "legacy_local",
+            }
+    return {
+        "effective_enabled": global_default,
+        "global_default": global_default,
+        "project_override": None,
+        "assignment_origin": "global_default",
+    }
+
+
+def is_enabled(rule_id: str, project_root: str | None = None) -> bool:
+    return bool(enabled_state(rule_id, project_root)["effective_enabled"])
+
+
+def set_enabled(
+    rule_id: str, enabled: bool, project_root: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    state = _load_scoped(config.rule_state_path())
+    assignment_id = resolve_rule_ref(rule_id)
+    key = _project_key(project_root)
+    if key:
+        project_config = _load_project_config(key)
+        assignments = project_config.setdefault("rules", {})
+        legacy_project = state["projects"].get(key, {})
+        for legacy_id, legacy_enabled in legacy_project.items():
+            migrated_id = resolve_rule_ref(legacy_id)
+            assignments.setdefault(migrated_id, {
+                "enabled": bool(legacy_enabled),
+                "migrated_from": legacy_id,
+            })
+        global_default = enabled_state(rule_id, None)["global_default"]
+        if bool(enabled) == global_default:
+            assignments.pop(assignment_id, None)
+            assignments.pop(rule_id, None)
+        else:
+            assignments[assignment_id] = {
+                "enabled": bool(enabled),
+                "legacy_id": rule_id if not is_rule_uuid(rule_id) else "",
+                "name": name or "",
+            }
+        ok, error = _save_project_config(key, project_config)
+        if not ok:
+            return {
+                "ok": False, "error": error, "rule_id": assignment_id,
+                "project_root": key, "enabled": bool(enabled),
+            }
+        if key in state["projects"]:
+            state["projects"].pop(key, None)
+            _save_scoped(config.rule_state_path(), state)
+    elif enabled:
+        state["global"].pop(rule_id, None)
+    else:
+        state["global"][rule_id] = False
+    _save_scoped(config.rule_state_path(), state)
+    return {
+        "ok": True,
+        "rule_id": assignment_id,
+        "project_root": project_root or "",
+        "enabled": bool(enabled),
+        **enabled_state(assignment_id, project_root),
+    }
+
+
+def reset_project_assignments(project_root: str) -> dict[str, Any]:
+    value = _load_project_config(project_root)
+    value["rules"] = {}
+    ok, error = _save_project_config(project_root, value)
+    return {"ok": ok, "error": error, "project_root": project_root}
+
+
+def set_project_assignments(
+    project_root: str, assignments: dict[str, bool]
+) -> dict[str, Any]:
+    value = _load_project_config(project_root)
+    value["rules"] = {
+        rule_id: {"enabled": bool(enabled)}
+        for rule_id, enabled in assignments.items()
+        if is_rule_uuid(rule_id)
+    }
+    ok, error = _save_project_config(project_root, value)
+    return {"ok": ok, "error": error, "project_root": project_root}
+
+
+# --- mute / snooze (suppresses surfacing, not evaluation/logging) ----------
+
+def load_mutes() -> dict[str, Any]:
+    return _load_scoped(config.mutes_path())
+
+
+def _active_mute(value: Any, now: float) -> bool:
+    if value is False:
+        return False
+    if value is None:
+        return True
+    try:
+        return float(value) > now
+    except (TypeError, ValueError):
+        return False
+
+
+def mute_info(rule_id: str, project_root: str | None = None) -> dict[str, Any]:
+    state = load_mutes()
+    now = time.time()
+    key = _project_key(project_root)
+    candidates: list[tuple[str, dict[str, Any], str]] = []
+    if key:
+        project = state["projects"].get(key, {})
+        candidates.extend([
+            ("project", project, rule_id),
+            ("project", project, "*"),
+        ])
+    candidates.extend([
+        ("global", state["global"], rule_id),
+        ("global", state["global"], "*"),
+    ])
+    for scope, bucket, candidate in candidates:
+        found, value = _state_value(bucket, candidate)
+        if not found:
+            continue
+        # Explicit False is a project-level unmute override.
+        if value is False:
+            return {"muted": False, "until": None, "scope": scope}
+        if _active_mute(value, now):
+            return {"muted": True, "until": value, "scope": scope}
+    return {"muted": False, "until": None, "scope": ""}
+
+
+def is_muted(rule_id: str, project_root: str | None = None) -> bool:
+    return bool(mute_info(rule_id, project_root)["muted"])
+
+
+def set_mute(
+    rule_id: str, until: float | None, project_root: str | None = None
+) -> dict[str, Any]:
+    state = load_mutes()
+    key = _project_key(project_root)
+    bucket = state["projects"].setdefault(key, {}) if key else state["global"]
+    bucket[rule_id] = until
+    _save_scoped(config.mutes_path(), state)
+    return {
+        "ok": True,
+        "rule_id": rule_id,
+        "project_root": project_root or "",
+        "until": until,
+    }
+
+
+def clear_mute(
+    rule_id: str, project_root: str | None = None
+) -> dict[str, Any]:
+    state = load_mutes()
+    key = _project_key(project_root)
+    if key:
+        project = state["projects"].setdefault(key, {})
+        project.pop(rule_id, None)
+        # If a global mute would still apply, keep an explicit local override.
+        global_mute = mute_info(rule_id, None)["muted"]
+        if global_mute:
+            project[rule_id] = False
+        if not project:
+            state["projects"].pop(key, None)
+    else:
+        state["global"].pop(rule_id, None)
+    _save_scoped(config.mutes_path(), state)
+    return {
+        "ok": True,
+        "rule_id": rule_id,
+        "project_root": project_root or "",
+    }
+
+
+def snooze(
+    rule_id: str, seconds: float, project_root: str | None = None
+) -> dict[str, Any]:
+    return set_mute(rule_id, time.time() + seconds, project_root)
+
+
+def monitoring_paused() -> bool:
+    return bool(_load(config.monitoring_state_path()).get("paused", False))
+
+
+def set_monitoring_paused(paused: bool) -> dict[str, Any]:
+    _save(config.monitoring_state_path(), {
+        "paused": bool(paused),
+        "updated_at": time.time(),
+    })
+    return {"ok": True, "paused": bool(paused)}
+
+
+# --- per-project monitoring ------------------------------------------------
+
+def project_enabled(project_root: str) -> bool:
+    return _load(config.project_monitoring_path()).get(project_root, True) is not False
+
+
+def set_project_enabled(project_root: str, enabled: bool) -> dict[str, Any]:
+    state = _load(config.project_monitoring_path())
+    if enabled:
+        state.pop(project_root, None)
+    else:
+        state[project_root] = False
+    _save(config.project_monitoring_path(), state)
+    return {"ok": True, "project_root": project_root, "enabled": enabled}

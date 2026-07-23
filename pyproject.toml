@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rules-as-programs"
+version = "0.1.0"
+description = "Give agent constraints a life of their own: run each rule as an independent, PAW-backed fuzzy program that audits a coding agent's reasoning and actions."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ProgramAsWeights" }]
+keywords = ["cursor", "agent", "rules", "programasweights", "paw", "observability", "hooks"]
+
+dependencies = [
+    "programasweights>=0.4",
+    # Native AppKit status item, popover, and Rule Studio on macOS.
+    "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+    # Cross-platform system-tray fallback (Linux/Windows).
+    "pystray>=0.19",
+    "pillow>=9.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+rap = "rules_as_programs.cli:main"
+rap-hook = "rules_as_programs.adapters.cursor.hook_client:main"
+
+[project.urls]
+Homepage = "https://github.com/programasweights/rules-as-programs"
+"ProgramAsWeights" = "https://programasweights.com"
+
+[tool.setuptools]
+packages = [
+    "rules_as_programs",
+    "rules_as_programs.core",
+    "rules_as_programs.adapters",
+    "rules_as_programs.adapters.cursor",
+    "rules_as_programs.ui",
+]
+
+[tool.setuptools.package-data]
+rules_as_programs = [
+    "builtin_rules/*.py",
+    "assets/*.png",
+    "assets/*.svg",
+]
