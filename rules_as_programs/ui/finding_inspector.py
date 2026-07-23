@@ -68,7 +68,7 @@ class RAPFindingInspector(NSObject):
         self._target._callbacks = self._callbacks
         self._next_tag = 1
         self.raw_json = False
-        self.show_source = True
+        self.show_python = False
         return self
 
     @objc.python_method
@@ -190,7 +190,7 @@ class RAPFindingInspector(NSObject):
         reviewed.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(reviewed)
 
-        document_height = 1060 if self.show_source else 850
+        document_height = 1060
         scroll = NSScrollView.alloc().initWithFrame_(
             NSMakeRect(0, 70, WINDOW_W, WINDOW_H - 70))
         scroll.setHasVerticalScroller_(True)
@@ -218,6 +218,11 @@ class RAPFindingInspector(NSObject):
         snapshot_source = audit.get("rule_source", "")
         current_source = current_rule.get("source", "")
         source = snapshot_source or current_source
+        projection = (
+            self.detail.get("recorded_rule_projection")
+            if snapshot_source else self.detail.get("current_rule_projection")
+        ) or {}
+        spec = str(projection.get("spec", ""))
         provenance = "Rule at the time of this finding" if snapshot_source else "Current rule source"
         if self.detail.get("rule_changed"):
             provenance += " · current rule has changed"
@@ -228,19 +233,30 @@ class RAPFindingInspector(NSObject):
             f"\nRuns when: {runs}\nReads: {reads}"
         )
         y = self._section(document, y, "Rule that ran", rule_copy, height=72)
+        if source:
+            document.addSubview_(self._button(
+                (
+                    "View PAW spec" if self.show_python and spec
+                    else "Hide Python" if self.show_python
+                    else "View Python"
+                ),
+                (PAD, y, 110, 26), self.toggle_source))
         document.addSubview_(self._button(
-            "Hide Python" if self.show_source else "View Python",
-            (PAD, y, 100, 26), self.toggle_source))
-        document.addSubview_(self._button(
-            "Tune Rule", (PAD + 108, y, 90, 26),
+            "Tune Rule", (PAD + 118, y, 90, 26),
             lambda: self.manager.edit_rule(self.detail)))
         y += 36
-        if self.show_source:
-            source_scroll, _source_view = self._text_view(
-                source or "(source unavailable)", (PAD, y, WINDOW_W - 2 * PAD, 180))
-            source_scroll.setAutoresizingMask_(NSViewWidthSizable)
-            document.addSubview_(source_scroll)
-            y += 196
+        rule_text = source if self.show_python else spec
+        rule_heading = "Python source" if self.show_python else "PAW rule specification"
+        if not rule_text and not self.show_python:
+            rule_text = "Custom Python rule — no PAW specification."
+        document.addSubview_(self._label(
+            rule_heading, (PAD, y, 220, 18), size=10, bold=True))
+        y += 22
+        rule_scroll, _rule_view = self._text_view(
+            rule_text, (PAD, y, WINDOW_W - 2 * PAD, 180))
+        rule_scroll.setAutoresizingMask_(NSViewWidthSizable)
+        document.addSubview_(rule_scroll)
+        y += 196
 
         timeline = self._readable_timeline()
         y = self._section(document, y, "Evidence timeline", timeline, height=190, mono=True)
@@ -309,7 +325,7 @@ class RAPFindingInspector(NSObject):
 
     @objc.python_method
     def toggle_source(self) -> None:
-        self.show_source = not self.show_source
+        self.show_python = not self.show_python
         self._render()
 
     @objc.python_method

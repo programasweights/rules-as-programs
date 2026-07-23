@@ -40,6 +40,10 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
             "inputs": ["message"],
         },
         "audit": {"rule_source": "from rules_as_programs import rule\n"},
+        "recorded_rule_projection": {
+            "spec": "Decide whether evidence violates the rule.\\n"
+                    "Return ONLY one of: OK, VIOLATION",
+        },
         "ledger": {
             "events": [{
                 "id": "event",
@@ -70,6 +74,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     inspectors.open(controller.finding_detail)
     inspector = next(iter(inspectors.inspectors.values()))
     assert inspector.raw_view is not None
+    assert not inspector.show_python
     inspector.window.close()
     controller.request_confirmation(
         "Disable?", "Stops evaluation.", "Disable", lambda: None)

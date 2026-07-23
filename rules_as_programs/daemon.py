@@ -600,6 +600,7 @@ class Daemon:
             current_rule = rules_api.get_rule(
                 finding["rule_id"], finding["project_root"]) or {}
             current_source = str(current_rule.get("source", ""))
+            recorded_source = str((entry or {}).get("rule_source", ""))
             working_hash = (
                 hashlib.sha256(current_source.encode("utf-8")).hexdigest()
                 if current_source else ""
@@ -620,6 +621,10 @@ class Daemon:
                 "audit": entry,
                 "ledger": ledger_window,
                 "current_rule": current_rule,
+                "current_rule_projection": rules_api.source_projection(
+                    current_source) if current_source else {},
+                "recorded_rule_projection": rules_api.source_projection(
+                    recorded_source) if recorded_source else {},
                 "current_rule_hash": current_hash,
                 "working_rule_hash": working_hash,
                 "rule_changed": bool(
