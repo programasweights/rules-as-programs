@@ -11,9 +11,8 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="AppKit-only")
 def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
     from AppKit import NSApplication, NSStatusBar
-    from rules_as_programs.ui.macos_app import MacOSController, _status_image
+    from rules_as_programs.ui.macos_app import MacOSController, _paw_template_image
     from rules_as_programs.ui.model import demo_snapshot
-    from rules_as_programs.ui.status import status_presentation
 
     NSApplication.sharedApplication()
     controller = MacOSController.alloc().init()
@@ -21,9 +20,11 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     controller.applicationDidFinishLaunching_(None)
     snapshot = demo_snapshot()
     controller._apply_snapshot(snapshot)
-    icon = _status_image(status_presentation(snapshot))
+    icon = _paw_template_image()
     assert icon.size().height == 22
-    assert icon.size().width > 22
+    assert icon.size().width == 22
+    assert icon.isTemplate()
+    assert controller.status_item.button().attributedTitle().length() > 0
 
     project = next(iter(snapshot.findings_by_project))
     group = snapshot.findings_by_project[project][0]

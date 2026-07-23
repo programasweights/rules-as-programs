@@ -17,9 +17,12 @@ import objc
 from AppKit import (
     NSApplication,
     NSApplicationActivationPolicyAccessory,
-    NSAppearanceNameAqua,
-    NSAppearanceNameDarkAqua,
+    NSColor,
+    NSFont,
+    NSFontAttributeName,
+    NSForegroundColorAttributeName,
     NSImage,
+    NSImageLeft,
     NSMinYEdge,
     NSPasteboard,
     NSPasteboardTypeString,
@@ -30,7 +33,7 @@ from AppKit import (
     NSViewController,
     NSWorkspace,
 )
-from Foundation import NSMakeSize, NSObject
+from Foundation import NSMakeSize, NSMutableAttributedString, NSObject
 from Foundation import NSData
 from PyObjCTools import AppHelper
 
@@ -41,6 +44,7 @@ from .status import StatusPresentation, status_presentation
 
 _CONTROLLER = None
 _PAW_ALPHA = None
+_PAW_TEMPLATE = None
 
 
 def _on_main(callback: Callable[[], None]) -> None:
@@ -67,83 +71,77 @@ def _copy_text(text: str) -> None:
     pasteboard.setString_forType_(text, NSPasteboardTypeString)
 
 
-def _dark_appearance() -> bool:
-    appearance = NSApplication.sharedApplication().effectiveAppearance()
-    match = appearance.bestMatchFromAppearancesWithNames_(
-        [NSAppearanceNameAqua, NSAppearanceNameDarkAqua])
-    return match == NSAppearanceNameDarkAqua
-
-
-def _status_image(presentation: StatusPresentation) -> NSImage | None:
-    """Draw an optically large paw with severity and attention satellites."""
-    global _PAW_ALPHA
+def _paw_template_image() -> NSImage | None:
+    """Return a large template paw that macOS tints for menu-bar contrast."""
+    global _PAW_ALPHA, _PAW_TEMPLATE
+    if _PAW_TEMPLATE is not None:
+        return _PAW_TEMPLATE
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image
         if _PAW_ALPHA is None:
             source = Image.open(config.icon_png()).convert("RGBA")
             alpha = source.getchannel("A")
             bounds = alpha.getbbox()
             _PAW_ALPHA = alpha.crop(bounds) if bounds else alpha
         scale = 2
-        has_primary = presentation.kind != "clear"
-        extra_attention = presentation.attention_count > 0 and presentation.kind != "attention"
-        width_pt = 22 + (8 if has_primary else 0) + (9 if extra_attention else 0)
-        height_pt = 22
-        canvas = Image.new("RGBA", (width_pt * scale, height_pt * scale), (0, 0, 0, 0))
+        width_pt = height_pt = 22
+        canvas = Image.new(
+            "RGBA", (width_pt * scale, height_pt * scale), (0, 0, 0, 0))
         paw_alpha = _PAW_ALPHA.resize((21 * scale, 21 * scale), Image.Resampling.LANCZOS)
-        paw_color = (245, 245, 245, 255) if _dark_appearance() else (25, 25, 25, 255)
-        paw = Image.new("RGBA", paw_alpha.size, paw_color)
+        paw = Image.new("RGBA", paw_alpha.size, (0, 0, 0, 255))
         paw.putalpha(paw_alpha)
         canvas.alpha_composite(paw, (0, 0))
-        draw = ImageDraw.Draw(canvas)
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 8 * scale)
-        except OSError:
-            font = ImageFont.load_default()
-
-        def circle(x: int, y: int, diameter: int, color, text: str, dark_text=False):
-            box = tuple(value * scale for value in (x, y, x + diameter, y + diameter))
-            draw.ellipse(box, fill=color)
-            if text:
-                fill = (25, 25, 25, 255) if dark_text else (255, 255, 255, 255)
-                bbox = draw.textbbox((0, 0), text, font=font)
-                tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-                tx = (x + diameter / 2) * scale - tw / 2
-                ty = (y + diameter / 2) * scale - th / 2 - scale
-                draw.text((tx, ty), text, font=font, fill=fill)
-
-        if has_primary:
-            colors = {
-                "info": (35, 122, 230, 255),
-                "warn": (255, 204, 0, 255),
-                "high": (255, 149, 0, 255),
-                "critical": (255, 59, 48, 255),
-            }
-            if presentation.kind == "attention":
-                color = (175, 82, 222, 255)
-            elif presentation.kind == "paused":
-                color = (142, 142, 147, 255)
-            elif presentation.kind == "unavailable":
-                color = (255, 59, 48, 255)
-            elif presentation.kind == "degraded":
-                color = (255, 149, 0, 255)
-            else:
-                color = colors.get(presentation.severity or "info", colors["info"])
-            circle(16, 8, 14, color, presentation.badge_text,
-                   dark_text=presentation.severity == "warn")
-        if extra_attention:
-            circle(width_pt - 10, 1, 10, (175, 82, 222, 255), "?")
-
         buffer = io.BytesIO()
         canvas.save(buffer, format="PNG")
         raw = buffer.getvalue()
         data = NSData.dataWithBytes_length_(raw, len(raw))
         image = NSImage.alloc().initWithData_(data)
         image.setSize_(NSMakeSize(width_pt, height_pt))
-        image.setTemplate_(False)
+        image.setTemplate_(True)
+        _PAW_TEMPLATE = image
         return image
     except Exception:
         return None
+
+
+def _status_attributed_title(
+    presentation: StatusPresentation,
+) -> NSMutableAttributedString:
+    result = NSMutableAttributedString.alloc().init()
+    font = NSFont.boldSystemFontOfSize_(11)
+
+    def append(text: str, color) -> None:
+        piece = NSMutableAttributedString.alloc().initWithString_attributes_(
+            text,
+            {
+                NSForegroundColorAttributeName: color,
+                NSFontAttributeName: font,
+            },
+        )
+        result.appendAttributedString_(piece)
+
+    if presentation.kind == "finding":
+        color = {
+            "info": NSColor.systemBlueColor(),
+            "warn": NSColor.systemYellowColor(),
+            "high": NSColor.systemOrangeColor(),
+            "critical": NSColor.systemRedColor(),
+        }.get(presentation.severity or "info", NSColor.systemBlueColor())
+        append(f" ●{presentation.badge_text}", color)
+    elif presentation.kind == "attention":
+        append(" ?", NSColor.systemPurpleColor())
+    elif presentation.kind == "paused":
+        append(" ‖", NSColor.secondaryLabelColor())
+    elif presentation.kind == "unavailable":
+        append(" !", NSColor.systemRedColor())
+    elif presentation.kind == "degraded":
+        append(" !", NSColor.systemOrangeColor())
+    if (
+        presentation.attention_count
+        and presentation.kind not in ("attention", "unavailable", "paused")
+    ):
+        append(" ?", NSColor.systemPurpleColor())
+    return result
 
 
 class RAPStatusTarget(NSObject):
@@ -211,9 +209,12 @@ class MacOSController(NSObject):
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
             NSVariableStatusItemLength)
         button = self.status_item.button()
-        image = _status_image(status_presentation(self.snapshot))
+        image = _paw_template_image()
         if image:
             button.setImage_(image)
+            button.setImagePosition_(NSImageLeft)
+            button.setAttributedTitle_(
+                _status_attributed_title(status_presentation(self.snapshot)))
         else:
             button.setTitle_("RAP")
         button.setTarget_(self._status_target)
@@ -270,10 +271,11 @@ class MacOSController(NSObject):
             return
         button = self.status_item.button()
         presentation = status_presentation(self.snapshot)
-        image = _status_image(presentation)
+        image = _paw_template_image()
         if image:
             button.setImage_(image)
             button.setTitle_("")
+            button.setAttributedTitle_(_status_attributed_title(presentation))
         else:
             button.setTitle_(presentation.badge_text or "RAP")
         button.setToolTip_(presentation.tooltip)

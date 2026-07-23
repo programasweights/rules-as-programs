@@ -439,11 +439,11 @@ class PopoverRenderer:
                             "New rule violations will appear here. Monitoring continues locally.")
             return
 
-        row_height = 76
+        row_height = 52
         total_height = (
             10
             + (34 + len(attention) * 70 if attention else 0)
-            + (34 + len(stale_groups) * 76 if stale_groups else 0)
+            + (34 + len(stale_groups) * 52 if stale_groups else 0)
             + sum(36 + len(groups) * row_height for _, groups in ordered)
         )
         scroll, document = self._scroll(
@@ -492,7 +492,7 @@ class PopoverRenderer:
             y += 34
             for group in stale_groups:
                 self._render_finding_row(document, y, group, "stale")
-                y += 76
+                y += 52
         for project, groups in ordered:
             document.addSubview_(self._label(
                 _project_name(project),
@@ -532,52 +532,41 @@ class PopoverRenderer:
         }.get(severity, NSColor.secondaryLabelColor())
         parent.addSubview_(self._label(
             SEVERITY_LABEL.get(severity, severity.upper()),
-            (PAD, y + 10, 66, 16), size=9, bold=True, color=color))
+            (PAD, y + 17, 66, 16), size=9, bold=True, color=color))
         title = group.get("rule_title") or group.get("rule_id", "Rule")
+        if mode == "stale":
+            title = f"{title} · rule changed"
         parent.addSubview_(self._label(
-            title, (82, y + 7, 248, 20), size=12, bold=True))
+            title, (82, y + 12, 225, 22), size=12, bold=True))
         age = _relative_time(group.get("last_seen") or group.get("ts", 0))
         parent.addSubview_(self._label(
-            age, (335, y + 8, 40, 18), size=10,
+            age, (309, y + 14, 38, 18), size=10,
             color=NSColor.secondaryLabelColor()))
         occurrences = int(group.get("occurrences", 1) or 1)
-        message = str(group.get("message", "")).strip().replace("\n", " ")
         if occurrences > 1:
-            message = f"{message} · {occurrences} occurrences"
-        parent.addSubview_(self._label(
-            message, (82, y + 29, 285, 34), size=11,
-            color=NSColor.secondaryLabelColor(), lines=2))
+            parent.addSubview_(self._label(
+                f"×{occurrences}", (274, y + 14, 30, 18), size=10,
+                color=NSColor.secondaryLabelColor()))
         parent.addSubview_(self._button(
-            "", (74, y + 2, 296, 64),
+            "", (74, y + 2, 274, 44),
             lambda _sender, value=group: self.controller.open_finding(value),
             bordered=False,
             accessibility=f"Open finding: {title}",
         ))
         if mode == "open":
             parent.addSubview_(self._button(
-                "✓", (372, y + 11, 24, 24),
+                "✓", (352, y + 12, 28, 28),
                 lambda _sender, value=group: self.controller.done_group(value),
                 bordered=False,
                 accessibility=f"Mark {title} reviewed",
             ))
-        elif mode == "stale":
-            parent.addSubview_(self._label(
-                "Rule changed", (326, y + 42, 76, 16), size=9,
-                color=NSColor.secondaryLabelColor()))
-        else:
-            reviewed = group.get("review_reason") or (
-                "Suppressed" if group.get("suppressed") else "Reviewed")
-            parent.addSubview_(self._label(
-                str(reviewed).replace("_", " ").title(),
-                (330, y + 42, 68, 16), size=9,
-                color=NSColor.tertiaryLabelColor()))
         parent.addSubview_(self._button(
-            "•••", (398, y + 11, 26, 24),
+            "•••", (390, y + 12, 32, 28),
             lambda sender, value=group: self.controller.show_finding_menu(sender, value),
             bordered=False,
             accessibility=f"More actions for {title}",
         ))
-        self._separator(parent, y + 74, 82, POPOVER_WIDTH - 96)
+        self._separator(parent, y + 50, 82, POPOVER_WIDTH - 96)
 
     # --- Finding detail -------------------------------------------------
     def _render_detail_shell(self, root: NSView, snapshot: UISnapshot) -> None:
