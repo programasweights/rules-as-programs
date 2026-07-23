@@ -201,7 +201,11 @@ class Daemon:
         if not self._rule_enabled(rule_id, event.project_root):
             return
         try:
-            rule = self._rule_from(rule_id, event.project_root, None)
+            rule = next(
+                (item for item in self.rules_cache.get(event.project_root)
+                 if item.id == rule_id),
+                None,
+            )
             if rule is None or rule.channel != "attention":
                 return
             context = RuleContext(
@@ -223,11 +227,6 @@ class Daemon:
 
     def _warm(self, project_root: str) -> None:
         rules = list(self.rules_cache.get(project_root))
-        if not any(rule.id == "gn3xtat6av4fy690" for rule in rules):
-            attention_rule = self._rule_from(
-                "gn3xtat6av4fy690", project_root, None)
-            if attention_rule is not None:
-                rules.append(attention_rule)
         with self._state_lock:
             project_state = self._warm_state.setdefault(project_root, {})
             for rule in rules:
@@ -679,6 +678,28 @@ class Daemon:
             with self._state_lock:
                 known = sorted(self.known_projects)
             return {"ok": True, "known_projects": known}
+        if rtype == "rule_library":
+            project_paths = [
+                item["path"] for item in cursor_projects.discover_projects(limit=100)
+            ]
+            rules = rules_api.list_rule_library(project_paths)
+            for rule in rules:
+                if rule.get("source_origin") == "project":
+                    root = rule.get("project_root", "")
+                    rule["usage_count"] = (
+                        1 if root and rules_api.is_enabled(rule["id"], root) else 0
+                    )
+                else:
+                    rule["usage_count"] = sum(
+                        1 for root in project_paths
+                        if rules_api.is_enabled(rule["id"], root)
+                    )
+            return {
+                "ok": True,
+                "rules": rules,
+                "errors": [],
+                "builtins": scaffold.builtin_ids(),
+            }
         if rtype == "rules":
             project_root = req.get("project_root", "")
             errors = self.rules_cache.errors(project_root)
@@ -844,10 +865,22 @@ class Daemon:
             self.rules_cache.invalidate()
             return {"ok": True, "notes": notes}
         if rtype == "delete_rule":
+            project_roots = [
+                item["path"] for item in cursor_projects.discover_projects(limit=100)
+            ]
             result = rules_api.delete_rule(
-                req["rule_id"], req.get("project_root") or None)
+                req["rule_id"], req.get("project_root") or None,
+                project_roots=project_roots)
             if result.get("ok"):
                 self.rules_cache.invalidate()
+            return result
+        if rtype == "stop_rule_everywhere":
+            rule_id = req["rule_id"]
+            result = rules_api.set_enabled(rule_id, False, None)
+            for item in cursor_projects.discover_projects(limit=100):
+                rules_api.set_enabled(
+                    rule_id, False, item["path"], name=req.get("name"))
+            self.rules_cache.invalidate()
             return result
         if rtype == "customize_for_project":
             result = rules_api.customize_for_project(

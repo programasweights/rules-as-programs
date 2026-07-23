@@ -79,11 +79,40 @@ def _summary(r: LoadedRule, project_root: str | None) -> dict[str, Any]:
 
 def list_rules(project_root: str | None) -> list[dict[str, Any]]:
     loaded = load_rules(project_root or None)
-    if not any(rule.id == "gn3xtat6av4fy690" for rule in loaded):
-        bundled = scaffold.BUILTIN_DIR / "agent-needs-reply.py"
-        if bundled.exists():
-            loaded.extend(load_rule_file(bundled, "builtin"))
     return [_summary(r, project_root) for r in loaded]
+
+
+def list_rule_library(project_roots: list[str]) -> list[dict[str, Any]]:
+    """List source definitions, not one project's effective merged rules."""
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    builtin_ids = {
+        loaded[0].id
+        for path in scaffold.builtin_rules()
+        if (loaded := load_rule_file(path, "builtin"))
+    }
+    for rule in load_rules(None):
+        summary = _summary(rule, None)
+        summary["project_root"] = ""
+        summary["project_name"] = ""
+        summary["is_builtin"] = rule.id in builtin_ids
+        summary["installed"] = True
+        rows.append(summary)
+        seen.add((rule.id, str(Path(rule.source_path).resolve())))
+    for project_root in project_roots:
+        for path in rule_paths(config.project_rules_dir(project_root)):
+            for rule in load_rule_file(path, "project"):
+                key = (rule.id, str(path.resolve()))
+                if key in seen:
+                    continue
+                summary = _summary(rule, project_root)
+                summary["project_root"] = project_root
+                summary["project_name"] = Path(project_root).name
+                summary["is_builtin"] = rule.id in builtin_ids
+                summary["installed"] = True
+                rows.append(summary)
+                seen.add(key)
+    return rows
 
 
 def _find_rule_file(rule_id: str, project_root: str | None) -> tuple[Path, str] | None:
@@ -910,7 +939,11 @@ def create_rule(rule_id: str, scope: str, project_root: str | None,
     return res
 
 
-def delete_rule(rule_id: str, project_root: str | None) -> dict[str, Any]:
+def delete_rule(
+    rule_id: str,
+    project_root: str | None,
+    project_roots: list[str] | None = None,
+) -> dict[str, Any]:
     found = _find_rule_file(rule_id, project_root)
     if not found:
         return {"ok": False, "error": "not found"}
@@ -921,6 +954,18 @@ def delete_rule(rule_id: str, project_root: str | None) -> dict[str, Any]:
         path.parent.rmdir()
     except OSError:
         pass
+    targets = [project_root] if project_root else list(project_roots or [])
+    for root in (value for value in targets if value):
+        project_config = _load_project_config(root)
+        if project_config.get("rules", {}).pop(rule_id, None) is not None:
+            _save_project_config(root, project_config)
+    if not project_root:
+        for state_path in (config.rule_state_path(), config.mutes_path()):
+            state = _load_scoped(state_path)
+            state["global"].pop(rule_id, None)
+            for values in state["projects"].values():
+                values.pop(rule_id, None)
+            _save_scoped(state_path, state)
     return {"ok": True, "id": rule_id, "scope": scope}
 
 

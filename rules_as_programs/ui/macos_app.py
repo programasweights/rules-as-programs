@@ -373,6 +373,13 @@ class MacOSController(NSObject):
         self.renderer.popup_menu(sender, items)
 
     @objc.python_method
+    def open_rule_library(self) -> None:
+        self.selected_project = ""
+        self.route = "rules"
+        self._load_rules()
+        self._render()
+
+    @objc.python_method
     def filter_rules(self, text: str) -> None:
         self.rules_filter = text
         self._render()
@@ -605,10 +612,6 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def _load_rules(self) -> None:
-        if not self.selected_project:
-            self.rules_data = {}
-            self._render()
-            return
         self.rules_loading = True
         self._rules_request_token += 1
         token = self._rules_request_token
@@ -630,10 +633,12 @@ class MacOSController(NSObject):
                 self._render()
             _on_main(apply)
 
-        self.model.perform({
-            "type": "rules",
-            "project_root": requested_project,
-        }, complete)
+        request = (
+            {"type": "rule_library"}
+            if not requested_project
+            else {"type": "rules", "project_root": requested_project}
+        )
+        self.model.perform(request, complete)
 
     @objc.python_method
     def toggle_rule(self, rule: dict[str, Any], enabled: bool) -> None:
@@ -725,7 +730,71 @@ class MacOSController(NSObject):
                 ("Share across projects…",
                  lambda: self._promote_to_shared(rule), True),
             )
+        library = not bool(self.selected_project)
+        if library:
+            items.append(("-", lambda: None, True))
+            if rule.get("is_builtin"):
+                items.append((
+                    "Remove built-in rule…",
+                    lambda: self._confirm_delete_rule(rule),
+                    True,
+                ))
+                items.append((
+                    "Stop running everywhere",
+                    lambda: self._stop_rule_everywhere(rule),
+                    True,
+                ))
+            elif rule.get("scope") == "project":
+                items.append((
+                    "Delete project rule…",
+                    lambda: self._confirm_delete_rule(rule),
+                    True,
+                ))
+            else:
+                items.append((
+                    "Delete shared rule…",
+                    lambda: self._confirm_delete_rule(rule),
+                    True,
+                ))
         self.renderer.popup_menu(sender, items)
+
+    @objc.python_method
+    def _confirm_delete_rule(self, rule: dict[str, Any]) -> None:
+        name = rule.get("name") or rule.get("title") or "rule"
+        usage = int(rule.get("usage_count", 0) or 0)
+        project_root = rule.get("project_root", "")
+        scope_copy = (
+            f"This project rule belongs to {Path(project_root).name}."
+            if project_root else f"It currently runs in {usage} project(s)."
+        )
+        self.request_confirmation(
+            f"Delete “{name}”?",
+            scope_copy + " Existing finding and audit history will be kept.",
+            "Delete rule",
+            lambda: self._delete_rule(rule),
+        )
+
+    @objc.python_method
+    def _delete_rule(self, rule: dict[str, Any]) -> None:
+        self.model.perform({
+            "type": "delete_rule",
+            "rule_id": rule.get("id"),
+            "project_root": rule.get("project_root", ""),
+        }, lambda result: _on_main(lambda: (
+            self._load_rules() if result.get("ok")
+            else self._set_banner(result.get("error", "Could not delete rule."))
+        )))
+
+    @objc.python_method
+    def _stop_rule_everywhere(self, rule: dict[str, Any]) -> None:
+        self.model.perform({
+            "type": "stop_rule_everywhere",
+            "rule_id": rule.get("id"),
+        }, lambda result: _on_main(lambda: (
+            self._load_rules() if result.get("ok")
+            else self._set_banner(
+                result.get("error", "Could not stop rule everywhere."))
+        )))
 
     @objc.python_method
     def _create_project_override(self, rule: dict[str, Any]) -> None:

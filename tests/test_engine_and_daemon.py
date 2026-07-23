@@ -167,7 +167,7 @@ def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path
     )
     ledger.append(stop)
     detector = LoadedRule(
-        id="agent-needs-reply",
+        id="gn3xtat6av4fy690",
         title="Needs reply",
         severity="info",
         on=[SESSION_STOP],
@@ -181,7 +181,7 @@ def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path
     daemon = Daemon.__new__(Daemon)
     daemon.runtime = FakeRuntime(output="REPLY_NEEDED")
     daemon.attention = AttentionStore()
-    daemon._rule_from = lambda *_args: detector
+    daemon.rules_cache = _Rules([detector])
     daemon._evaluate_attention(stop, ledger)
     active = daemon.attention.active()
     assert len(active) == 1

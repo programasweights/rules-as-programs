@@ -332,7 +332,11 @@ class PopoverRenderer:
                 lambda _sender: self.controller.select_tab("inbox"),
                 bordered=False))
             title = (
-                f"Rules for {_project_name(getattr(self.controller, 'selected_project', ''))}"
+                (
+                    f"Rules for {_project_name(getattr(self.controller, 'selected_project', ''))}"
+                    if getattr(self.controller, "selected_project", "")
+                    else "Rule Library"
+                )
                 if route == "rules" else "Projects"
             )
             root.addSubview_(self._label(
@@ -345,7 +349,7 @@ class PopoverRenderer:
         self._separator(root, y, 0, POPOVER_WIDTH)
         root.addSubview_(self._button(
             "Rules", (PAD, y + 7, 64, 27),
-            lambda sender: self.controller.open_rules_for_current(sender),
+            lambda _sender: self.controller.open_rule_library(),
             bordered=False,
         ))
         root.addSubview_(self._button(
@@ -545,7 +549,7 @@ class PopoverRenderer:
                 bordered=False))
             if mode == "open":
                 document.addSubview_(self._button(
-                    "Review all", (340, y, 74, 25),
+                    "✓ All", (350, y, 64, 25),
                     lambda _sender, path=project: self.controller.done_project(path),
                     bordered=False,
                     accessibility=f"Mark all findings in {_project_name(project)} reviewed",
@@ -725,26 +729,31 @@ class PopoverRenderer:
         )
         projects = snapshot.projects
         selected = getattr(self.controller, "selected_project", "")
-        if not selected and projects:
-            selected = projects[0].get("path", "")
+        choices = [{"path": "", "name": "All Rules"}, *projects]
         popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
             NSMakeRect(PAD, content_top + 6, 230, 26), False)
         popup.removeAllItems()
-        for project in projects:
+        for project in choices:
             popup.addItemWithTitle_(project.get("name") or _project_name(project.get("path", "")))
         selected_index = next(
-            (index for index, project in enumerate(projects)
+            (index for index, project in enumerate(choices)
              if project.get("path") == selected), 0)
-        if projects:
+        if choices:
             popup.selectItemAtIndex_(selected_index)
         self._wire(popup, lambda sender: self.controller.select_project(
-            projects[sender.indexOfSelectedItem()].get("path", "")) if projects else None)
+            choices[sender.indexOfSelectedItem()].get("path", "")) if choices else None)
         root.addSubview_(popup)
         root.addSubview_(self._button(
             "+ Add Rule", (326, content_top + 5, 88, 28),
-            lambda sender: self.controller.show_add_rule_menu(sender)))
+            lambda sender: (
+                self.controller.show_add_rule_menu(sender)
+                if selected else self.controller.begin_add_rule("", sender)
+            )))
         root.addSubview_(self._label(
-            "Choose which rules run in this project.",
+            (
+                "Choose which rules run in this project."
+                if selected else "All rule definitions."
+            ),
             (PAD, content_top + 37, 300, 18), size=10,
             color=NSColor.secondaryLabelColor()))
         search = NSSearchField.alloc().initWithFrame_(
@@ -754,10 +763,11 @@ class PopoverRenderer:
         self._wire(search, lambda sender: self.controller.filter_rules(
             str(sender.stringValue())))
         root.addSubview_(search)
-        root.addSubview_(self._button(
-            "More…", (344, content_top + 58, 70, 27),
-            lambda sender: self.controller.show_rule_list_menu(sender),
-            bordered=False))
+        if selected:
+            root.addSubview_(self._button(
+                "More…", (344, content_top + 58, 70, 27),
+                lambda sender: self.controller.show_rule_list_menu(sender),
+                bordered=False))
 
         if getattr(self.controller, "rules_loading", False):
             self._render_loading(root, "Loading project rules…")
@@ -798,18 +808,29 @@ class PopoverRenderer:
             y += 76
 
     def _render_rule_row(self, parent: NSView, y: float, rule: dict[str, Any]) -> None:
-        switch = NSButton.alloc().initWithFrame_(NSMakeRect(PAD, y + 12, 96, 24))
-        switch.setButtonType_(NSSwitchButton)
-        switch.setTitle_("Runs here")
-        switch.setState_(NSControlStateValueOn if rule.get("enabled") else NSControlStateValueOff)
-        switch.setAccessibilityLabel_(
-            f"Run {rule.get('name') or rule.get('title') or 'rule'} in this project")
-        self._wire(switch, lambda sender, value=rule: self.controller.toggle_rule(
-            value, sender.state() == NSControlStateValueOn))
-        parent.addSubview_(switch)
+        library = not bool(getattr(self.controller, "selected_project", ""))
+        text_x = PAD if library else 116
+        if not library:
+            switch = NSButton.alloc().initWithFrame_(
+                NSMakeRect(PAD, y + 12, 96, 24))
+            switch.setButtonType_(NSSwitchButton)
+            switch.setTitle_("Runs here")
+            switch.setState_(
+                NSControlStateValueOn if rule.get("enabled")
+                else NSControlStateValueOff)
+            switch.setAccessibilityLabel_(
+                f"Run {rule.get('name') or rule.get('title') or 'rule'} "
+                "in this project")
+            self._wire(
+                switch,
+                lambda sender, value=rule: self.controller.toggle_rule(
+                    value, sender.state() == NSControlStateValueOn),
+            )
+            parent.addSubview_(switch)
         parent.addSubview_(self._label(
             rule.get("name") or rule.get("title") or rule.get("id", "Rule"),
-            (116, y + 5, 198, 20), size=12, bold=True))
+            (text_x, y + 5, 300 if library else 198, 20),
+            size=12, bold=True))
         origin = {
             "global": "Shared source",
             "project": "Project source",
@@ -817,6 +838,8 @@ class PopoverRenderer:
         }.get(rule.get("source_origin") or rule.get("scope"), "Rule")
         override = rule.get("project_override")
         states = [origin]
+        if library and rule.get("project_name"):
+            states.append(rule["project_name"])
         if override is not None:
             states.append("project selection")
         if rule.get("customized_from"):
@@ -829,7 +852,8 @@ class PopoverRenderer:
         if warm_status == "failed":
             states.append("check failed")
         parent.addSubview_(self._label(
-            " · ".join(states), (116, y + 28, 198, 36), size=9.5,
+            " · ".join(states),
+            (text_x, y + 28, 300 if library else 198, 36), size=9.5,
             lines=2, color=NSColor.secondaryLabelColor()))
         parent.addSubview_(self._button(
             "Edit", (324, y + 8, 54, 27),
@@ -839,7 +863,8 @@ class PopoverRenderer:
             "•••", (386, y + 8, 30, 27),
             lambda sender, value=rule: self.controller.show_rule_menu(sender, value),
             bordered=False))
-        self._separator(parent, y + 74, 116, POPOVER_WIDTH - 130)
+        self._separator(
+            parent, y + 74, text_x, POPOVER_WIDTH - text_x - PAD)
 
     # --- Projects -------------------------------------------------------
     def _render_projects(self, root: NSView, snapshot: UISnapshot) -> None:

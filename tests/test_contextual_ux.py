@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from rules_as_programs import config, rules_api
@@ -292,6 +293,13 @@ def test_promote_customize_and_revert_shared_rule(monkeypatch, tmp_path):
     assert reverted["ok"]
     assert not (project / ".cursor" / "rules-as-programs" / "rules"
                 / rule_id / "rule.py").exists()
+    deleted = rules_api.delete_rule(
+        rule_id, None, project_roots=[str(project)])
+    assert deleted["ok"]
+    assert not (global_rules / rule_id / "rule.py").exists()
+    assert rule_id not in json.loads(
+        config.project_rules_config_path(project).read_text()
+    ).get("rules", {})
 
 
 def test_all_builtins_use_managed_fuzzy_format():
