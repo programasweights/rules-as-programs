@@ -22,7 +22,6 @@ import socketserver
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -38,7 +37,8 @@ from .core.events import (
 from .core.ledger import LedgerStore
 from .core import revisions
 from .core.rule import (
-    LoadedRule, RuleLoadError, load_rule_file, load_rules_with_errors, rule_paths,
+    LoadedRule, RuleLoadError, load_rule_file, load_rules_with_errors,
+    new_rule_id, rule_paths,
 )
 from .core.store import VerdictStore
 from .ipc import PROTOCOL_VERSION
@@ -92,7 +92,6 @@ class _RulesCache:
                     # Name is descriptive metadata and follows the current
                     # working source without activating new behavior.
                     active_rule.title = rule.title
-                    active_rule.slug = rule.slug
                     active_rule.source_path = info["cache_path"]
                     active_rule.working_source_path = rule.source_path
                     active_rules.append(active_rule)
@@ -125,6 +124,7 @@ class Daemon:
         self.engine = Engine(
             self.runtime, self.store, self.rules_cache.get,
             on_verdict=self._on_verdict,
+            on_error=self._on_rule_error,
             is_muted=rules_api.is_muted, is_enabled=rules_api.is_enabled,
         )
         self.work = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rap-work")
@@ -197,7 +197,7 @@ class Daemon:
             _log(f"evaluate error: {exc!r}")
 
     def _evaluate_attention(self, event: Event, ledger) -> None:
-        rule_id = "agent-needs-reply"
+        rule_id = "gn3xtat6av4fy690"
         if not self._rule_enabled(rule_id, event.project_root):
             return
         try:
@@ -223,9 +223,9 @@ class Daemon:
 
     def _warm(self, project_root: str) -> None:
         rules = list(self.rules_cache.get(project_root))
-        if not any(rule.id == "agent-needs-reply" for rule in rules):
+        if not any(rule.id == "gn3xtat6av4fy690" for rule in rules):
             attention_rule = self._rule_from(
-                "agent-needs-reply", project_root, None)
+                "gn3xtat6av4fy690", project_root, None)
             if attention_rule is not None:
                 rules.append(attention_rule)
         with self._state_lock:
@@ -298,6 +298,12 @@ class Daemon:
         with self._state_lock:
             self._last_successful_audit = verdict.ts
         _log(f"verdict [{verdict.severity}] {verdict.rule_id}: {verdict.message}")
+
+    def _on_rule_error(
+        self, rule: LoadedRule, project_root: str, message: str
+    ) -> None:
+        self._set_warm_state(project_root, rule.id, "failed", message)
+        _log(f"rule error {rule.id}: {message}")
 
     # --- status snapshot -------------------------------------------------
     @staticmethod
@@ -728,11 +734,11 @@ class Daemon:
             if not project_root:
                 return {"ok": False, "error": "project_root is required"}
             existing = {rule["id"] for rule in rules_api.list_rules(project_root)}
-            rule_id = str(uuid.uuid4())
+            rule_id = new_rule_id()
             while rule_id in existing or (
                 config.project_rules_dir(project_root) / rule_id / "rule.py"
             ).exists():
-                rule_id = str(uuid.uuid4())
+                rule_id = new_rule_id()
             template = req.get("template", "paw")
             source = (
                 rules_api.draft_plain_rule_source(rule_id)
@@ -873,10 +879,6 @@ class Daemon:
         if rtype == "mute":
             return rules_api.set_mute(
                 req["rule_id"], req.get("until"), req.get("project_root") or None)
-        if rtype == "snooze":
-            return rules_api.snooze(
-                req["rule_id"], float(req.get("seconds", 3600)),
-                req.get("project_root") or None)
         if rtype == "unmute":
             return rules_api.clear_mute(
                 req["rule_id"], req.get("project_root") or None)

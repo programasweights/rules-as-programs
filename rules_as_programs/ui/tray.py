@@ -103,7 +103,7 @@ def _run_pystray() -> int:
         findings = data.get("findings_by_project", {})
         if not findings:
             items.append(pystray.MenuItem(
-                "All reviewed — monitoring continues", None, enabled=False))
+                "All reviewed", None, enabled=False))
         for project, groups in findings.items():
             sub: list[Any] = []
             for group in groups[:12]:

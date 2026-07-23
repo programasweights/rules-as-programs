@@ -2,68 +2,67 @@ from __future__ import annotations
 
 import json
 import shutil
-import time
-import uuid
 
 from rules_as_programs import config, rules_api
+from rules_as_programs.core.rule import new_rule_id
 
 
-def test_legacy_state_migrates_to_global_with_project_overrides(monkeypatch, tmp_path):
+def test_global_default_with_project_override(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
-    config.rule_state_path().write_text(json.dumps({"shared-rule": False}))
+    rule_id = new_rule_id()
+    config.rule_state_path().write_text(json.dumps({
+        "version": 2, "global": {rule_id: False}, "projects": {},
+    }))
     project_a = tmp_path / "project-a"
     project_b = tmp_path / "project-b"
     project_a.mkdir()
     project_b.mkdir()
 
-    assert not rules_api.is_enabled("shared-rule", str(project_a))
-    assert not rules_api.is_enabled("shared-rule", str(project_b))
+    assert not rules_api.is_enabled(rule_id, str(project_a))
+    assert not rules_api.is_enabled(rule_id, str(project_b))
 
-    result = rules_api.set_enabled("shared-rule", True, str(project_a))
+    result = rules_api.set_enabled(rule_id, True, str(project_a))
     assert result["ok"]
-    assert rules_api.is_enabled("shared-rule", str(project_a))
-    assert not rules_api.is_enabled("shared-rule", str(project_b))
+    assert rules_api.is_enabled(rule_id, str(project_a))
+    assert not rules_api.is_enabled(rule_id, str(project_b))
 
     state = json.loads(config.rule_state_path().read_text())
     assert state["version"] == 2
-    assert state["global"]["shared-rule"] is False
+    assert state["global"][rule_id] is False
     assert str(project_a) not in state["projects"]
     project_config = json.loads(
         config.project_rules_config_path(project_a).read_text())
-    migrated_id = rules_api.resolve_rule_ref("shared-rule")
-    assert project_config["rules"][migrated_id]["enabled"] is True
+    assert project_config["rules"][rule_id]["enabled"] is True
 
 
-def test_mute_and_snooze_are_project_scoped(monkeypatch, tmp_path):
+def test_hide_future_findings_is_project_scoped(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
-    rules_api.set_mute("rule", None, "/project/a")
-    assert rules_api.is_muted("rule", "/project/a")
-    assert not rules_api.is_muted("rule", "/project/b")
+    rule_id = new_rule_id()
+    rules_api.set_mute(rule_id, None, "/project/a")
+    assert rules_api.is_muted(rule_id, "/project/a")
+    assert not rules_api.is_muted(rule_id, "/project/b")
 
-    rules_api.snooze("rule", 60, "/project/b")
-    info = rules_api.mute_info("rule", "/project/b")
-    assert info["muted"]
-    assert info["scope"] == "project"
-    assert float(info["until"]) > time.time()
-
-    rules_api.clear_mute("rule", "/project/a")
-    assert not rules_api.is_muted("rule", "/project/a")
+    rules_api.clear_mute(rule_id, "/project/a")
+    assert not rules_api.is_muted(rule_id, "/project/a")
 
 
-def test_project_can_override_legacy_global_mute(monkeypatch, tmp_path):
+def test_project_can_override_global_hidden_findings(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
-    config.mutes_path().write_text(json.dumps({"rule": None}))
-    assert rules_api.is_muted("rule", "/project/a")
-    rules_api.clear_mute("rule", "/project/a")
-    assert not rules_api.is_muted("rule", "/project/a")
-    assert rules_api.is_muted("rule", "/project/b")
+    rule_id = new_rule_id()
+    config.mutes_path().write_text(json.dumps({
+        "version": 2, "global": {rule_id: None}, "projects": {},
+    }))
+    assert rules_api.is_muted(rule_id, "/project/a")
+    rules_api.clear_mute(rule_id, "/project/a")
+    assert not rules_api.is_muted(rule_id, "/project/a")
+    assert rules_api.is_muted(rule_id, "/project/b")
 
 
 def test_global_pause_is_not_a_mute(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
     rules_api.set_monitoring_paused(True)
     assert rules_api.monitoring_paused()
-    assert not rules_api.is_muted("rule", "/project")
+    assert not rules_api.is_muted(new_rule_id(), "/project")
     rules_api.set_monitoring_paused(False)
     assert not rules_api.monitoring_paused()
 
@@ -84,7 +83,7 @@ def test_live_syntax_check_does_not_execute_rule_source(tmp_path):
 
 def test_project_assignments_are_shareable_and_resettable(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     project = tmp_path / "project"
     clone = tmp_path / "clone"
     project.mkdir()

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .model import UISnapshot
 
-SEVERITY_RANK = {"info": 1, "warn": 2, "high": 3, "critical": 4}
+SEVERITY_RANK = {"info": 1, "warn": 2, "critical": 3}
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ def status_presentation(snapshot: UISnapshot) -> StatusPresentation:
         kind, badge = "degraded", "!"
     elif finding_count:
         kind = "finding"
-        badge = "9+" if finding_count > 9 else str(finding_count)
+        badge = "99+" if finding_count > 99 else str(finding_count)
     elif attention_count:
         kind, badge = "attention", "?"
     else:
@@ -60,7 +60,6 @@ def status_presentation(snapshot: UISnapshot) -> StatusPresentation:
         label = {
             "info": "Info",
             "warn": "Warning",
-            "high": "High",
             "critical": "Critical",
         }.get(severity or "", "Finding")
         summary = f"{finding_count} open, highest {label}"

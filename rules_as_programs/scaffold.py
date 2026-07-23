@@ -10,10 +10,10 @@ examples, runs ``rap rules test``, and enables it.
 from __future__ import annotations
 
 import re
-import uuid
 from pathlib import Path
 
 from . import config
+from .core.rule import new_rule_id
 
 BUILTIN_DIR = Path(__file__).parent / "builtin_rules"
 
@@ -46,8 +46,7 @@ def install_builtins(scope: str, project_root: str | None, overwrite: bool = Fal
             continue
         rule = loaded[0]
         target = dest / rule.id / "rule.py"
-        legacy_target = dest / src.name
-        if (target.exists() or legacy_target.exists()) and not overwrite:
+        if target.exists() and not overwrite:
             notes.append(f"kept existing {target.name}")
             continue
         source = src.read_text(encoding="utf-8")
@@ -58,8 +57,6 @@ def install_builtins(scope: str, project_root: str | None, overwrite: bool = Fal
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(source, encoding="utf-8")
-        if overwrite and legacy_target.exists():
-            legacy_target.unlink(missing_ok=True)
         notes.append(f"installed {rule.title}")
     return notes
 
@@ -83,8 +80,7 @@ def add_builtin(
         return None
     rule = loaded[0]
     target = dest / rule.id / "rule.py"
-    legacy_target = dest / src.name
-    if (target.exists() or legacy_target.exists()) and not overwrite:
+    if target.exists() and not overwrite:
         return None
     source = src.read_text(encoding="utf-8")
     ok, source, _error = rules_api.patch_rule_identity(
@@ -93,8 +89,6 @@ def add_builtin(
         return None
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(source, encoding="utf-8")
-    if overwrite and legacy_target.exists():
-        legacy_target.unlink(missing_ok=True)
     return target
 
 
@@ -132,7 +126,7 @@ def draft_rule_py(name: str, prose: str) -> tuple[str, str]:
     """Build (filename, python_source) for a draft Python rule from prose."""
     from . import rules_api
 
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     title = name.replace("-", " ").replace("_", " ").strip().title()
     prose_compact = " ".join(prose.split())
     if len(prose_compact) > 600:
@@ -141,7 +135,6 @@ def draft_rule_py(name: str, prose: str) -> tuple[str, str]:
         rule_id,
         title,
         f"Decide whether the agent violated this project rule: {prose_compact}",
-        f"Project rule may be violated: {title}.",
         severity="warn",
         on=["message", "session_stop"],
         inputs=["message", "thought", "shell_exec", "file_edit", "tool_result"],

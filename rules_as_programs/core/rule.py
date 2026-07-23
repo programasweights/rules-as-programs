@@ -5,7 +5,7 @@ A rule file defines one (or more) functions decorated with
 carrying the decorator's metadata. Rules resolve from two scopes -- global
 (``~/.cursor/rules-as-programs/rules``) then project
 (``<repo>/.cursor/rules-as-programs/rules``) -- with project overriding global
-by immutable UUID ``id``. New files live at ``rules/<uuid>/rule.py``; legacy
+by immutable 16-character ``id``. New files live at ``rules/<id>/rule.py``; legacy
 flat files remain loadable until their first structured save migrates them.
 
 Importing rule files executes them. That is the same trust model as
@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
+import secrets
 import traceback
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -26,18 +26,28 @@ from .. import config
 from ..sdk import RULE_ATTR, RuleDef
 
 _counter = itertools.count()
-RULE_UUID_NAMESPACE = uuid.UUID("ae940bdb-cd60-48b0-bca8-b5e3a25285a7")
+RULE_ID_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 
 
-def is_rule_uuid(value: str | None) -> bool:
-    try:
-        return bool(value) and str(uuid.UUID(str(value))) == str(value).lower()
-    except (ValueError, AttributeError, TypeError):
-        return False
+def _encode_rule_id(raw: bytes) -> str:
+    value = int.from_bytes(raw, "big")
+    chars = []
+    for _ in range(16):
+        chars.append(RULE_ID_ALPHABET[value & 31])
+        value >>= 5
+    return "".join(reversed(chars))
 
 
-def legacy_rule_uuid(legacy_id: str) -> str:
-    return str(uuid.uuid5(RULE_UUID_NAMESPACE, legacy_id))
+def new_rule_id() -> str:
+    return _encode_rule_id(secrets.token_bytes(10))
+
+
+def is_rule_id(value: str | None) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 16
+        and all(char in RULE_ID_ALPHABET for char in value)
+    )
 
 
 @dataclass
@@ -50,8 +60,6 @@ class LoadedRule:
     inputs: list[str] = field(default_factory=list)
     probes: dict[str, str] = field(default_factory=dict)
     channel: str = "finding"
-    legacy_id: str = ""
-    slug: str = ""
     spec: str | None = None
     examples: list[tuple[str, str]] = field(default_factory=list)
     scope: str = "project"
@@ -60,17 +68,15 @@ class LoadedRule:
 
     @classmethod
     def from_def(cls, d: RuleDef, scope: str, path: str) -> "LoadedRule":
-        function_slug = d.fn.__name__.replace("_", "-")
-        legacy_id = d.id if d.id and not is_rule_uuid(d.id) else function_slug
-        rule_id = d.id if is_rule_uuid(d.id) else legacy_rule_uuid(legacy_id)
-        return cls(id=rule_id, title=d.title, severity=d.severity, on=list(d.on),
+        if not is_rule_id(d.id):
+            raise ValueError("rule id must be a 16-character Crockford Base32 value")
+        return cls(id=d.id, title=d.title, severity=d.severity, on=list(d.on),
                    inputs=list(d.inputs),
                    probes=dict(d.probes),
                    channel=d.channel,
                    fn=d.fn, spec=d.spec, examples=list(d.examples),
                    scope=scope, source_path=path,
-                   working_source_path=path,
-                   legacy_id=legacy_id, slug=function_slug)
+                   working_source_path=path)
 
 
 @dataclass
@@ -115,7 +121,13 @@ def _load_rule_file_result(
         return [], RuleLoadError(str(path), scope, message)
     if module is None:
         return [], RuleLoadError(str(path), scope, "Could not import rule module")
-    rules = [LoadedRule.from_def(rd, scope, str(path)) for rd in rules_in_module(module)]
+    try:
+        rules = [
+            LoadedRule.from_def(rd, scope, str(path))
+            for rd in rules_in_module(module)
+        ]
+    except ValueError as exc:
+        return [], RuleLoadError(str(path), scope, str(exc))
     if not rules:
         return [], RuleLoadError(str(path), scope, "No @rule-decorated function found")
     return rules, None
@@ -124,10 +136,7 @@ def _load_rule_file_result(
 def rule_paths(directory: Path) -> list[Path]:
     if not directory.exists():
         return []
-    return sorted({
-        *directory.glob("*.py"),
-        *directory.glob("*/rule.py"),
-    })
+    return sorted(directory.glob("*/rule.py"))
 
 
 def load_rules_with_errors(

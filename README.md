@@ -64,10 +64,10 @@ See [`AGENTS.md`](AGENTS.md) for the agent-facing setup guide.
 ### A native findings inbox in the menu bar
 
 A large PAW item lives in the top-right (macOS menu bar; system tray on other
-platforms) and starts automatically at login. Its attached badge shows both the
-highest open severity and finding-group count: blue Info, yellow Warning,
-orange High, or red Critical. A separate purple `?` means an agent likely needs
-your reply; it is not treated as a violation.
+platforms) and starts automatically at login. A number beside it is the
+actionable finding-group count, colored by highest severity: blue Info, yellow
+Warning, or red Critical. A separate purple `?` means an agent likely needs your
+reply; it is not treated as a violation.
 
 Click it to open the native macOS popover:
 
@@ -78,27 +78,27 @@ Click it to open the native macOS popover:
 - Clicking a finding opens a resizable **Finding Inspector** with the exact rule
   snapshot, decision, triggering event, surrounding agent timeline, probes, and
   a selectable raw JSONL view centered on the trigger.
-- Findings record immutable rule UUID, Name at the time, and active source hash.
+- Findings record immutable compact rule ID, Name at the time, and active source hash.
   After a different source revision is activated, older open findings remain
   visible as **Rule changed — needs recheck** and stop contributing to severity
   badges until manually reviewed.
 - **Rule Editor** defaults to a managed fuzzy rule: Name, text description,
-  violation message, severity, Runs when, Reads, and optional regression cases.
+  Runs when, Reads, and optional regression cases. The rule itself returns
+  `OK`, `INFO`, `WARNING`, or `CRITICAL` for each finding.
   **Advanced Python** exposes the canonical generated function and converts to
   Custom Python mode only after structural customization.
 - Project headers expose **+ Rule** and **Manage Rules**; Projects remains the
   setup/monitoring-health view.
 - **Rules for Project** is a labelled checklist of Project, Shared, and Built-in
   rules. Selections are stored in `.cursor/rules-as-programs/config.json` so
-  they follow the repository; personal mutes and snoozes stay local.
+  they follow the repository; personal hidden-finding choices stay local.
 
 Action names are deliberately precise:
 
 - **Mark Reviewed** hides this finding; a new occurrence can reappear.
-- **Snooze rule** suppresses newly surfaced findings for a stated period while
-  evaluation and audit logging continue.
-- **Mute rule in this project** suppresses future surfacing only in that repo;
-  the rule still audits and muted results remain under Reviewed.
+- **Hide future findings in this project** suppresses future surfacing only in
+  that repo; the rule still evaluates and logs, while the current finding stays
+  open until reviewed.
 - **Disable rule** or **Pause monitoring** stops evaluation and requires
   confirmation.
 
@@ -170,14 +170,14 @@ Cursor hooks ──stdin JSON──▶ rap-hook (thin, instant, fail-open)
 
 ## Writing and customizing rules
 
-The normal UI requires no Python: edit Name, fuzzy Rule description, violation
-message, severity, Runs when, Reads, and optional Input/Output cases. Python
-remains canonical underneath at `rules/<uuid>/rule.py`; Advanced Python can
+The normal UI requires no Python: edit Name, fuzzy Rule description, Runs when,
+Reads, and optional Input/Output cases labelled `OK`, `INFO`, `WARNING`, or
+`CRITICAL`. Python remains canonical underneath at `rules/<id>/rule.py`; Advanced Python can
 convert the generated template into arbitrary Custom Python.
 
 Every rule has:
 
-- immutable UUID `id`, used by projects, findings, state, and history;
+- immutable 16-character `id`, used by projects, findings, state, and history;
 - mutable `name`, recorded with each finding;
 - one editable working source and one last successfully checked active source
   hash.
@@ -188,39 +188,39 @@ The generated Python remains a single `@rule` function:
 from rules_as_programs import rule
 
 SPEC = """Decide whether rsync or scp was used to synchronize project source code instead of Git. Directly copying source is a violation; transferring assets or release artifacts is allowed.
-Return ONLY one of: OK, VIOLATION
+Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
 Input: ## Recent activity
 - (shell_exec) $ rsync -av src/ host:/srv/app/src/
-Output: VIOLATION
+Output: WARNING
 
 Input: ## Recent activity
 - (shell_exec) $ scp public/logo.png host:/srv/assets/
 Output: OK"""
 
-@rule(id="550e8400-e29b-41d4-a716-446655440000",
+@rule(id="7km3v9c2xq4t8n1p",
       name="Use Git for source synchronization",
       on=["shell_exec", "session_stop"], inputs=["shell_exec", "message"],
-      severity="warn", spec=SPEC)
+      spec=SPEC)
 def use_git_for_source_sync(ctx):
     """Use Git—not direct source copying—to synchronize code."""
-    if ctx.paw(SPEC)(ctx.input()) == "VIOLATION":
-        return "Project source was copied directly instead of synced with Git."
+    decision = ctx.paw(SPEC)(ctx.input())
+    return ctx.finding(decision, "Use Git for source synchronization")
 ```
 
 `ctx` gives you `ctx.input()`, `ctx.evidence(probes=, include=, latest=)`,
 `ctx.events(*kinds)`, `ctx.run(cmd)`, and `ctx.paw(spec)`. Existing explicit
 `ctx.evidence(...)` rules remain supported. A plain-Python rule simply returns a
-message when violated. Return `("high", "msg")` to override severity once.
+message when violated. Custom Python may return `("critical", "msg")`.
 
-Rules live in two origins and project customizations preserve the same UUID:
+Rules live in two origins and project customizations preserve the same ID:
 
-- Shared/My Rules: `~/.cursor/rules-as-programs/rules/<uuid>/rule.py`
-- Project: `<repo>/.cursor/rules-as-programs/rules/<uuid>/rule.py`
+- Shared/My Rules: `~/.cursor/rules-as-programs/rules/<id>/rule.py`
+- Project: `<repo>/.cursor/rules-as-programs/rules/<id>/rule.py`
 
 The shareable project checklist lives at
 `<repo>/.cursor/rules-as-programs/config.json`. A project source overrides its
-Shared source with the same UUID; **Revert to Shared** removes that customization.
+Shared source with the same ID; **Revert to Shared** removes that customization.
 
 ### Converting your existing prose rules
 

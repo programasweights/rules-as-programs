@@ -124,10 +124,9 @@ def _status_attributed_title(
         color = {
             "info": NSColor.systemBlueColor(),
             "warn": NSColor.systemYellowColor(),
-            "high": NSColor.systemOrangeColor(),
             "critical": NSColor.systemRedColor(),
         }.get(presentation.severity or "info", NSColor.systemBlueColor())
-        append(f" ●{presentation.badge_text}", color)
+        append(f" {presentation.badge_text}", color)
     elif presentation.kind == "attention":
         append(" ?", NSColor.systemPurpleColor())
     elif presentation.kind == "paused":
@@ -180,6 +179,7 @@ class MacOSController(NSObject):
         self.popover = None
         self.content_controller = None
         self.content_view = None
+        self._last_popover_size = None
         self.renderer = PopoverRenderer(self)
         self.model = UIModel(listener=self._snapshot_received)
         self._status_target = RAPStatusTarget.alloc().init()
@@ -285,8 +285,18 @@ class MacOSController(NSObject):
     def _render(self) -> None:
         if not self.content_controller:
             return
-        self.content_view = self.renderer.render(self.snapshot)
+        max_height = 600.0
+        if self.status_item and self.status_item.button().window():
+            screen = self.status_item.button().window().screen()
+            if screen:
+                max_height = max(
+                    170.0, min(600.0, screen.visibleFrame().size.height - 48.0))
+        self.content_view, size = self.renderer.render(
+            self.snapshot, max_height=max_height)
         self.content_controller.setView_(self.content_view)
+        if self.popover and size != self._last_popover_size:
+            self.popover.setContentSize_(NSMakeSize(*size))
+            self._last_popover_size = size
 
     @objc.python_method
     def _set_banner(self, message: str) -> None:
@@ -366,6 +376,16 @@ class MacOSController(NSObject):
     def filter_rules(self, text: str) -> None:
         self.rules_filter = text
         self._render()
+
+    @objc.python_method
+    def show_rule_list_menu(self, sender) -> None:
+        self.renderer.popup_menu(sender, [
+            ("Use global defaults", self.reset_rule_assignments, True),
+            ("Run all in this project",
+             lambda: self.bulk_rule_assignments(True), True),
+            ("Stop all in this project",
+             lambda: self.bulk_rule_assignments(False), True),
+        ])
 
     @objc.python_method
     def begin_add_rule(self, project_root: str, sender=None) -> None:
@@ -498,24 +518,15 @@ class MacOSController(NSObject):
         _open_in_cursor(item.get("project_root", ""))
 
     @objc.python_method
-    def _snooze(self, group: dict[str, Any], seconds: float) -> None:
-        self.model.snooze_rule(
-            group.get("rule_id", ""),
-            group.get("project_root", ""),
-            seconds,
-            lambda result: _on_main(lambda: self._set_banner(
-                "Rule snoozed." if result.get("ok")
-                else result.get("error", "Could not snooze rule."))),
-        )
-
-    @objc.python_method
     def _mute(self, group: dict[str, Any]) -> None:
         self.model.mute_rule(
             group.get("rule_id", ""),
             group.get("project_root", ""),
             lambda result: _on_main(lambda: self._set_banner(
-                "Rule muted in this project. The current finding remains open."
-                if result.get("ok") else result.get("error", "Could not mute rule."))),
+                "Future findings are hidden in this project. "
+                "The current finding remains until reviewed."
+                if result.get("ok") else result.get(
+                    "error", "Could not hide future findings."))),
         )
 
     @objc.python_method
@@ -547,24 +558,27 @@ class MacOSController(NSObject):
         if history:
             if group.get("suppressed"):
                 items.append((
-                    "Unmute rule for future findings",
+                    "Show future findings",
                     lambda: self.model.perform({
                         "type": "unmute",
                         "rule_id": group.get("rule_id"),
                         "project_root": group.get("project_root"),
                     }, lambda result: _on_main(lambda: self._set_banner(
-                        "Rule unmuted." if result.get("ok")
-                        else result.get("error", "Could not unmute rule.")))),
+                        "Future findings will be shown." if result.get("ok")
+                        else result.get("error", "Could not show future findings.")))),
                     True,
                 ))
             else:
                 items.append(("Reopen finding", lambda: self._reopen(group), True))
         else:
             items.extend([
-                ("Mark Done", lambda: self.done_group(group), True),
-                ("Snooze rule for 1 hour", lambda: self._snooze(group, 3600), True),
-                ("Snooze rule until tomorrow", lambda: self._snooze(group, 24 * 3600), True),
-                ("Mute rule in this project", lambda: self._mute(group), True),
+                ("Mark reviewed", lambda: self.done_group(group), True),
+                ("Tune rule…", lambda: self.edit_rule({
+                    "id": group.get("rule_id"),
+                    "project_root": group.get("project_root"),
+                }), True),
+                ("Hide future findings in this project",
+                 lambda: self._mute(group), True),
                 ("-", lambda: None, True),
                 ("Done as false positive", lambda: self._review_with_reason(
                     group, "false_positive"), True),
@@ -573,10 +587,6 @@ class MacOSController(NSObject):
             ])
         items.extend([
             ("-", lambda: None, True),
-            ("Edit rule…", lambda: self.edit_rule({
-                "id": group.get("rule_id"),
-                "project_root": group.get("project_root"),
-            }), True),
             ("Open raw audit log", lambda: _open_path(str(
                 config.project_log_file(group.get("project_root", "")))), True),
             ("Copy finding JSON", lambda: _copy_text(
@@ -675,7 +685,8 @@ class MacOSController(NSObject):
             "project_root": self.selected_project,
         }, lambda result: _on_main(lambda: (
             self._load_rules() if result.get("ok")
-            else self._set_banner(result.get("error", "Rule could not be unmuted."))
+            else self._set_banner(
+                result.get("error", "Could not show future findings."))
         )))
 
     @objc.python_method
@@ -689,7 +700,7 @@ class MacOSController(NSObject):
             ),
             ("Test rule", lambda: self._test_rule_quick(rule), True),
             (
-                "Unmute in this project",
+                "Show future findings",
                 lambda: self._unmute_rule(rule),
                 bool(rule.get("muted")),
             ),
@@ -775,13 +786,14 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def _test_rule_quick(self, rule: dict[str, Any]) -> None:
-        self._set_banner(f"Testing {rule.get('id')}…")
+        rule_name = rule.get("name") or rule.get("title") or "rule"
+        self._set_banner(f"Testing {rule_name}…")
 
         def complete(result: dict[str, Any]) -> None:
             if result.get("ok"):
                 if result.get("total"):
                     message = (
-                        f"{rule.get('id')}: {result.get('passed')}/"
+                        f"{rule_name}: {result.get('passed')}/"
                         f"{result.get('total')} examples passed.")
                 else:
                     message = result.get("note", "No examples to test.")
@@ -950,6 +962,21 @@ class MacOSController(NSObject):
             ("Open audit log", lambda: _open_path(
                 str(config.project_log_file(path))), True),
             ("Copy project path", lambda: _copy_text(path), True),
+        ])
+
+    @objc.python_method
+    def show_app_menu(self, sender) -> None:
+        paused = bool(self.snapshot.daemon.get("monitoring_paused"))
+        self.renderer.popup_menu(sender, [
+            (
+                "Resume monitoring" if paused else "Pause monitoring",
+                lambda: self.toggle_pause(not paused),
+                True,
+            ),
+            ("Open daemon log", lambda: _open_path(str(config.log_path())), True),
+            ("Open tray log", lambda: _open_path(str(config.tray_log_path())), True),
+            ("-", lambda: None, True),
+            ("Quit Rules as Programs", self.quit, True),
         ])
 
     @objc.python_method

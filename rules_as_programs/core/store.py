@@ -208,6 +208,15 @@ class VerdictStore:
         for fingerprint in order:
             occurrences = grouped[fingerprint]
             latest = dict(occurrences[0])
+            latest["latest_severity"] = latest.get("severity", "info")
+            rank = {"info": 1, "warn": 2, "warning": 2, "critical": 3}
+            highest = max(
+                (str(row.get("severity", "info")).lower() for row in occurrences),
+                key=lambda value: rank.get(value, 0),
+                default="info",
+            )
+            latest["severity"] = (
+                "warn" if highest == "warning" else highest)
             latest["fingerprint"] = fingerprint
             latest["ids"] = [int(row["id"]) for row in occurrences]
             latest["occurrences"] = len(occurrences)

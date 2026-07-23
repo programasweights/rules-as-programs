@@ -20,7 +20,7 @@ from .adapters.cursor import CursorAdapter
 from .core.rule import load_rules, load_rule_file
 from . import scaffold
 
-SEV_EMOJI = {"info": "*", "warn": "!", "high": "!!", "critical": "X"}
+SEV_EMOJI = {"info": "*", "warn": "!", "critical": "X"}
 ICON_URLS = ["https://programasweights.com/paw-192.png"]
 
 
@@ -196,8 +196,14 @@ def cmd_rules(args) -> int:
     if args.rules_cmd in ("enable", "disable"):
         project = None if getattr(args, "global_scope", False) else os.path.abspath(
             getattr(args, "path", None) or os.getcwd())
+        lookup_root = project or os.path.abspath(
+            getattr(args, "path", None) or os.getcwd())
+        rule = _load_rule_by_id(args.rule_id, lookup_root)
+        if rule is None:
+            print(f"rule {args.rule_id!r} not found", file=sys.stderr)
+            return 1
         rules_api.set_enabled(
-            args.rule_id, args.rules_cmd == "enable", project)
+            rule.id, args.rules_cmd == "enable", project, rule.title)
         ipc.send_request({"type": "reload"})
         print(f"{args.rule_id}: {args.rules_cmd}d")
         return 0
@@ -242,7 +248,7 @@ def _rules_add(args) -> int:
 
 def _load_rule_by_id(rule_id: str, project_root: str):
     for r in load_rules(project_root):
-        if rule_id in (r.id, r.legacy_id, r.slug):
+        if rule_id == r.id or rule_id.lower() == r.title.lower():
             return r
     src = scaffold.BUILTIN_DIR / f"{rule_id}.py"
     if src.exists():

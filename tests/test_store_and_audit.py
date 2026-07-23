@@ -38,7 +38,7 @@ def _verdict(project: str, *, suppressed: bool = False) -> Verdict:
     return Verdict(
         rule_id="verify",
         rule_title="Verify claims",
-        severity="high",
+        severity="critical",
         message="Claim lacks evidence",
         conversation_id="conversation",
         project_root=project,
@@ -112,3 +112,20 @@ def test_audit_lookup_uses_exact_finding_id(monkeypatch, tmp_path):
     assert entry is not None
     assert entry["finding_id"] == 11
     assert entry["trace"][0]["input"] == "old"
+
+
+def test_group_uses_highest_open_severity_not_latest(tmp_path):
+    store = VerdictStore(tmp_path / "verdicts.db")
+    base = dict(
+        rule_id="rule",
+        rule_title="Rule",
+        message="same finding",
+        conversation_id="conversation",
+        project_root="/project",
+        source_hash="revision",
+    )
+    store.record(Verdict(severity="critical", **base))
+    store.record(Verdict(severity="info", **base))
+    group = store.by_project()["/project"][0]
+    assert group["severity"] == "critical"
+    assert group["latest_severity"] == "info"

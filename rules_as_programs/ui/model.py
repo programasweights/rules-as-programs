@@ -188,17 +188,6 @@ class UIModel:
     def done_project(self, project_root: str, callback: ActionCallback | None = None) -> None:
         self.perform({"type": "review", "project_root": project_root}, callback)
 
-    def snooze_rule(
-        self, rule_id: str, project_root: str, seconds: float,
-        callback: ActionCallback | None = None,
-    ) -> None:
-        self.perform({
-            "type": "snooze",
-            "rule_id": rule_id,
-            "project_root": project_root,
-            "seconds": seconds,
-        }, callback)
-
     def mute_rule(
         self, rule_id: str, project_root: str,
         callback: ActionCallback | None = None,
@@ -278,9 +267,9 @@ def demo_snapshot() -> UISnapshot:
                 {
                     "id": 101,
                     "ids": [101],
-                    "rule_id": "unverifiable-claim",
+                    "rule_id": "fdg0z9837mz4v0ka",
                     "rule_title": "Verify claims with evidence",
-                    "severity": "high",
+                    "severity": "critical",
                     "message": "The agent claimed a deployment succeeded without a successful check.",
                     "project_root": project,
                     "ts": now - 42,
@@ -290,7 +279,7 @@ def demo_snapshot() -> UISnapshot:
                 {
                     "id": 102,
                     "ids": [102],
-                    "rule_id": "github-sync",
+                    "rule_id": "pkgk71nkt3e7xzxn",
                     "rule_title": "Keep work synchronized",
                     "severity": "warn",
                     "message": "Meaningful changes remain uncommitted.",

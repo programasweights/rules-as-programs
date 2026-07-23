@@ -26,6 +26,12 @@ from .store import Verdict, VerdictStore, finding_fingerprint
 from ..paw_runtime import PawRuntime
 
 MAX_INPUT_CHARS = 6000
+SEVERITY_ALIASES = {
+    "info": "info",
+    "warning": "warn",
+    "warn": "warn",
+    "critical": "critical",
+}
 
 
 class RuleContext:
@@ -134,6 +140,22 @@ class RuleContext:
             return label
         return call
 
+    def finding(self, level: str, message: str):
+        """Map a managed fuzzy output label to an engine finding result."""
+        label = str(level or "").strip().upper()
+        if label == "OK":
+            return None
+        severity = {
+            "INFO": "info",
+            "WARNING": "warn",
+            "CRITICAL": "critical",
+        }.get(label)
+        if severity is None:
+            raise ValueError(
+                f"invalid fuzzy severity {label!r}; expected "
+                "OK, INFO, WARNING, or CRITICAL")
+        return severity, str(message).strip()
+
 
 class Engine:
     def __init__(
@@ -142,6 +164,7 @@ class Engine:
         store: VerdictStore,
         rules_provider: Callable[[str], list[LoadedRule]],
         on_verdict: Callable[[Verdict], None] | None = None,
+        on_error: Callable[[LoadedRule, str, str], None] | None = None,
         is_muted: Callable[..., bool] | None = None,
         is_enabled: Callable[..., bool] | None = None,
     ):
@@ -149,6 +172,7 @@ class Engine:
         self.store = store
         self.rules_provider = rules_provider
         self.on_verdict = on_verdict
+        self.on_error = on_error
         self.is_muted = is_muted
         self.is_enabled = is_enabled
         self._last_sig: dict[str, str] = {}
@@ -172,12 +196,21 @@ class Engine:
             return None
         if isinstance(result, str):
             msg = result.strip()
-            return (rule.severity, msg) if msg else None
+            severity = SEVERITY_ALIASES.get(rule.severity.lower())
+            if not severity:
+                raise ValueError(f"invalid rule severity {rule.severity!r}")
+            return (severity, msg) if msg else None
         if isinstance(result, (tuple, list)) and len(result) == 2:
-            sev, msg = str(result[0]), str(result[1]).strip()
-            return (sev, msg) if msg else None
+            raw_severity, msg = str(result[0]).strip().lower(), str(result[1]).strip()
+            severity = SEVERITY_ALIASES.get(raw_severity)
+            if not severity:
+                raise ValueError(f"invalid rule severity {result[0]!r}")
+            return (severity, msg) if msg else None
         text = str(result).strip()
-        return (rule.severity, text) if text else None
+        severity = SEVERITY_ALIASES.get(rule.severity.lower())
+        if not severity:
+            raise ValueError(f"invalid rule severity {rule.severity!r}")
+        return (severity, text) if text else None
 
     def evaluate(
         self, rule: LoadedRule, ledger: Ledger, trigger_event: Event | None = None
@@ -185,9 +218,14 @@ class Engine:
         ctx = RuleContext(ledger, self.runtime, rule.inputs, rule.probes)
         try:
             result = rule.fn(ctx)
-        except Exception:
+            parsed = self._parse_result(rule, result)
+        except Exception as exc:
+            if self.on_error:
+                try:
+                    self.on_error(rule, ledger.project_root, str(exc))
+                except Exception:
+                    pass
             return None  # a buggy rule must never crash the worker
-        parsed = self._parse_result(rule, result)
         if parsed is None:
             return None
         severity, message = parsed

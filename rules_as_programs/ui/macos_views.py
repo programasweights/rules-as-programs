@@ -41,19 +41,22 @@ from AppKit import (
 from Foundation import NSMakeRect, NSObject
 
 from .model import UISnapshot
+from .layout import (
+    FOOTER_HEIGHT,
+    POPOVER_MAX_HEIGHT as POPOVER_HEIGHT,
+    POPOVER_WIDTH,
+    PopoverLayout,
+    fit_popover_layout,
+)
 
-POPOVER_WIDTH = 430
-POPOVER_HEIGHT = 600
 PAD = 14
 HEADER_HEIGHT = 92
-FOOTER_HEIGHT = 42
 CONTENT_TOP = HEADER_HEIGHT
 CONTENT_HEIGHT = POPOVER_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT
 
-SEVERITY_RANK = {"critical": 4, "high": 3, "warn": 2, "info": 1}
+SEVERITY_RANK = {"critical": 3, "warn": 2, "info": 1}
 SEVERITY_LABEL = {
     "critical": "CRITICAL",
-    "high": "HIGH",
     "warn": "WARNING",
     "info": "INFO",
 }
@@ -96,6 +99,8 @@ class PopoverRenderer:
         self._target._callbacks = self._callbacks
         self._next_tag = 1
         self._menus: list[NSMenu] = []
+        self.layout = PopoverLayout(
+            POPOVER_WIDTH, POPOVER_HEIGHT, HEADER_HEIGHT, FOOTER_HEIGHT)
 
     def _reset(self) -> None:
         self._callbacks.clear()
@@ -177,28 +182,73 @@ class PopoverRenderer:
         scroll.setDocumentView_(document)
         return scroll, document
 
-    def render(self, snapshot: UISnapshot) -> NSView:
+    def _measure_content(self, snapshot: UISnapshot, route: str) -> float:
+        if getattr(self.controller, "confirmation", None):
+            return 300
+        if route == "finding":
+            return 460
+        if route == "rules":
+            data = getattr(self.controller, "rules_data", {}) or {}
+            rules = data.get("rules") or []
+            errors = data.get("errors") or []
+            return 100 + max(80, len(errors) * 62 + len(rules) * 76)
+        if route == "projects":
+            return max(90, len(snapshot.projects) * 86 + 12)
+        mode = getattr(self.controller, "inbox_mode", "open")
+        if snapshot.status in ("loading", "unavailable"):
+            return 150
+        groups = (
+            getattr(self.controller, "history_groups", [])
+            if mode == "history"
+            else [
+                group
+                for rows in snapshot.findings_by_project.values()
+                for group in rows
+            ]
+        )
+        current = sum(1 for group in groups if not group.get("stale"))
+        stale = sum(1 for group in groups if group.get("stale"))
+        projects = len({
+            group.get("project_root") for group in groups if not group.get("stale")
+        })
+        attention = len(snapshot.attention) if mode == "open" else 0
+        if not (current or stale or attention):
+            return 140
+        return (
+            38
+            + (30 + attention * 70 if attention else 0)
+            + (30 + stale * 40 if stale else 0)
+            + projects * 30
+            + current * 40
+        )
+
+    def render(
+        self, snapshot: UISnapshot, max_height: float = POPOVER_HEIGHT
+    ) -> tuple[NSView, tuple[float, float]]:
         self._reset()
+        route = getattr(self.controller, "route", "inbox")
+        health, _color = self._health_copy(snapshot)
+        self.layout = fit_popover_layout(
+            self._measure_content(snapshot, route),
+            show_status=bool(health),
+            max_height=max_height,
+        )
         root = RAPFlippedView.alloc().initWithFrame_(
-            NSMakeRect(0, 0, POPOVER_WIDTH, POPOVER_HEIGHT))
+            NSMakeRect(0, 0, self.layout.width, self.layout.height))
         root.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
         confirmation = getattr(self.controller, "confirmation", None)
         if confirmation:
             self._render_confirmation(root, confirmation)
-            return root
-        route = getattr(self.controller, "route", "inbox")
-        if route == "finding":
-            self._render_detail_shell(root, snapshot)
+            return root, (self.layout.width, self.layout.height)
+        self._render_header(root, snapshot)
+        if route == "rules":
+            self._render_rules(root, snapshot)
+        elif route == "projects":
+            self._render_projects(root, snapshot)
         else:
-            self._render_header(root, snapshot)
-            if route == "rules":
-                self._render_rules(root, snapshot)
-            elif route == "projects":
-                self._render_projects(root, snapshot)
-            else:
-                self._render_inbox(root, snapshot)
-            self._render_footer(root, snapshot)
-        return root
+            self._render_inbox(root, snapshot)
+        self._render_footer(root, snapshot)
+        return root, (self.layout.width, self.layout.height)
 
     def _render_confirmation(self, root: NSView, confirmation: dict[str, Any]) -> None:
         root.addSubview_(self._label(
@@ -236,21 +286,17 @@ class PopoverRenderer:
             return "Some rules need attention", NSColor.systemOrangeColor()
         if health == "paused":
             return "Monitoring paused", NSColor.secondaryLabelColor()
-        if health == "idle":
-            return "Ready · waiting for agent activity", NSColor.secondaryLabelColor()
-        count = snapshot.open_count
-        return (
-            f"{count} finding{'s' if count != 1 else ''} need review"
-            if count else "Monitoring is healthy",
-            NSColor.labelColor(),
-        )
+        return "", NSColor.secondaryLabelColor()
 
     def _render_header(self, root: NSView, snapshot: UISnapshot) -> None:
-        root.addSubview_(self._label(
-            "Rules as Programs", (PAD, 12, 240, 24), size=16, bold=True))
         health, color = self._health_copy(snapshot)
+        controls_y = 58 if health else 36
         root.addSubview_(self._label(
-            health, (PAD, 36, 330, 18), size=11, color=color))
+            "Rules as Programs",
+            (PAD, 12 if health else 8, 240, 24), size=16, bold=True))
+        if health:
+            root.addSubview_(self._label(
+                health, (PAD, 36, 330, 18), size=11, color=color))
         if snapshot.daemon.get("health") == "warming":
             spinner = NSProgressIndicator.alloc().initWithFrame_(
                 NSMakeRect(390, 20, 18, 18))
@@ -263,7 +309,7 @@ class PopoverRenderer:
             projects = snapshot.projects
             choices = [{"path": "", "name": "All Projects"}, *projects]
             popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-                NSMakeRect(PAD, 58, 292, 27), False)
+                NSMakeRect(PAD, controls_y, 292, 27), False)
             popup.removeAllItems()
             for project in choices:
                 popup.addItemWithTitle_(project.get("name") or _project_name(
@@ -277,12 +323,12 @@ class PopoverRenderer:
                 choices[sender.indexOfSelectedItem()].get("path", "")))
             root.addSubview_(popup)
             root.addSubview_(self._button(
-                "+ Rule", (316, 57, 98, 29),
+                "+ Rule", (316, controls_y - 1, 98, 29),
                 lambda sender: self.controller.begin_add_rule(
                     getattr(self.controller, "home_project", ""), sender)))
         else:
             root.addSubview_(self._button(
-                "‹ Findings", (PAD, 57, 88, 28),
+                "‹ Findings", (PAD, controls_y - 1, 88, 28),
                 lambda _sender: self.controller.select_tab("inbox"),
                 bordered=False))
             title = (
@@ -290,36 +336,26 @@ class PopoverRenderer:
                 if route == "rules" else "Projects"
             )
             root.addSubview_(self._label(
-                title, (112, 61, 250, 20), size=12, bold=True))
-        self._separator(root, HEADER_HEIGHT - 1, 0, POPOVER_WIDTH)
+                title, (112, controls_y + 3, 250, 20), size=12, bold=True))
+        self._separator(
+            root, self.layout.header_height - 1, 0, self.layout.width)
 
     def _render_footer(self, root: NSView, snapshot: UISnapshot) -> None:
-        y = POPOVER_HEIGHT - FOOTER_HEIGHT
+        y = self.layout.height - self.layout.footer_height
         self._separator(root, y, 0, POPOVER_WIDTH)
-        project_count = int(snapshot.data.get("project_count", 0) or 0)
-        root.addSubview_(self._label(
-            f"{project_count} monitored project{'s' if project_count != 1 else ''}",
-            (PAD, y + 12, 126, 18), size=10, color=NSColor.secondaryLabelColor()))
         root.addSubview_(self._button(
-            "Rules", (140, y + 7, 58, 27),
+            "Rules", (PAD, y + 7, 64, 27),
             lambda sender: self.controller.open_rules_for_current(sender),
             bordered=False,
         ))
         root.addSubview_(self._button(
-            "Projects", (202, y + 7, 62, 27),
+            "Projects", (84, y + 7, 70, 27),
             lambda _sender: self.controller.select_tab("projects"),
             bordered=False,
         ))
-        paused = bool(snapshot.daemon.get("monitoring_paused"))
         root.addSubview_(self._button(
-            "Resume" if paused else "Pause",
-            (270, y + 7, 62, 27),
-            lambda _sender: self.controller.toggle_pause(not paused),
-            bordered=False,
-        ))
-        root.addSubview_(self._button(
-            "Quit", (346, y + 7, 68, 27),
-            lambda _sender: self.controller.quit(),
+            "More…", (346, y + 7, 68, 27),
+            lambda sender: self.controller.show_app_menu(sender),
             bordered=False,
         ))
 
@@ -340,8 +376,13 @@ class PopoverRenderer:
 
     def _render_inbox(self, root: NSView, snapshot: UISnapshot) -> None:
         mode = getattr(self.controller, "inbox_mode", "open")
+        content_top = self.layout.header_height
+        content_height = (
+            self.layout.height - self.layout.header_height
+            - self.layout.footer_height
+        )
         mode_control = NSSegmentedControl.alloc().initWithFrame_(
-            NSMakeRect(PAD, CONTENT_TOP + 8, 220, 24))
+            NSMakeRect(PAD, content_top + 6, 220, 24))
         mode_control.setSegmentCount_(2)
         mode_control.setLabel_forSegment_("Needs Review", 0)
         mode_control.setLabel_forSegment_("Reviewed", 1)
@@ -423,32 +464,26 @@ class PopoverRenderer:
                         "Install hooks and rules, then reload Cursor.",
                         "View projects", lambda: self.controller.select_tab("projects"))
                 else:
-                    drafts = sum(
-                        max(0, int(project.get("rule_count", 0))
-                            - int(project.get("enabled_rule_count", 0)))
-                        for project in projects)
-                    if drafts:
-                        self._render_message_state(
-                            root, "All reviewed",
-                            f"Monitoring continues. {drafts} disabled draft rule"
-                            f"{'s' if drafts != 1 else ''} still need review.",
-                            "Review rules", lambda: self.controller.select_tab("rules"))
-                    else:
-                        self._render_message_state(
-                            root, "All reviewed",
-                            "New rule violations will appear here. Monitoring continues locally.")
+                    self._render_message_state(
+                        root,
+                        "All reviewed",
+                        "",
+                        "+ Rule",
+                        lambda: self.controller.begin_add_rule(
+                            getattr(self.controller, "home_project", "")),
+                    )
             return
 
-        row_height = 52
+        row_height = 40
         total_height = (
             10
-            + (34 + len(attention) * 70 if attention else 0)
-            + (34 + len(stale_groups) * 52 if stale_groups else 0)
-            + sum(36 + len(groups) * row_height for _, groups in ordered)
+            + (30 + len(attention) * 70 if attention else 0)
+            + (30 + len(stale_groups) * 40 if stale_groups else 0)
+            + sum(30 + len(groups) * row_height for _, groups in ordered)
         )
         scroll, document = self._scroll(
-            (0, CONTENT_TOP + 38, POPOVER_WIDTH,
-             CONTENT_HEIGHT - 38), total_height)
+            (0, content_top + 34, self.layout.width,
+             max(40, content_height - 34)), total_height)
         root.addSubview_(scroll)
         y = 8
         if attention:
@@ -458,7 +493,7 @@ class PopoverRenderer:
             document.addSubview_(self._label(
                 f"{len(attention)}", (194, y + 3, 28, 20),
                 size=11, color=NSColor.secondaryLabelColor()))
-            y += 34
+            y += 30
             for item in attention:
                 project = _project_name(item.get("project_root", ""))
                 message = str(item.get("message", "")).strip().replace("\n", " ")
@@ -489,10 +524,10 @@ class PopoverRenderer:
                 "Rule changed — needs recheck",
                 (PAD, y + 3, 250, 22), size=12, bold=True,
                 color=NSColor.secondaryLabelColor()))
-            y += 34
+            y += 30
             for group in stale_groups:
                 self._render_finding_row(document, y, group, "stale")
-                y += 52
+                y += 40
         for project, groups in ordered:
             document.addSubview_(self._label(
                 _project_name(project),
@@ -515,7 +550,7 @@ class PopoverRenderer:
                     bordered=False,
                     accessibility=f"Mark all findings in {_project_name(project)} reviewed",
                 ))
-            y += 34
+            y += 30
             for group in groups:
                 self._render_finding_row(document, y, group, mode)
                 y += row_height
@@ -526,47 +561,46 @@ class PopoverRenderer:
         severity = group.get("severity", "info")
         color = {
             "critical": NSColor.systemRedColor(),
-            "high": NSColor.systemOrangeColor(),
             "warn": NSColor.systemYellowColor(),
             "info": NSColor.systemBlueColor(),
         }.get(severity, NSColor.secondaryLabelColor())
         parent.addSubview_(self._label(
             SEVERITY_LABEL.get(severity, severity.upper()),
-            (PAD, y + 17, 66, 16), size=9, bold=True, color=color))
+            (PAD, y + 11, 66, 16), size=9, bold=True, color=color))
         title = group.get("rule_title") or group.get("rule_id", "Rule")
         if mode == "stale":
             title = f"{title} · rule changed"
         parent.addSubview_(self._label(
-            title, (82, y + 12, 225, 22), size=12, bold=True))
+            title, (82, y + 7, 225, 22), size=12, bold=True))
         age = _relative_time(group.get("last_seen") or group.get("ts", 0))
         parent.addSubview_(self._label(
-            age, (309, y + 14, 38, 18), size=10,
+            age, (309, y + 9, 38, 18), size=10,
             color=NSColor.secondaryLabelColor()))
         occurrences = int(group.get("occurrences", 1) or 1)
         if occurrences > 1:
             parent.addSubview_(self._label(
-                f"×{occurrences}", (274, y + 14, 30, 18), size=10,
+                f"×{occurrences}", (274, y + 9, 30, 18), size=10,
                 color=NSColor.secondaryLabelColor()))
         parent.addSubview_(self._button(
-            "", (74, y + 2, 274, 44),
+            "", (74, y + 1, 274, 36),
             lambda _sender, value=group: self.controller.open_finding(value),
             bordered=False,
             accessibility=f"Open finding: {title}",
         ))
         if mode == "open":
             parent.addSubview_(self._button(
-                "✓", (352, y + 12, 28, 28),
+                "✓", (352, y + 6, 28, 28),
                 lambda _sender, value=group: self.controller.done_group(value),
                 bordered=False,
                 accessibility=f"Mark {title} reviewed",
             ))
         parent.addSubview_(self._button(
-            "•••", (390, y + 12, 32, 28),
+            "•••", (390, y + 6, 32, 28),
             lambda sender, value=group: self.controller.show_finding_menu(sender, value),
             bordered=False,
             accessibility=f"More actions for {title}",
         ))
-        self._separator(parent, y + 50, 82, POPOVER_WIDTH - 96)
+        self._separator(parent, y + 39, 82, POPOVER_WIDTH - 96)
 
     # --- Finding detail -------------------------------------------------
     def _render_detail_shell(self, root: NSView, snapshot: UISnapshot) -> None:
@@ -684,12 +718,17 @@ class PopoverRenderer:
 
     # --- Rules ----------------------------------------------------------
     def _render_rules(self, root: NSView, snapshot: UISnapshot) -> None:
+        content_top = self.layout.header_height
+        content_height = (
+            self.layout.height - self.layout.header_height
+            - self.layout.footer_height
+        )
         projects = snapshot.projects
         selected = getattr(self.controller, "selected_project", "")
         if not selected and projects:
             selected = projects[0].get("path", "")
         popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(PAD, CONTENT_TOP + 8, 230, 26), False)
+            NSMakeRect(PAD, content_top + 6, 230, 26), False)
         popup.removeAllItems()
         for project in projects:
             popup.addItemWithTitle_(project.get("name") or _project_name(project.get("path", "")))
@@ -702,30 +741,22 @@ class PopoverRenderer:
             projects[sender.indexOfSelectedItem()].get("path", "")) if projects else None)
         root.addSubview_(popup)
         root.addSubview_(self._button(
-            "+ Add Rule", (326, CONTENT_TOP + 7, 88, 28),
+            "+ Add Rule", (326, content_top + 5, 88, 28),
             lambda sender: self.controller.show_add_rule_menu(sender)))
         root.addSubview_(self._label(
             "Choose which rules run in this project.",
-            (PAD, CONTENT_TOP + 39, 300, 18), size=10,
+            (PAD, content_top + 37, 300, 18), size=10,
             color=NSColor.secondaryLabelColor()))
         search = NSSearchField.alloc().initWithFrame_(
-            NSMakeRect(PAD, CONTENT_TOP + 61, 230, 26))
+            NSMakeRect(PAD, content_top + 59, 230, 26))
         search.setPlaceholderString_("Search rules")
         search.setStringValue_(getattr(self.controller, "rules_filter", ""))
         self._wire(search, lambda sender: self.controller.filter_rules(
             str(sender.stringValue())))
         root.addSubview_(search)
         root.addSubview_(self._button(
-            "Defaults", (252, CONTENT_TOP + 60, 66, 27),
-            lambda _sender: self.controller.reset_rule_assignments(),
-            bordered=False))
-        root.addSubview_(self._button(
-            "All", (322, CONTENT_TOP + 60, 40, 27),
-            lambda _sender: self.controller.bulk_rule_assignments(True),
-            bordered=False))
-        root.addSubview_(self._button(
-            "None", (366, CONTENT_TOP + 60, 48, 27),
-            lambda _sender: self.controller.bulk_rule_assignments(False),
+            "More…", (344, content_top + 58, 70, 27),
+            lambda sender: self.controller.show_rule_list_menu(sender),
             bordered=False))
 
         if getattr(self.controller, "rules_loading", False):
@@ -749,7 +780,8 @@ class PopoverRenderer:
             return
         total_height = 12 + len(errors) * 62 + len(rules) * 76
         scroll, document = self._scroll(
-            (0, CONTENT_TOP + 94, POPOVER_WIDTH, CONTENT_HEIGHT - 94), total_height)
+            (0, content_top + 90, self.layout.width,
+             max(40, content_height - 90)), total_height)
         root.addSubview_(scroll)
         y = 10
         for error in errors:
@@ -784,29 +816,18 @@ class PopoverRenderer:
             "builtin": "Built-in",
         }.get(rule.get("source_origin") or rule.get("scope"), "Rule")
         override = rule.get("project_override")
-        if rule.get("assignment_origin") == "project_default":
-            assignment = "on in this project"
-        elif override is None:
-            assignment = (
-                "inherited on" if rule.get("effective_enabled", rule.get("enabled"))
-                else "inherited off"
-            )
-        else:
-            assignment = "included here" if override else "excluded here"
-        states = [origin, assignment]
+        states = [origin]
+        if override is not None:
+            states.append("project selection")
         if rule.get("customized_from"):
-            states.append("customized from Shared")
+            states.append("customized")
         if rule.get("muted"):
-            until = rule.get("mute_until")
-            states.append("snoozed" if until else "muted")
-        states.append("PAW" if rule.get("paw") else "Python")
-        if rule.get("usage_count"):
-            states.append(f"used by {rule['usage_count']} project(s)")
+            states.append("findings hidden")
         if rule.get("draft_changes"):
             states.append("draft changes")
         warm_status = rule.get("warm_status")
-        if warm_status and warm_status not in ("ready", "idle"):
-            states.append(str(warm_status))
+        if warm_status == "failed":
+            states.append("check failed")
         parent.addSubview_(self._label(
             " · ".join(states), (116, y + 28, 198, 36), size=9.5,
             lines=2, color=NSColor.secondaryLabelColor()))
@@ -822,6 +843,11 @@ class PopoverRenderer:
 
     # --- Projects -------------------------------------------------------
     def _render_projects(self, root: NSView, snapshot: UISnapshot) -> None:
+        content_top = self.layout.header_height
+        content_height = (
+            self.layout.height - self.layout.header_height
+            - self.layout.footer_height
+        )
         projects = snapshot.projects
         if not projects:
             self._render_message_state(
@@ -830,7 +856,8 @@ class PopoverRenderer:
             return
         total_height = 12 + len(projects) * 86
         scroll, document = self._scroll(
-            (0, CONTENT_TOP, POPOVER_WIDTH, CONTENT_HEIGHT), total_height)
+            (0, content_top, self.layout.width, max(40, content_height)),
+            total_height)
         root.addSubview_(scroll)
         y = 10
         for project in projects:
@@ -887,7 +914,7 @@ class PopoverRenderer:
 
     # --- states ---------------------------------------------------------
     def _render_loading(self, root: NSView, message: str, top: float | None = None) -> None:
-        top = CONTENT_TOP + 100 if top is None else top + 100
+        top = self.layout.header_height + 45 if top is None else top + 45
         spinner = NSProgressIndicator.alloc().initWithFrame_(
             NSMakeRect(POPOVER_WIDTH / 2 - 10, top, 20, 20))
         spinner.setStyle_(NSProgressIndicatorStyleSpinning)
@@ -908,7 +935,7 @@ class PopoverRenderer:
         *,
         top: float | None = None,
     ) -> None:
-        y = CONTENT_TOP + 100 if top is None else top + 80
+        y = self.layout.header_height + 30 if top is None else top + 30
         root.addSubview_(self._label(
             title, (PAD + 20, y, POPOVER_WIDTH - 2 * PAD - 40, 24),
             size=14, bold=True))
@@ -917,7 +944,7 @@ class PopoverRenderer:
             size=11, lines=3, color=NSColor.secondaryLabelColor()))
         if action_title and action:
             root.addSubview_(self._button(
-                action_title, (PAD + 20, y + 92, 130, 30),
+                action_title, (PAD + 20, y + 78, 130, 30),
                 lambda _sender: action()))
 
     # --- action menus ---------------------------------------------------

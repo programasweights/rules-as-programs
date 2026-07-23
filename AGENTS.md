@@ -43,14 +43,15 @@ author a real rule program. `rap init --scan` will have created *disabled* `.py`
 drafts in `.cursor/rules-as-programs/rules/` as a starting point; upgrade each.
 
 A rule defaults to a managed fuzzy description in the UI. Its canonical source
-is one `@rule`-decorated Python function under `rules/<uuid>/rule.py`; Advanced
-Python can customize it. UUID `id` is immutable, Name is mutable. Example:
+is one `@rule`-decorated Python function under `rules/<id>/rule.py`; Advanced
+Python can customize it. The 16-character `id` is immutable; Name is mutable.
+Example:
 
 ```python
 from rules_as_programs import rule
 
 SPEC = """Decide whether the observed evidence violates this project rule.
-Return ONLY one of: OK, VIOLATED
+Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
 Input: ## Latest message
 <message and activity that follow the rule>
@@ -58,17 +59,17 @@ Output: OK
 
 Input: ## Latest message
 <message and activity that break the rule>
-Output: VIOLATED"""
+Output: WARNING"""
 
-@rule(id="550e8400-e29b-41d4-a716-446655440000",
+@rule(id="7km3v9c2xq4t8n1p",
       name="My project rule",
       on=["message", "session_stop"],
       inputs=["message", "thought", "shell_exec", "file_edit"],
-      severity="warn", spec=SPEC)
+      spec=SPEC)
 def my_rule(ctx):
     "One-line title from the docstring."
-    if ctx.paw(SPEC)(ctx.input()) == "VIOLATED":
-        return "Explain what went wrong."
+    decision = ctx.paw(SPEC)(ctx.input())
+    return ctx.finding(decision, "My project rule")
 ```
 
 For each rule:
@@ -103,20 +104,20 @@ plus any you converted.
 
 - **Reload Cursor** (or restart it) so it picks up `.cursor/hooks.json`. Hooks
   do not activate until Cursor reloads them.
-- Findings appear in the **top-right menu-bar item** with a severity-colored
-  count badge. A purple `?` separately indicates that an agent likely needs a
+- Findings appear in the **top-right menu-bar item** as a severity-colored
+  number beside the paw. A purple `?` separately indicates that an agent likely needs a
   reply; this is a local inference, not a violation or native approval signal.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
   finding opens the native Inspector with the exact rule snapshot, surrounding
   agent timeline, probes, and scrollable raw event log.
 - Rule source opens in the fuzzy-first **Rule Editor**: Name, text description,
-  violation message, severity, Runs when, Reads, and optional cases. **Save
+  Runs when, Reads, and optional severity-labelled cases. **Save
   Draft** does not change runtime behavior; **Check & Enable/Activate** switches
   the last-good active source only after success. Advanced Python remains
   available for arbitrary customization.
 - **Rules for Project** is a shareable checklist stored in
-  `.cursor/rules-as-programs/config.json`; personal snoozes/mutes stay local.
-- Rules live at `.cursor/rules-as-programs/rules/<uuid>/rule.py`; per-project
+  `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay local.
+- Rules live at `.cursor/rules-as-programs/rules/<id>/rule.py`; per-project
   violation logs are at `.cursor/rules-as-programs/log/audit.jsonl`.
 
 ## Notes

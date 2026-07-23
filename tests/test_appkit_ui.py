@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import sys
-import uuid
 
 import pytest
+from rules_as_programs.core.rule import new_rule_id
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="AppKit-only")
 
@@ -20,15 +20,18 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     controller.applicationDidFinishLaunching_(None)
     snapshot = demo_snapshot()
     controller._apply_snapshot(snapshot)
+    assert controller.renderer._health_copy(snapshot)[0] == ""
     icon = _paw_template_image()
     assert icon.size().height == 22
     assert icon.size().width == 22
     assert icon.isTemplate()
-    assert controller.status_item.button().attributedTitle().length() > 0
+    status_text = str(controller.status_item.button().attributedTitle().string())
+    assert "●" not in status_text
+    assert "2" in status_text
 
     project = next(iter(snapshot.findings_by_project))
     group = snapshot.findings_by_project[project][0]
-    controller.route = "finding"
+    controller.route = "inbox"
     controller.selected_finding = group
     controller.detail_loading = False
     controller.finding_detail = {
@@ -43,7 +46,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         "audit": {"rule_source": "from rules_as_programs import rule\n"},
         "recorded_rule_projection": {
             "spec": "Decide whether evidence violates the rule.\\n"
-                    "Return ONLY one of: OK, VIOLATION",
+                    "Return ONLY one of: OK, INFO, WARNING, CRITICAL",
         },
         "ledger": {
             "events": [{
@@ -70,6 +73,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     }
     controller._render()
     assert controller.content_controller.view() is not None
+    assert controller.popover.contentSize().height < 600
     from rules_as_programs.ui.finding_inspector import FindingInspectorManager
     inspectors = FindingInspectorManager(controller.model, lambda _rule: None)
     inspectors.open(controller.finding_detail)
@@ -101,7 +105,7 @@ def test_rule_editor_constructs_function_and_full_python_views():
 
     NSApplication.sharedApplication()
     manager = RuleEditorManager(Model())
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id, "Example")
     manager.open({
         "id": rule_id,

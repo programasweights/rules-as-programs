@@ -6,8 +6,8 @@ Two ideas live here:
   under a single cache dir, overridable with ``RAP_STATE_DIR``.
 * **Rules** are resolved from two scopes so users can keep constraints global or
   scope them to a single repo:
-    - global:  ``~/.cursor/rules-as-programs/rules/<uuid>/rule.py``
-    - project: ``<repo>/.cursor/rules-as-programs/rules/<uuid>/rule.py``
+    - global:  ``~/.cursor/rules-as-programs/rules/<id>/rule.py``
+    - project: ``<repo>/.cursor/rules-as-programs/rules/<id>/rule.py``
   Project rules override global rules that share the same ``id``.
 """
 
@@ -66,7 +66,7 @@ def paw_cache_path() -> Path:
 
 
 def mutes_path() -> Path:
-    """Rule mute/snooze state: {rule_id: until_ts_or_null}. '*' = pause all."""
+    """Personal hidden-finding state: {rule_id: null}. '*' = hide all."""
     return state_dir() / "mutes.json"
 
 
@@ -83,10 +83,6 @@ def project_monitoring_path() -> Path:
 def monitoring_state_path() -> Path:
     """Global monitoring state, separate from finding-surfacing mutes."""
     return state_dir() / "monitoring_state.json"
-
-
-def rule_aliases_path() -> Path:
-    return state_dir() / "rule_aliases.json"
 
 
 def active_revisions_path() -> Path:

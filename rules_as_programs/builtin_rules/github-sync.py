@@ -1,8 +1,8 @@
 from rules_as_programs import rule
 
-# RAP_MANAGED_FUZZY_V1
+# RAP_MANAGED_FUZZY_V2
 SPEC = """Decide whether meaningful project source changes remain unsynchronized with GitHub. A clean tree with no unpushed commits is allowed. Inconsequential scratch/log changes are allowed. Real source changes that are uncommitted or committed but not pushed are a violation.
-Return ONLY one of: OK, VIOLATION
+Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
 Input: ## Probes
 [git_status]
@@ -11,7 +11,7 @@ Input: ## Probes
 0
 ## Recent activity
 - (file_edit) edit src/auth.py
-Output: VIOLATION
+Output: WARNING
 
 Input: ## Probes
 [git_status]
@@ -27,7 +27,7 @@ Input: ## Probes
 2
 ## Recent activity
 - (shell_exec) $ git commit -am "add feature"
-Output: VIOLATION
+Output: WARNING
 
 Input: ## Probes
 [git_status]
@@ -40,7 +40,7 @@ Output: OK"""
 
 
 @rule(
-    id="6d379c19-a80a-5283-a596-24ceee35089b",
+    id="pkgk71nkt3e7xzxn",
     name="Use GitHub to synchronize code",
     on=["session_stop"],
     inputs=["file_edit", "shell_exec"],
@@ -54,5 +54,5 @@ Output: OK"""
 )
 def use_github_to_synchronize_code(ctx):
     """Use GitHub to synchronize code"""
-    if ctx.paw(SPEC)(ctx.input()) == "VIOLATION":
-        return "Meaningful local changes are not committed or pushed to GitHub."
+    decision = ctx.paw(SPEC)(ctx.input())
+    return ctx.finding(decision, "Use GitHub to synchronize code")

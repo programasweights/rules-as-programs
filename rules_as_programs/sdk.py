@@ -15,7 +15,7 @@ A rule is ONE decorated function per file:
             return "Meaningful local changes are not committed/pushed to GitHub."
 
 Return ``None`` for "all good", or a message string for a finding (at the
-decorator's ``severity``). Return ``("high", "message")`` to override severity
+decorator's ``severity``). Return ``("critical", "message")`` to override severity
 for that one finding.
 
 The ``ctx`` argument is handed to the function by the engine (the author never
@@ -35,7 +35,7 @@ from typing import Callable
 
 from . import paw_runtime
 
-SEVERITIES = ("info", "warn", "high", "critical")
+SEVERITIES = ("info", "warn", "critical")
 
 # Attribute stamped on a decorated function so the loader can find it.
 RULE_ATTR = "_rap_rule"
@@ -66,14 +66,14 @@ def rule(*, severity: str = "warn", on: list[str] | None = None,
          examples: list[tuple[str, str]] | None = None):
     """Decorator that turns a function into a rule.
 
-    New managed rules persist an immutable UUID ``id`` and mutable ``name``.
-    Legacy files without UUIDs are migrated by the loader/editor. ``title`` is
+    New managed rules persist an immutable 16-character ``id`` and mutable
+    ``name``. Legacy files are migrated by the loader/editor. ``title`` is
     retained as a compatibility alias for ``name``. ``inputs`` configures ``ctx.input()``.
     ``spec``/``examples`` are optional PAW metadata; Input/Output cases embedded
     directly in ``spec`` are preferred over a duplicate examples list.
     """
     def deco(fn: Callable) -> Callable:
-        # New managed rules persist a UUID ``id`` in source. Legacy rules often
+        # New managed rules persist a compact ``id`` in source. Legacy rules often
         # omit it or use a readable slug; the loader migrates those safely.
         rid = id or ""
         doc = (fn.__doc__ or "").strip()

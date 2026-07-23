@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 
 from rules_as_programs import config, rules_api
@@ -11,10 +10,14 @@ from rules_as_programs.core.events import (
     Event, MESSAGE, QUESTION_REQUEST, USER_PROMPT,
 )
 from rules_as_programs.core.ledger import Ledger
+from rules_as_programs.core.rule import (
+    RULE_ID_ALPHABET, is_rule_id, new_rule_id,
+)
 from rules_as_programs.core import revisions
 from rules_as_programs.core.store import finding_fingerprint
 from rules_as_programs.ui.model import UISnapshot
 from rules_as_programs.ui.status import status_presentation
+from rules_as_programs.ui.layout import fit_popover_layout
 
 
 def _snapshot(*, findings=None, attention=None, status="ready", health="ready"):
@@ -47,15 +50,19 @@ def test_status_presentation_prioritizes_operations_then_severity_and_attention(
     attention = status_presentation(_snapshot(attention=[{"id": 1}]))
     assert attention.kind == "attention"
     assert attention.badge_text == "?"
+    many = status_presentation(_snapshot(findings={
+        "/p": [{"severity": "warn"} for _ in range(100)]
+    }))
+    assert many.badge_text == "99+"
 
 
 def test_paw_draft_is_in_memory_and_examples_are_parsed(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     project.mkdir()
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id)
-    assert "VIOLATION" in source
+    assert "WARNING" in source
     assert "public/logo.png" in source
     assert "EXAMPLES =" not in source
     projection = rules_api.source_projection(source)
@@ -65,29 +72,29 @@ def test_paw_draft_is_in_memory_and_examples_are_parsed(monkeypatch, tmp_path):
 
 
 def test_source_projection_round_trips_and_custom_metadata_falls_back():
-    source = rules_api.draft_rule_source(str(uuid.uuid4()))
+    source = rules_api.draft_rule_source(new_rule_id())
     projection = rules_api.source_projection(source)
     ok, patched, error = rules_api.patch_source_projection(
         source,
         on=["message"],
         inputs=["message"],
-        severity="high",
+        severity="critical",
         function_source=projection["function_source"].replace(
-            "DIRECT_CODE_COPY", "DIRECT_CODE_COPY", 1),
+            "ctx.finding(decision", "ctx.finding(decision", 1),
         spec=projection["spec"],
     )
     assert ok, error
     updated = rules_api.source_projection(patched)
     assert updated["on"] == ["message"]
     assert updated["inputs"] == ["message"]
-    assert updated["severity"] == "high"
+    assert updated["severity"] == "critical"
 
     custom = source.replace("severity='warn'", "severity=DEFAULT_SEVERITY")
     assert rules_api.source_projection(custom)["custom"]
     structurally_custom = source.replace(
-        '    if ctx.paw(SPEC)(ctx.input()) == "VIOLATION":',
-        '    evidence = ctx.input()\n'
-        '    if ctx.paw(SPEC)(evidence) == "VIOLATION":',
+        "    decision = ctx.paw(SPEC)(ctx.input())",
+        "    evidence = ctx.input()\n"
+        "    decision = ctx.paw(SPEC)(evidence)",
     )
     assert not rules_api.source_projection(structurally_custom)["managed_fuzzy"]
 
@@ -108,17 +115,16 @@ def legacy_rule(ctx):
     builtin_projection = rules_api.source_projection(builtin)
     assert builtin_projection["simple_fuzzy"]
     assert builtin_projection["managed_fuzzy"]
-    assert builtin_projection["violation_label"] == "VIOLATION"
     assert builtin_projection["allowed_label"] == "OK"
 
 
-def test_uuid_identity_uses_stable_folder_and_safe_name_updates(
+def test_compact_identity_uses_stable_folder_and_safe_name_updates(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     project.mkdir()
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id, "Original Name")
     saved = rules_api.save_rule(rule_id, source, "project", str(project))
     assert saved["ok"]
@@ -144,9 +150,16 @@ def test_uuid_identity_uses_stable_folder_and_safe_name_updates(
 
     malicious = source.replace(rule_id, "../escaped")
     escaped = rules_api.save_rule("../escaped", malicious, "project", str(project))
-    assert escaped["ok"]
-    assert Path(escaped["path"]).resolve().is_relative_to(
-        (project / ".cursor" / "rules-as-programs" / "rules").resolve())
+    assert not escaped["ok"]
+    assert not (project / ".cursor" / "rules-as-programs" / "escaped").exists()
+
+
+def test_compact_rule_ids_are_80_bit_filesystem_safe_tokens():
+    values = {new_rule_id() for _ in range(5000)}
+    assert len(values) == 5000
+    assert all(is_rule_id(value) for value in values)
+    assert all(len(value) == 16 for value in values)
+    assert all(set(value) <= set(RULE_ID_ALPHABET) for value in values)
 
 
 def test_ledger_window_centers_trigger(monkeypatch, tmp_path):
@@ -225,7 +238,7 @@ def test_attention_expires(monkeypatch, tmp_path):
 
 def test_last_good_revision_and_revision_aware_fingerprints(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     source_path = tmp_path / "rule.py"
     source_path.write_text("value = 1\n")
     active = revisions.activate(rule_id, source_path, "value = 1\n")
@@ -258,7 +271,7 @@ def test_promote_customize_and_revert_shared_rule(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "global_rules_dir", lambda: global_rules)
     project = tmp_path / "project"
     project.mkdir()
-    rule_id = str(uuid.uuid4())
+    rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id, "Reusable Rule")
     saved = rules_api.save_rule(rule_id, source, "project", str(project))
     assert saved["ok"]
@@ -288,8 +301,27 @@ def test_all_builtins_use_managed_fuzzy_format():
         source = path.read_text()
         projection = rules_api.source_projection(source)
         assert projection["managed_fuzzy"], path.name
+        assert projection["managed_version"] == 2
         assert projection["id_persisted"], path.name
+        assert is_rule_id(projection["id"]), path.name
         assert "EXAMPLES =" not in source
+        assert projection["output_labels"] == [
+            "OK", "INFO", "WARNING", "CRITICAL"]
         projections[path.stem] = projection
     assert projections["github-sync"]["probes"]["git_status"]
     assert projections["deployment-checklist"]["probes"]["git_status"]
+
+
+def test_popover_height_fits_content_and_caps_scroll():
+    compact = fit_popover_layout(60, show_status=False)
+    normal = fit_popover_layout(220, show_status=False)
+    status = fit_popover_layout(220, show_status=True)
+    capped = fit_popover_layout(5000, show_status=False, max_height=520)
+    assert compact.height == 170
+    assert compact.height < normal.height < capped.height
+    assert status.height > normal.height
+    assert capped.height == 520
+
+
+def test_timed_snooze_api_is_not_part_of_finding_workflow():
+    assert not hasattr(rules_api, "snooze")

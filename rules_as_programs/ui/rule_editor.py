@@ -21,7 +21,6 @@ from AppKit import (
     NSMenuItem,
     NSPasteboard,
     NSPasteboardTypeString,
-    NSPopUpButton,
     NSScrollView,
     NSSegmentedControl,
     NSSwitchButton,
@@ -119,9 +118,7 @@ class RAPRuleEditorDocument(NSObject):
         self.name = ""
         self.original_name = ""
         self.description = ""
-        self.violation_message = ""
         self.allowed_label = "OK"
-        self.violation_label = "VIOLATION"
         self.cases: list[tuple[str, str]] = []
         self.simple_fuzzy = False
         self.managed_fuzzy = False
@@ -137,7 +134,6 @@ class RAPRuleEditorDocument(NSObject):
         self._advanced_menus: list[NSMenu] = []
         self.name_field = None
         self.description_editor = None
-        self.message_field = None
         self.cases_editor = None
         self.finding_context: dict[str, Any] | None = None
         self._review_on_activate = False
@@ -184,9 +180,7 @@ class RAPRuleEditorDocument(NSObject):
             projection.get("description", "")
             if self.managed_fuzzy else projection.get("spec", "")
         )
-        self.violation_message = projection.get("violation_message", "")
         self.allowed_label = str(projection.get("allowed_label", "OK"))
-        self.violation_label = str(projection.get("violation_label", "VIOLATION"))
         self.cases = list(projection.get("cases", []))
         self.on = list(projection.get("on", []))
         self.inputs = list(projection.get("inputs", []))
@@ -211,7 +205,7 @@ class RAPRuleEditorDocument(NSObject):
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
         self.window.setMinSize_((840, 560))
-        self.window.setTitle_(f"Rule Editor — {self.rule_id}")
+        self.window.setTitle_(f"Rule Editor — {self.name}")
 
     @objc.python_method
     def _wire(self, control, callback: Callable[[Any], None]):
@@ -285,9 +279,6 @@ class RAPRuleEditorDocument(NSObject):
                 else:
                     self.spec = value
                     self.cases = rules_api.spec_examples(value)
-            if self.managed_fuzzy and self.message_field:
-                self.violation_message = str(
-                    self.message_field.stringValue()).strip()
             if self.managed_fuzzy and self.cases_editor:
                 self.cases = rules_api.spec_examples(
                     str(self.cases_editor.string()))
@@ -315,14 +306,11 @@ class RAPRuleEditorDocument(NSObject):
                 return False, self.full_source, "Rule name is required."
             if not self.description:
                 return False, self.full_source, "Rule description is required."
-            if not self.violation_message:
-                return False, self.full_source, "Message when violated is required."
             try:
                 source = rules_api.generate_managed_fuzzy_source(
                     self.rule_id,
                     self.name,
                     self.description,
-                    self.violation_message,
                     severity=self.severity,
                     on=self.on,
                     inputs=self.inputs,
@@ -382,7 +370,7 @@ class RAPRuleEditorDocument(NSObject):
         else:
             draft = "Disabled · needs check"
         content.addSubview_(self._label(
-            f"{scope} · {draft} · {self.project_root} · ID {self.rule_id}",
+            f"{scope} · {draft} · {Path(self.project_root).name or 'global'}",
             (18, height - 64, 550, 18), 10, False,
             NSColor.secondaryLabelColor()))
 
@@ -414,21 +402,10 @@ class RAPRuleEditorDocument(NSObject):
                 lambda _sender: self.add_finding_case(self.allowed_label)))
             content.addSubview_(self._button(
                 "This is a violation", (width - 116, height - 103, 102, 27),
-                lambda _sender: self.add_finding_case(self.violation_label)))
+                lambda _sender: self.add_finding_case(
+                    self._captured_severity_label())))
             controls_y -= 46
-        content.addSubview_(self._label(
-            "Severity", (18, controls_y + 3, 62, 20), 10, True))
-        severity = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(80, controls_y, 100, 25), False)
-        for value in ("info", "warn", "high", "critical"):
-            severity.addItemWithTitle_(value.title())
-        severity.selectItemWithTitle_(self.severity.title())
-        severity.setEnabled_(not self.custom and not self.show_full)
-        self._wire(severity, lambda sender: self.change_severity(
-            str(sender.titleOfSelectedItem()).lower()))
-        content.addSubview_(severity)
-
-        y = controls_y - 34
+        y = controls_y
         content.addSubview_(self._label("Runs when", (18, y + 3, 72, 20), 10, True))
         x = 92
         for kind, label in RUN_OPTIONS:
@@ -478,7 +455,6 @@ class RAPRuleEditorDocument(NSObject):
         editor_bottom = 190
         editor_top = mode_y - 10
         self.description_editor = None
-        self.message_field = None
         self.cases_editor = None
         self.spec_editor = None
         if self.show_full or not self.simple_fuzzy:
@@ -491,17 +467,7 @@ class RAPRuleEditorDocument(NSObject):
             self.editor = editor
         else:
             if self.managed_fuzzy:
-                content.addSubview_(self._label(
-                    "Message when violated",
-                    (18, editor_top - 25, 145, 20), 10, True))
-                message = NSTextField.alloc().initWithFrame_(
-                    NSMakeRect(166, editor_top - 30, width - 184, 26))
-                message.setStringValue_(self.violation_message)
-                message.setEditable_(True)
-                message.setDelegate_(self._text_delegate)
-                content.addSubview_(message)
-                self.message_field = message
-                description_top = editor_top - 40
+                description_top = editor_top
                 content.addSubview_(self._label(
                     "Rule description", (18, description_top - 22, 180, 18),
                     10, True))
@@ -612,11 +578,6 @@ class RAPRuleEditorDocument(NSObject):
         self.editor_changed()
 
     @objc.python_method
-    def change_severity(self, value: str) -> None:
-        self.severity = value
-        self.editor_changed()
-
-    @objc.python_method
     def change_mode(self, full: bool) -> None:
         ok, source, error = self._compose()
         if not ok:
@@ -669,6 +630,19 @@ class RAPRuleEditorDocument(NSObject):
         self._render()
 
     @objc.python_method
+    def _captured_severity_label(self) -> str:
+        severity = str(
+            (self.finding_context or {}).get("finding", {}).get(
+                "severity", "warn")
+        ).lower()
+        return {
+            "info": "INFO",
+            "warn": "WARNING",
+            "warning": "WARNING",
+            "critical": "CRITICAL",
+        }.get(severity, "WARNING")
+
+    @objc.python_method
     def _set_result(self, text: str) -> None:
         self.rule["_results"] = text
         if self.results:
@@ -690,7 +664,7 @@ class RAPRuleEditorDocument(NSObject):
             alert = NSAlert.alloc().init()
             alert.setMessageText_(f"Rename rule to “{self.name}”?")
             alert.setInformativeText_(
-                "The immutable UUID and folder stay unchanged. The Python "
+                "The immutable ID and folder stay unchanged. The Python "
                 "function and matching Shared/project override Names will update; "
                 "historical findings keep their recorded Name.")
             alert.addButtonWithTitle_("Rename")
@@ -727,7 +701,7 @@ class RAPRuleEditorDocument(NSObject):
                 self._rename_confirmed = False
                 self._dirty = False
                 self.window.setDocumentEdited_(False)
-                self.window.setTitle_(f"Rule Editor — {self.rule_id}")
+                self.window.setTitle_(f"Rule Editor — {self.name}")
                 self.status_label.setStringValue_("Saved")
                 self._set_result(
                     "Draft saved. Previous active revision is unchanged.")
@@ -876,6 +850,7 @@ class RAPRuleEditorDocument(NSObject):
             ("Compile and warm now", self.compile_now, bool(self.spec)),
             ("Open Python file", self.open_external, bool(self.rule.get("path"))),
             ("Copy Python path", self.copy_path, bool(self.rule.get("path"))),
+            ("Copy Rule ID", self.copy_rule_id, True),
         ]:
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 title, "invoke:", "")
@@ -912,6 +887,13 @@ class RAPRuleEditorDocument(NSObject):
         board.clearContents()
         board.setString_forType_(path, NSPasteboardTypeString)
         self._set_result("Path copied.")
+
+    @objc.python_method
+    def copy_rule_id(self) -> None:
+        board = NSPasteboard.generalPasteboard()
+        board.clearContents()
+        board.setString_forType_(self.rule_id, NSPasteboardTypeString)
+        self._set_result(f"Rule ID {self.rule_id} copied.")
 
     @objc.python_method
     def show(self) -> None:

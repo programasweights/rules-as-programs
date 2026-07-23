@@ -4,10 +4,10 @@ import threading
 
 from rules_as_programs.core import audit
 from rules_as_programs.core.attention import AttentionStore
-from rules_as_programs.core.engine import Engine
+from rules_as_programs.core.engine import Engine, RuleContext
 from rules_as_programs.core.events import Event, MESSAGE, SESSION_STOP
 from rules_as_programs.core.ledger import Ledger
-from rules_as_programs.core.rule import LoadedRule
+from rules_as_programs.core.rule import LoadedRule, new_rule_id
 from rules_as_programs.core.store import VerdictStore
 from rules_as_programs.daemon import Daemon
 
@@ -119,15 +119,17 @@ class _Rules:
 
 def test_warm_state_tracks_ready_and_failed(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
+    deterministic_id = new_rule_id()
+    paw_id = new_rule_id()
     deterministic = LoadedRule(
-        id="python",
+        id=deterministic_id,
         title="Python",
         severity="info",
         on=[MESSAGE],
         fn=lambda _ctx: None,
     )
     paw = LoadedRule(
-        id="paw",
+        id=paw_id,
         title="PAW",
         severity="warn",
         on=[MESSAGE],
@@ -140,8 +142,8 @@ def test_warm_state_tracks_ready_and_failed(monkeypatch, tmp_path):
     daemon._state_lock = threading.Lock()
     daemon._warm_state = {}
     daemon._warm("/project")
-    assert daemon._warm_state["/project"]["python"]["status"] == "ready"
-    assert daemon._warm_state["/project"]["paw"]["status"] == "failed"
+    assert daemon._warm_state["/project"][deterministic_id]["status"] == "ready"
+    assert daemon._warm_state["/project"][paw_id]["status"] == "failed"
 
 
 def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path):
@@ -185,3 +187,36 @@ def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path
     assert len(active) == 1
     assert active[0]["project_root"] == str(project)
     assert active[0]["confidence"] == "inferred"
+
+
+def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    project.mkdir()
+    ledger = Ledger("conversation", str(project))
+    context = RuleContext(ledger, FakeRuntime())
+    assert context.finding("OK", "Rule") is None
+    assert context.finding("INFO", "Rule") == ("info", "Rule")
+    assert context.finding("WARNING", "Rule") == ("warn", "Rule")
+    assert context.finding("CRITICAL", "Rule") == ("critical", "Rule")
+
+    errors = []
+    store = VerdictStore(tmp_path / "verdicts.db")
+    invalid = LoadedRule(
+        id="rule",
+        title="Rule",
+        severity="warn",
+        on=[MESSAGE],
+        fn=lambda ctx: ctx.finding("HIGH", "Rule"),
+    )
+    engine = Engine(
+        FakeRuntime(), store, lambda _project: [invalid],
+        on_error=lambda rule, root, message: errors.append(message),
+        is_enabled=lambda *_args: True,
+    )
+    event = Event(
+        kind=MESSAGE, conversation_id="conversation",
+        project_root=str(project), payload={"text": "claim"})
+    ledger.append(event)
+    assert engine.on_event(event, ledger) == []
+    assert "expected OK, INFO, WARNING, or CRITICAL" in errors[0]
