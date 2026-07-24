@@ -936,6 +936,99 @@ def save_rule(rule_id: str, source: str, scope: str, project_root: str | None) -
 
 
 @_serialized_rule_mutation
+def save_library_draft(
+    rule_id: str,
+    source: str,
+    *,
+    expected_source_hash: str = "",
+    expected_absent: bool = False,
+) -> dict[str, Any]:
+    """CAS-save the canonical source in My Rule Library."""
+    target = config.global_rules_dir() / rule_id / "rule.py"
+    if expected_absent and target.exists():
+        return {
+            "ok": False,
+            "error": "a rule with this ID already exists in My Rule Library",
+            "conflict": True,
+        }
+    if target.exists():
+        current = _source_digest(target.read_bytes())
+        if expected_source_hash and current != expected_source_hash:
+            return {
+                "ok": False,
+                "error": "the rule changed in another editor; reload before deploying",
+                "current_source_hash": current,
+            }
+    elif expected_source_hash and not expected_absent:
+        return {
+            "ok": False,
+            "error": "the library rule was removed; reload before deploying",
+        }
+    if expected_absent:
+        disabled = set_enabled(rule_id, False, None)
+        if not disabled.get("ok"):
+            return disabled
+    return save_rule(rule_id, source, "global", None)
+
+
+@_serialized_rule_mutation
+def save_project_draft(
+    rule_id: str,
+    source: str,
+    project_root: str,
+    *,
+    expected_source_hash: str,
+) -> dict[str, Any]:
+    path = config.project_rules_dir(project_root) / rule_id / "rule.py"
+    if not path.is_file():
+        return {"ok": False, "error": "project rule no longer exists"}
+    current = _source_digest(path.read_bytes())
+    if current != expected_source_hash:
+        return {
+            "ok": False,
+            "error": "the project rule changed in another editor; reload first",
+            "current_source_hash": current,
+        }
+    return save_rule(rule_id, source, "project", project_root)
+
+
+@_serialized_rule_mutation
+def migrate_definition_to_library(
+    rule_id: str,
+    project_root: str,
+    expected_source_path: str,
+    expected_source_hash: str,
+) -> dict[str, Any]:
+    """Move one exact project definition into My Rule Library."""
+    path, error = _exact_definition_path(
+        rule_id, "project", project_root, expected_source_path)
+    if path is None:
+        return {"ok": False, "error": error}
+    if not path.is_file():
+        return {"ok": False, "error": "project rule no longer exists"}
+    current_hash = _source_digest(path.read_bytes())
+    if current_hash != expected_source_hash:
+        return {
+            "ok": False,
+            "error": "project rule changed; reload before moving it",
+            "current_source_hash": current_hash,
+        }
+    target = config.global_rules_dir() / rule_id / "rule.py"
+    if target.exists():
+        return {
+            "ok": False,
+            "error": "My Rule Library already contains this rule ID",
+            "conflict": True,
+            "path": str(target),
+        }
+    result = promote_to_shared(rule_id, project_root)
+    if not result.get("ok"):
+        return result
+    info = get_rule(rule_id, None) or {}
+    return {**result, "rule": info, "migrated_to_library": True}
+
+
+@_serialized_rule_mutation
 def rename_rule(
     rule_id: str,
     name: str,
@@ -1720,6 +1813,151 @@ def set_project_assignments(
     }
     ok, error = _save_project_config(project_root, value)
     return {"ok": ok, "error": error, "project_root": project_root}
+
+
+def rule_coverage(
+    rule_id: str, project_roots: list[str]
+) -> dict[str, Any]:
+    global_default = enabled_state(rule_id, None)["global_default"]
+    index = _load(config.rule_coverage_path())
+    recorded = (
+        (index.get("rules") or {}).get(rule_id, {})
+        if isinstance(index.get("rules"), dict) else {}
+    )
+    indexed_projects = list(recorded.get("selected_projects") or [])
+    roots = list(dict.fromkeys([*project_roots, *indexed_projects]))
+    selected = [
+        root for root in roots
+        if is_enabled(rule_id, root)
+    ]
+    return {
+        "mode": "all" if global_default else "selected",
+        "all_projects": bool(global_default),
+        "selected_projects": selected if not global_default else [],
+    }
+
+
+def deployment_coverage_draft(rule_id: str) -> dict[str, Any] | None:
+    state = _load(config.rule_deployment_drafts_path())
+    rules = state.get("rules")
+    if not isinstance(rules, dict):
+        return None
+    value = rules.get(rule_id)
+    return dict(value) if isinstance(value, dict) else None
+
+
+@_serialized_rule_mutation
+def save_deployment_coverage_draft(
+    rule_id: str, coverage: dict[str, Any]
+) -> dict[str, Any]:
+    mode = str(coverage.get("mode", "selected"))
+    if mode not in ("all", "selected"):
+        return {"ok": False, "error": "invalid coverage mode"}
+    state = _load(config.rule_deployment_drafts_path())
+    rules = state.setdefault("rules", {})
+    rules[rule_id] = {
+        "mode": mode,
+        "selected_projects": list(dict.fromkeys(
+            str(root) for root in coverage.get("selected_projects", [])
+            if root
+        )),
+        "confirmed": bool(coverage.get("confirmed")),
+    }
+    try:
+        _save(config.rule_deployment_drafts_path(), state)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "coverage": dict(rules[rule_id])}
+
+
+@_serialized_rule_mutation
+def clear_deployment_coverage_draft(rule_id: str) -> None:
+    state = _load(config.rule_deployment_drafts_path())
+    rules = state.get("rules")
+    if isinstance(rules, dict) and rules.pop(rule_id, None) is not None:
+        _save(config.rule_deployment_drafts_path(), state)
+
+
+@_serialized_rule_mutation
+def set_rule_coverage(
+    rule_id: str,
+    mode: str,
+    selected_projects: list[str],
+    project_roots: list[str],
+    *,
+    name: str = "",
+) -> dict[str, Any]:
+    """Atomically apply All Projects or explicit Selected Projects coverage."""
+    if mode not in ("all", "selected"):
+        return {"ok": False, "error": "coverage mode must be all or selected"}
+    selected = {
+        _project_key(root) for root in selected_projects if root
+    }
+    coverage_path = config.rule_coverage_path()
+    old_coverage = _load(coverage_path)
+    old_record = (
+        (old_coverage.get("rules") or {}).get(rule_id, {})
+        if isinstance(old_coverage.get("rules"), dict) else {}
+    )
+    roots = list(dict.fromkeys(
+        _project_key(root)
+        for root in [
+            *project_roots,
+            *selected_projects,
+            *list(old_record.get("selected_projects") or []),
+        ]
+        if root
+    ))
+    state_path = config.rule_state_path()
+    old_state = _load_scoped(state_path)
+    new_state = json.loads(json.dumps(old_state))
+    old_configs = {root: _load_project_config(root) for root in roots}
+    new_configs = {
+        root: json.loads(json.dumps(value))
+        for root, value in old_configs.items()
+    }
+    if mode == "all":
+        new_state["global"].pop(rule_id, None)
+    else:
+        new_state["global"][rule_id] = False
+    for root, project_config in new_configs.items():
+        assignments = project_config.setdefault("rules", {})
+        if mode == "selected" and root in selected:
+            assignments[rule_id] = {"enabled": True, "name": name}
+        else:
+            assignments.pop(rule_id, None)
+    changed_roots = [
+        root for root in roots
+        if new_configs[root] != old_configs[root]
+    ]
+    try:
+        _save_scoped(state_path, new_state)
+        for root in changed_roots:
+            project_config = new_configs[root]
+            ok, error = _save_project_config(root, project_config)
+            if not ok:
+                raise OSError(error)
+        new_coverage = json.loads(json.dumps(old_coverage))
+        rules = new_coverage.setdefault("rules", {})
+        rules[rule_id] = {
+            "mode": mode,
+            "selected_projects": sorted(selected) if mode == "selected" else [],
+        }
+        _save(coverage_path, new_coverage)
+    except OSError as exc:
+        try:
+            _save_scoped(state_path, old_state)
+            for root in changed_roots:
+                _save_project_config(root, old_configs[root])
+            _save(coverage_path, old_coverage)
+        except OSError:
+            pass
+        return {"ok": False, "error": str(exc)}
+    return {
+        "ok": True,
+        "rule_id": rule_id,
+        **rule_coverage(rule_id, roots),
+    }
 
 
 # --- hide/show future findings (not evaluation/logging) ---------------------

@@ -65,6 +65,8 @@ class LoadedRule:
     scope: str = "project"
     source_path: str = ""
     working_source_path: str = ""
+    compiler: str = ""
+    program_id: str = ""
 
     @classmethod
     def from_def(cls, d: RuleDef, scope: str, path: str) -> "LoadedRule":

@@ -257,3 +257,45 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
     ledger.append(event)
     assert engine.on_event(event, ledger) == []
     assert "expected OK, INFO, WARNING, or CRITICAL" in errors[0]
+
+
+def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
+    class TrackingRuntime(FakeRuntime):
+        def __init__(self):
+            super().__init__(output="WARNING")
+            self.compilers = []
+
+        def program_id_for_spec(self, _spec, compiler=None):
+            self.compilers.append(compiler)
+            return "program"
+
+    runtime = TrackingRuntime()
+    project = str(tmp_path)
+    ledger = Ledger("conversation", project)
+    event = Event(
+        kind=MESSAGE,
+        conversation_id="conversation",
+        project_root=project,
+        payload={"text": "claim"},
+    )
+    ledger.append(event)
+    rule = LoadedRule(
+        id=new_rule_id(),
+        title="Finalized",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
+        fn=lambda ctx: ctx.finding(
+            ctx.paw("spec")(ctx.input()), "finding"),
+        spec="spec",
+        compiler="paw-ft-bs48",
+    )
+    engine = Engine(
+        runtime,
+        VerdictStore(tmp_path / "verdicts.db"),
+        lambda _project: [rule],
+        is_enabled=lambda *_args: True,
+    )
+
+    assert engine.evaluate(rule, ledger) is not None
+    assert runtime.compilers == ["paw-ft-bs48"]

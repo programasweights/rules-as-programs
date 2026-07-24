@@ -286,29 +286,25 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     NSStatusBar.systemStatusBar().removeStatusItem_(controller.status_item)
 
 
-def test_rule_editor_constructs_function_and_full_python_views():
+def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     from AppKit import (
         NSApplication,
-        NSButton,
         NSEvent,
         NSEventModifierFlagCommand,
         NSEventModifierFlagControl,
         NSEventModifierFlagShift,
         NSKeyDown,
-        NSMakeRange,
-        NSSegmentedControl,
     )
     from rules_as_programs import rules_api
     from rules_as_programs.ui.macos_app import MacOSController
     from rules_as_programs.ui.rule_editor import RuleEditorManager
 
     class Model:
-        def perform(self, _request, callback=None, timeout=4):
-            if callback:
-                callback({"ok": True})
+        def __init__(self):
+            self.requests = []
 
-        def set_rule_enabled(self, *_args, **_kwargs):
-            return None
+        def perform(self, request, callback=None, timeout=4):
+            self.requests.append(request)
 
     app = NSApplication.sharedApplication()
     controller = MacOSController.alloc().init()
@@ -320,26 +316,54 @@ def test_rule_editor_constructs_function_and_full_python_views():
     ]
     assert len(select_all) == 2
     assert all(item.target() is None for item in select_all)
-    manager = RuleEditorManager(Model())
+    model = Model()
+    manager = RuleEditorManager(model)
     rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id, "Example")
     manager.open({
         "id": rule_id,
-        "scope": "project",
+        "scope": "global",
         "source": source,
         "projection": rules_api.source_projection(source),
-        "path": "/tmp/example.py",
+        "path": "",
         "enabled": False,
         "muted": False,
         "new_draft": True,
+        "deployment": {
+            "coverage": {
+                "mode": "selected",
+                "selected_projects": ["/tmp/project"],
+            },
+            "projects": [
+                {"path": "/tmp/project", "name": "project"},
+                {"path": "/tmp/other", "name": "other"},
+            ],
+        },
     }, "/tmp/project")
     document = next(iter(manager.documents.values()))
     assert document.managed_fuzzy
-    assert not document.show_full
     assert document.name_field is not None
     assert document.description_editor is not None
     assert document.spec
-    assert document.name_field.nextKeyView() is not None
+    assert not document.spec_scroll.hasHorizontalScroller()
+    assert document.description_editor.textContainer().widthTracksTextView()
+    assert document.name_field.nextKeyView() == document.description_editor
+    assert document.description_editor.nextKeyView() == document.all_projects_radio
+    assert document.deploy_button.isEnabled()
+    assert not document._scope_confirmed
+    assert document.coverage_mode == "selected"
+    assert "project" in str(document.scope_summary.stringValue())
+    document.window.contentView().layoutSubtreeIfNeeded()
+    lifecycle_frame = document.lifecycle_button.frame()
+    deploy_frame = document.deploy_button.frame()
+    assert lifecycle_frame.origin.x + lifecycle_frame.size.width <= deploy_frame.origin.x
+    info_labels = [
+        str(control.accessibilityLabel() or "")
+        for control in _walk(document.window.contentView())
+        if hasattr(control, "accessibilityLabel")
+    ]
+    assert "About Runs when" in info_labels
+    assert "About Reads" in info_labels
     initial_editor = document.name_field.currentEditor()
     assert document.window.firstResponder() == initial_editor
     assert initial_editor.selectedRange().length == len(
@@ -376,37 +400,13 @@ def test_rule_editor_constructs_function_and_full_python_views():
     assert description.selectedRange().location == 2
     assert description.selectedRange().length == 0
 
-    description.setString_("a😀bc")
-    description.setSelectedRange_(NSMakeRange(1, 2))
-    document.toggle_examples()
-    assert document.window.firstResponder() == document.description_editor
-    assert document.description_editor.selectedRange().location == 1
-    assert document.description_editor.selectedRange().length == 2
-
-    mode = next(
-        view for view in document._key_views
-        if isinstance(view, NSSegmentedControl))
-    document.window.makeFirstResponder_(mode)
-    document.toggle_examples()
-    restored_mode = next(
-        view for view in document._key_views
-        if isinstance(view, NSSegmentedControl))
-    assert document.window.firstResponder() == restored_mode
-    examples_button = next(
-        view for view in document._key_views
-        if isinstance(view, NSButton)
-        and "examples" in str(view.title()).lower())
-    document.window.makeFirstResponder_(examples_button)
-    document.toggle_examples()
-    restored_examples = next(
-        view for view in document._key_views
-        if isinstance(view, NSButton)
-        and "examples" in str(view.title()).lower())
-    assert document.window.firstResponder() == restored_examples
-    document._set_busy(True)
+    original_description = document.description_editor
+    description.setString_("Flag replies that claim deployment succeeded.")
+    document.editor_changed()
+    assert document.description_editor is original_description
+    assert document.deploy_button.isEnabled()
+    document._set_busy(True, "Deploying…")
     assert not document.lifecycle_button.isEnabled()
-    document.confirm_lifecycle_action()
-    assert "Wait for" in str(document.results.string())
     document._set_busy(False)
     document.rule["definition"] = {
         "source_path": "/tmp/project/rules/example/rule.py",
@@ -438,6 +438,151 @@ def test_rule_editor_constructs_function_and_full_python_views():
         if hasattr(control, "title")
     ]
     assert "Discard Draft" in button_titles
+    assert "Deploy" in button_titles
+    assert "Improve with examples" not in button_titles
+    assert "Save Draft" not in button_titles
+    assert "Close" not in button_titles
+    document.show_advanced()
+    assert document._advanced_window is not None
+    assert document._advanced_editor is not None
+    document._set_busy(True, "Deploying…")
+    assert not document._advanced_editor.isEditable()
+    assert not document._advanced_apply.isEnabled()
+    document._set_busy(False)
+    document._advanced_window.close()
     for value in list(manager.documents.values()):
         value._dirty = False
         value.window.close()
+
+
+def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(rule_editor, "_on_main", lambda callback: callback())
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Deploy Example")
+
+    class Model:
+        def __init__(self):
+            self.requests = []
+
+        def perform(self, request, callback=None, timeout=4):
+            self.requests.append(request)
+            if request["type"] == "prepare_deployment":
+                callback({"ok": True, "token": "prepared"})
+            elif request["type"] == "commit_deployment":
+                callback({
+                    "ok": True,
+                    "rule": {
+                        "id": rule_id,
+                        "name": "Deploy Example",
+                        "scope": "global",
+                        "source": source,
+                        "definition": {
+                            "source_hash": revisions.hash_source(source),
+                            "source_path": "/tmp/library/rule.py",
+                        },
+                        "working_hash": revisions.hash_source(source),
+                    },
+                    "active": {
+                        "source_hash": revisions.hash_source(source),
+                    },
+                    "coverage": {
+                        "mode": "selected",
+                        "selected_projects": ["/tmp/project"],
+                    },
+                    "impact_count": 1,
+                })
+            elif request["type"] == "save_library_draft":
+                saved_source = request["source"]
+                saved_hash = revisions.hash_source(saved_source)
+                callback({
+                    "ok": True,
+                    "id": rule_id,
+                    "scope": "global",
+                    "path": "/tmp/library/rule.py",
+                    "source": saved_source,
+                    "definition": {
+                        "source_hash": saved_hash,
+                        "source_path": "/tmp/library/rule.py",
+                    },
+                    "working_hash": saved_hash,
+                })
+
+    model = Model()
+    manager = rule_editor.RuleEditorManager(model)
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "new_draft": True,
+        "deployment": {
+            "coverage": {
+                "mode": "selected",
+                "selected_projects": ["/tmp/project"],
+            },
+            "projects": [{"path": "/tmp/project", "name": "project"}],
+        },
+    }, "/tmp/project")
+    document = next(iter(manager.documents.values()))
+    document._scope_confirmed = True
+    document.deploy()
+
+    assert [request["type"] for request in model.requests] == [
+        "prepare_deployment", "commit_deployment"]
+    assert not document._dirty
+    assert not document.deploy_button.isEnabled()
+    assert str(document.deploy_button.title()) == "Deployed"
+    document.description_editor.setString_(
+        "Flag a changed deployment example.")
+    document.editor_changed()
+    document.save_draft()
+    assert document.deploy_button.isEnabled()
+    assert str(document.state_label.stringValue()) == "Changes not deployed"
+    document._dirty = False
+    document.window.close()
+
+
+def test_existing_clean_rule_shows_disabled_deployed_action():
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui.rule_editor import RuleEditorManager
+
+    class Model:
+        def perform(self, *_args, **_kwargs):
+            return None
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Already deployed")
+    digest = revisions.hash_source(source)
+    manager = RuleEditorManager(Model())
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "definition": {
+            "source_hash": digest,
+            "source_path": "/tmp/library/rule.py",
+        },
+        "working_hash": digest,
+        "active_hash": digest,
+        "active": {"source_hash": digest},
+        "new_draft": False,
+        "deployment": {
+            "coverage": {"mode": "all", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+
+    assert str(document.deploy_button.title()) == "Deployed"
+    assert not document.deploy_button.isEnabled()
+    assert str(document.state_label.stringValue()) == "Deployed"
+    document._dirty = False
+    document.window.close()

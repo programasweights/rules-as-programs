@@ -82,11 +82,13 @@ Click it to open the native macOS popover:
   After a different source revision is activated, older open findings remain
   visible as **Rule changed — needs recheck** and stop contributing to severity
   badges until manually reviewed.
-- **Rule Editor** defaults to a managed fuzzy rule: Name, text description,
-  Runs when, Reads, and optional regression cases. The rule itself returns
-  `OK`, `INFO`, `WARNING`, or `CRITICAL` for each finding.
-  **Advanced Python** exposes the canonical generated function and converts to
-  Custom Python mode only after structural customization.
+- **Rule Editor** is organized around intent: Name, Rule spec, Runs in,
+  Runs when, and Reads. Every trigger/input has an information tip with an
+  example. **View Python…** exposes the generated function without competing
+  with the normal spec editor.
+- **Deploy** is the single primary lifecycle action. New rules choose All
+  projects or Selected projects; existing rules deploy directly. A clean rule
+  shows a disabled **Deployed** button.
 - Project headers expose **+ Rule** and **Manage Rules**; Projects remains the
   setup/monitoring-health view.
 - **Rules for Project** is a labelled checklist of Project, Shared, and Built-in
@@ -118,10 +120,9 @@ Action names are deliberately precise:
 - **Pause monitoring** stops all evaluation for its project or globally and
   requires confirmation.
 
-**Save Draft** updates working source without changing runtime behavior.
-**Check & Enable/Activate** validates and prepares the rule, then atomically
-switches the active source revision. A failed check leaves the previous active
-revision running.
+**Deploy** validates, tests, compiles, activates, and applies project coverage.
+A failed deployment leaves the previous active revision and coverage running.
+`Command-S` can still save a local draft without deploying it.
 
 Warming is short-lived inline progress. PAW missing, rule import failures,
 partial warm failures, stale daemons, disabled monitoring, and incomplete hook
@@ -186,10 +187,9 @@ Cursor hooks ──stdin JSON──▶ rap-hook (thin, instant, fail-open)
 
 ## Writing and customizing rules
 
-The normal UI requires no Python: edit Name, fuzzy Rule description, Runs when,
-Reads, and optional Input/Output cases labelled `OK`, `INFO`, `WARNING`, or
-`CRITICAL`. Python remains canonical underneath at `rules/<id>/rule.py`; Advanced Python can
-convert the generated template into arbitrary Custom Python.
+The normal UI requires no Python: edit Name, Rule spec, Runs in, Runs when, and
+Reads, then Deploy. Python remains canonical underneath at `rules/<id>/rule.py`;
+**View Python…** opens the underlying program and advanced diagnostics.
 
 Every rule has:
 
@@ -229,14 +229,11 @@ def use_git_for_source_sync(ctx):
 `ctx.evidence(...)` rules remain supported. A plain-Python rule simply returns a
 message when violated. Custom Python may return `("critical", "msg")`.
 
-Rules live in two origins and project customizations preserve the same ID:
-
-- Shared/My Rules: `~/.cursor/rules-as-programs/rules/<id>/rule.py`
-- Project: `<repo>/.cursor/rules-as-programs/rules/<id>/rule.py`
-
-The shareable project checklist lives at
-`<repo>/.cursor/rules-as-programs/config.json`. A project source overrides its
-Shared source with the same ID; **Revert to Shared** removes that customization.
+Canonical editable rules live in My Rule Library at
+`~/.cursor/rules-as-programs/rules/<id>/rule.py`. Existing project-owned
+definitions are moved there on their next successful deployment, preserving
+their immutable ID, active revision, and project coverage. The project checklist
+remains at `<repo>/.cursor/rules-as-programs/config.json`.
 
 ### Converting your existing prose rules
 
@@ -261,7 +258,7 @@ rap rules convert                  # draft .py rules from existing prose rules
 cases directly in `SPEC`, run `rap rules test <id>`, and iterate. The test
 command parses those cases automatically; a duplicate Python `EXAMPLES` list is
 not needed. Once stable, finalize with
-`rap rules test <id> --compiler paw-ft-bs48`, or use **Check Rule** in Rule
+`rap rules test <id> --compiler paw-ft-bs48`, or use **Deploy** in Rule
 Editor.
 
 ---

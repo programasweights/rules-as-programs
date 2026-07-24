@@ -75,6 +75,16 @@ def rule_state_path() -> Path:
     return state_dir() / "rule_state.json"
 
 
+def rule_coverage_path() -> Path:
+    """Projects explicitly selected for each library-owned rule."""
+    return state_dir() / "rule_coverage.json"
+
+
+def rule_deployment_drafts_path() -> Path:
+    """Undeployed project-coverage edits keyed by immutable rule ID."""
+    return state_dir() / "rule_deployment_drafts.json"
+
+
 def project_monitoring_path() -> Path:
     """Per-project monitoring switch: {project_path: false} means off."""
     return state_dir() / "project_monitoring.json"

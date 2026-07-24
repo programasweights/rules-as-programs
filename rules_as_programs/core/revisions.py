@@ -59,6 +59,9 @@ def activate(
     rule_id: str,
     source_path: str | os.PathLike[str],
     source: str,
+    *,
+    compiler: str | None = None,
+    program_id: str | None = None,
 ) -> dict[str, Any]:
     digest = hash_source(source)
     cache_dir = config.revision_dir() / rule_id
@@ -78,12 +81,32 @@ def activate(
         "source_hash": digest,
         "cache_path": str(cache_path),
         "activated_at": time.time(),
+        "compiler": compiler or "",
+        "program_id": program_id or "",
     }
     with _lock:
         state = _load()
         state["sources"][key] = info
         _save(state)
     return dict(info)
+
+
+def restore_active(
+    rule_id: str,
+    source_path: str | os.PathLike[str],
+    previous: dict[str, Any] | None,
+) -> None:
+    """Restore an exact active pointer after a failed deployment commit."""
+    key = source_key(source_path)
+    with _lock:
+        state = _load()
+        if previous and previous.get("id") == rule_id:
+            restored = dict(previous)
+            restored["source_path"] = key
+            state["sources"][key] = restored
+        else:
+            state["sources"].pop(key, None)
+        _save(state)
 
 
 def working_status(

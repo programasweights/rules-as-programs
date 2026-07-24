@@ -41,6 +41,7 @@ class RuleContext:
         self, ledger: Ledger, runtime: PawRuntime,
         default_inputs: list[str] | None = None,
         default_probes: dict[str, str] | None = None,
+        default_compiler: str | None = None,
     ):
         self._ledger = ledger
         self._runtime = runtime
@@ -48,6 +49,7 @@ class RuleContext:
         self.conversation_id = ledger.conversation_id
         self._default_inputs = list(default_inputs or [])
         self._default_probes = dict(default_probes or {})
+        self._default_compiler = default_compiler
         self.trace: list[dict[str, Any]] = []
 
     # --- evidence access ------------------------------------------------
@@ -134,7 +136,9 @@ class RuleContext:
     def paw(self, spec: str, compiler: str | None = None) -> Callable[[str], str]:
         """Return a local PAW judge ``fn(text) -> label``; records input/output."""
         def call(text: str) -> str:
-            pid = self._runtime.program_id_for_spec(spec, compiler)
+            resolved_compiler = (
+                compiler if compiler is not None else self._default_compiler)
+            pid = self._runtime.program_id_for_spec(spec, resolved_compiler)
             label = (self._runtime.run(pid, text) if pid else None) or ""
             self.trace.append({"type": "paw", "input": text, "output": label})
             return label
@@ -215,7 +219,9 @@ class Engine:
     def evaluate(
         self, rule: LoadedRule, ledger: Ledger, trigger_event: Event | None = None
     ) -> Verdict | None:
-        ctx = RuleContext(ledger, self.runtime, rule.inputs, rule.probes)
+        ctx = RuleContext(
+            ledger, self.runtime, rule.inputs, rule.probes,
+            rule.compiler or None)
         try:
             result = rule.fn(ctx)
             parsed = self._parse_result(rule, result)

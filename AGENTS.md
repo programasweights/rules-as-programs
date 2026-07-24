@@ -110,12 +110,12 @@ plus any you converted.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
   finding opens the native Inspector with the exact rule snapshot, surrounding
   agent timeline, probes, and scrollable raw event log.
-- Rule source opens in the fuzzy-first **Rule Editor**: Name, text description,
-  Runs when, Reads, and optional severity-labelled cases. **Save
-  Draft** does not change runtime behavior; **Check & Enable/Activate** switches
-  the last-good active source only after success. Advanced Python remains
-  available for arbitrary customization. Standard `Command-A` and `Control-A`
-  select all text in the active field.
+- Rule source opens in the intent-first **Rule Editor**: Name, Rule spec,
+  Runs in, Runs when, and Reads. **Deploy** validates, tests, compiles,
+  activates, and applies All Projects or Selected Projects coverage; failure
+  leaves the previous deployment running. **View Python…** exposes the
+  underlying program. Standard `Command-A` and `Control-A` select all text in
+  the active field; `Command-S` saves a local draft.
 - **Rules for Project** is a shareable checklist stored in
   `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay
   local. Every rule row has a labelled **Actions…** menu, and the Rule Editor
@@ -131,8 +131,7 @@ plus any you converted.
 - Setup is non-destructive: `rap init` merges into an existing `hooks.json` and
   never overwrites existing rule files.
 - Rules drafted by `--scan` are created **disabled**. Review the fuzzy
-  description, optionally add realistic Input/Output cases, then use **Check &
-  Enable** before relying on it.
+  description and project coverage, then use **Deploy** before relying on it.
 - Judging is local-only and private (PAW runs on-device; the only remote step is
   the one-time compile). Do not commit secrets. The tool stores observed
   events/verdicts under `~/.cache/rules-as-programs/` (override with

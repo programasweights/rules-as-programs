@@ -1,4 +1,4 @@
-"""Function-focused native rule editor backed by canonical Python source."""
+"""Intent-first native editor for rule specifications and deployment."""
 
 from __future__ import annotations
 
@@ -13,64 +13,82 @@ from AppKit import (
     NSAlertStyleCritical,
     NSApplication,
     NSBackingStoreBuffered,
+    NSBox,
+    NSBoxSeparator,
     NSButton,
+    NSButtonTypeRadio,
+    NSButtonTypeSwitch,
     NSColor,
     NSControlStateValueOff,
     NSControlStateValueOn,
     NSEventModifierFlagCommand,
+    NSEventModifierFlagControl,
+    NSEventModifierFlagOption,
+    NSEventModifierFlagShift,
     NSFont,
-    NSMenu,
-    NSMenuItem,
+    NSLayoutAttributeCenterY,
+    NSLayoutAttributeLeading,
+    NSLayoutConstraint,
+    NSLayoutPriorityDefaultLow,
+    NSMinYEdge,
     NSPasteboard,
     NSPasteboardTypeString,
+    NSPopover,
+    NSPopoverBehaviorTransient,
+    NSSearchField,
     NSScrollView,
-    NSSegmentedControl,
-    NSSwitchButton,
+    NSScreen,
+    NSStackView,
+    NSStackViewDistributionFill,
     NSTextField,
     NSTextView,
+    NSUserInterfaceLayoutOrientationHorizontal,
+    NSUserInterfaceLayoutOrientationVertical,
+    NSView,
+    NSViewController,
     NSViewHeightSizable,
     NSViewMinXMargin,
     NSViewMinYMargin,
     NSViewWidthSizable,
+    NSWindow,
     NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable,
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
     NSWorkspace,
 )
-from Foundation import NSMakeRange, NSMakeRect, NSObject
+from Foundation import NSMakeRect, NSMakeSize, NSObject
 from PyObjCTools import AppHelper
 
 from .. import rules_api, scaffold
-from .macos_controls import (
-    ButtonRole,
-    RAPCommandWindow,
-    appkit_text_length,
-    style_button,
-)
+from ..core import revisions
+from .layout import fit_rule_editor_layout
+from .macos_controls import ButtonRole, RAPCommandWindow, style_button
+from .macos_views import RAPFlippedView
 from .model import UIModel
 
-WINDOW_W = 840
-WINDOW_H = 720
-
 RUN_OPTIONS = [
-    ("message", "Agent replies"),
-    ("shell_exec", "Command finishes"),
-    ("file_edit", "File changes"),
-    ("tool_result", "Tool result"),
-    ("session_stop", "Turn ends"),
+    ("message", "Agent replies", "Runs after an assistant reply. Example: check a claim before it reaches you."),
+    ("shell_exec", "Command finishes", "Runs after a shell command returns. Example: verify tests or deployment output."),
+    ("file_edit", "File changes", "Runs after the agent records a file edit. Example: inspect whether a protected file changed."),
+    ("tool_result", "Tool result", "Runs after a non-shell tool responds. Example: validate a browser or API result."),
+    ("session_stop", "Turn ends", "Runs when the agent finishes its turn. Example: check the completed work as a whole."),
 ]
 READ_OPTIONS = [
-    ("message", "Latest reply"),
-    ("thought", "Thoughts"),
-    ("shell_exec", "Commands"),
-    ("file_edit", "File edits"),
-    ("tool_result", "Tool results"),
+    ("message", "Latest reply", "Reads assistant messages, such as the final claim or explanation."),
+    ("thought", "Thoughts", "Reads captured agent reasoning when Cursor exposes it."),
+    ("shell_exec", "Commands", "Reads commands and their outputs, such as pytest or git status."),
+    ("file_edit", "File edits", "Reads recorded file changes and edited paths."),
+    ("tool_result", "Tool results", "Reads results from browser, API, and other non-shell tools."),
 ]
 
 
 def _on_main(callback: Callable[[], None]) -> None:
     AppHelper.callAfter(callback)
+
+
+def _activate(*constraints) -> None:
+    NSLayoutConstraint.activateConstraints_([item for item in constraints if item])
 
 
 class RAPRuleEditorTarget(NSObject):
@@ -92,6 +110,28 @@ class RAPRuleEditorTextDelegate(NSObject):
             owner.editor_changed()
 
 
+class RAPRuleEditorWindow(RAPCommandWindow):
+    def performKeyEquivalent_(self, event):
+        owner = getattr(self, "owner", None)
+        chars = str(event.charactersIgnoringModifiers() or "").lower()
+        flags = int(event.modifierFlags())
+        command = bool(flags & int(NSEventModifierFlagCommand))
+        extra = bool(flags & int(
+            NSEventModifierFlagControl
+            | NSEventModifierFlagOption
+            | NSEventModifierFlagShift))
+        if owner and command and not extra and chars == "s":
+            owner.save_draft()
+            return True
+        if owner and command and not extra and chars in ("\r", "\n"):
+            owner.deploy()
+            return True
+        if owner and command and not extra and chars == "w":
+            self.performClose_(None)
+            return True
+        return objc.super(RAPRuleEditorWindow, self).performKeyEquivalent_(event)
+
+
 class RAPRuleEditorDocument(NSObject):
     def init(self):
         self = objc.super(RAPRuleEditorDocument, self).init()
@@ -103,52 +143,55 @@ class RAPRuleEditorDocument(NSObject):
         self.project_root = ""
         self.rule_id = ""
         self.window = None
-        self.editor = None
-        self.spec_editor = None
-        self.results = None
-        self.status_label = None
-        self.lifecycle_button = None
         self._callbacks: dict[int, Callable[[Any], None]] = {}
         self._target = RAPRuleEditorTarget.alloc().init()
         self._target._callbacks = self._callbacks
         self._text_delegate = RAPRuleEditorTextDelegate.alloc().init()
         self._text_delegate.owner = self
         self._next_tag = 1
+        self._key_views: list[Any] = []
         self._programmatic = False
         self._dirty = False
+        self._source_dirty = False
+        self._coverage_dirty = False
         self._busy = False
+        self._shown = False
+        self._scope_confirmed = False
         self._close_after_save = False
-        self._rename_confirmed = False
-        self._lifecycle_confirmation_state: dict[str, int] | None = None
+        self._advanced_window = None
+        self._advanced_editor = None
+        self._advanced_apply = None
+        self._info_popover = None
         self._external_control_state: list[tuple[Any, str, bool]] = []
-        self.show_full = False
+        self._lifecycle_confirmation_state: dict[str, int] | None = None
         self.full_source = ""
-        self.function_source = ""
-        self.spec = ""
         self.name = ""
         self.original_name = ""
         self.description = ""
-        self.allowed_label = "OK"
+        self.spec = ""
         self.cases: list[tuple[str, str]] = []
-        self.simple_fuzzy = False
-        self.managed_fuzzy = False
-        self.show_examples = False
         self.on: list[str] = []
         self.inputs: list[str] = []
         self.probes: dict[str, str] = {}
         self.channel = "finding"
         self.severity = "warn"
+        self.allowed_label = "OK"
+        self.simple_fuzzy = False
+        self.managed_fuzzy = False
         self.custom = False
         self.inputs_inferred = False
-        self.has_probes = False
-        self._advanced_menus: list[NSMenu] = []
-        self._key_views: list[Any] = []
-        self._has_rendered = False
-        self.name_field = None
-        self.description_editor = None
-        self.cases_editor = None
-        self.finding_context: dict[str, Any] | None = None
-        self._review_on_activate = False
+        self.finding_context = None
+        self.coverage_mode = "selected"
+        self.selected_projects: list[str] = []
+        self.projects: list[dict[str, str]] = []
+        self.project_overrides: list[str] = []
+        self.source_scope = ""
+        self._active_coverage: dict[str, Any] = {
+            "mode": "selected", "selected_projects": []}
+        self._active_hash = ""
+        self._working_hash = ""
+        self._definition_hash = ""
+        self._saved_source_hash = ""
         return self
 
     @objc.python_method
@@ -163,170 +206,545 @@ class RAPRuleEditorDocument(NSObject):
         self.model = model
         self.rule = dict(rule)
         self.project_root = project_root
-        self.rule_id = str(rule.get("id", "rule"))
+        self.rule_id = str(rule.get("id", ""))
         self.finding_context = rule.get("_finding_context")
         self.full_source = str(rule.get("source", ""))
         self._apply_projection(
             rule.get("projection") or rules_api.source_projection(self.full_source))
         self.original_name = self.name
+        deployment = rule.get("deployment") or {}
+        active_coverage = deployment.get("coverage") or {}
+        self._active_coverage = {
+            "mode": str(active_coverage.get("mode", "selected")),
+            "selected_projects": sorted(
+                active_coverage.get("selected_projects") or []),
+        }
+        draft_coverage = deployment.get("draft_coverage")
+        coverage = draft_coverage or active_coverage
+        self.coverage_mode = str(coverage.get("mode", "selected"))
+        self.selected_projects = list(coverage.get("selected_projects") or [])
+        self.projects = list(deployment.get("projects") or [])
+        self.source_scope = str(
+            deployment.get("source_scope") or rule.get("scope", ""))
+        self.project_overrides = list(
+            deployment.get("project_overrides") or [])
+        if not self.selected_projects and project_root and rule.get("new_draft"):
+            self.selected_projects = [project_root]
+        self._active_hash = str(rule.get("active_hash", ""))
+        self._working_hash = str(rule.get("working_hash", ""))
+        self._definition_hash = str(
+            (rule.get("definition") or {}).get("source_hash", ""))
+        self._saved_source_hash = revisions.hash_source(self.full_source)
+        self._source_dirty = bool(
+            rule.get("new_draft") or rule.get("draft_changes"))
+        self._coverage_dirty = {
+            "mode": self.coverage_mode,
+            "selected_projects": sorted(
+                self.selected_projects
+                if self.coverage_mode == "selected" else []),
+        } != self._active_coverage
+        self._dirty = self._source_dirty or self._coverage_dirty
+        self._scope_confirmed = bool(
+            (draft_coverage or {}).get("confirmed"))
         self._build_window()
-        self._render()
+        self._build_content()
+        self._refresh_ui(sync_text=True)
 
     @objc.python_method
     def _apply_projection(self, projection: dict[str, Any]) -> None:
         self.simple_fuzzy = bool(projection.get("simple_fuzzy"))
         self.managed_fuzzy = bool(projection.get("managed_fuzzy"))
-        self.custom = (
-            not projection.get("ok")
-            or bool(projection.get("custom"))
-        )
+        self.custom = not projection.get("ok") or bool(projection.get("custom"))
         self.name = str(
             projection.get("name")
             or self.rule.get("name")
             or self.rule.get("title")
-            or "Rule"
+            or "Untitled rule"
         )
-        self.function_source = projection.get("function_source", self.full_source)
-        self.spec = projection.get("spec", "")
-        self.description = (
-            projection.get("description", "")
-            if self.managed_fuzzy else projection.get("spec", "")
-        )
+        self.spec = str(projection.get("spec", ""))
+        self.description = str(
+            projection.get("description")
+            if self.managed_fuzzy else projection.get("spec", ""))
         self.allowed_label = str(projection.get("allowed_label", "OK"))
         self.cases = list(projection.get("cases", []))
         self.on = list(projection.get("on", []))
         self.inputs = list(projection.get("inputs", []))
         self.probes = dict(projection.get("probes", {}))
         self.channel = str(projection.get("channel", "finding"))
-        self.inputs_inferred = bool(projection.get("inputs_inferred"))
-        self.has_probes = bool(projection.get("has_probes"))
         self.severity = str(projection.get("severity", "warn"))
-        self.show_full = not self.simple_fuzzy or self.custom
+        self.inputs_inferred = bool(projection.get("inputs_inferred"))
 
     @objc.python_method
     def _build_window(self) -> None:
+        screen = NSScreen.mainScreen()
+        visible = screen.visibleFrame().size if screen else NSMakeSize(1200, 800)
+        layout = fit_rule_editor_layout(
+            advanced=self.custom,
+            optional_height=62 if self.finding_context else 0,
+            available_width=float(visible.width),
+            available_height=float(visible.height),
+        )
         mask = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
             | NSWindowStyleMaskResizable
             | NSWindowStyleMaskMiniaturizable
         )
-        self.window = RAPCommandWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, WINDOW_W, WINDOW_H), mask,
-            NSBackingStoreBuffered, False)
+        self.window = RAPRuleEditorWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, layout.width, layout.height),
+            mask,
+            NSBackingStoreBuffered,
+            False,
+        )
+        self.window.owner = self
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
-        self.window.setAutorecalculatesKeyViewLoop_(True)
-        self.window.setMinSize_((840, 560))
-        self.window.setTitle_(f"Rule Editor — {self.name}")
+        self.window.setContentMinSize_(NSMakeSize(680, 520))
+        self.window.setTitle_(f"Rule — {self.name}")
 
     @objc.python_method
-    def _wire(self, control, callback: Callable[[Any], None]):
+    def _wire(
+        self, control, callback: Callable[[Any], None], *,
+        key_view: bool = True,
+    ):
         tag = self._next_tag
         self._next_tag += 1
         self._callbacks[tag] = callback
         control.setTag_(tag)
         control.setTarget_(self._target)
         control.setAction_("invoke:")
-        if hasattr(control, "setNextKeyView_"):
+        if key_view and hasattr(control, "setNextKeyView_"):
             self._key_views.append(control)
         return control
 
     @objc.python_method
     def _button(
-        self, title, frame, callback, *, role: ButtonRole = "secondary",
+        self,
+        title: str,
+        callback: Callable[[Any], None],
+        *,
+        role: ButtonRole = "secondary",
         accessibility: str | None = None,
-    ):
-        button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
+        key_view: bool = True,
+    ) -> NSButton:
+        button = NSButton.alloc().init()
         button.setTitle_(title)
         style_button(
-            button, role=role, accessibility=accessibility)
-        return self._wire(button, callback)
+            button,
+            role=role,
+            accessibility=accessibility or title.rstrip("…"),
+        )
+        return self._wire(button, callback, key_view=key_view)
 
     @staticmethod
-    def _label(text, frame, size=11, bold=False, color=None):
+    def _label(
+        text: str,
+        *,
+        size: float = 11,
+        bold: bool = False,
+        color=None,
+        lines: int = 1,
+    ) -> NSTextField:
         label = NSTextField.labelWithString_(str(text))
-        label.setFrame_(NSMakeRect(*frame))
         label.setFont_(
-            NSFont.boldSystemFontOfSize_(size) if bold
-            else NSFont.systemFontOfSize_(size))
+            NSFont.boldSystemFontOfSize_(size)
+            if bold else NSFont.systemFontOfSize_(size))
         label.setTextColor_(color or NSColor.labelColor())
+        label.setMaximumNumberOfLines_(lines)
+        if lines != 1:
+            label.cell().setWraps_(True)
+            label.cell().setScrollable_(False)
         return label
 
-    @objc.python_method
-    def _checkbox(self, title, frame, checked, callback):
-        button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
-        button.setButtonType_(NSSwitchButton)
-        button.setTitle_(title)
-        button.setState_(
-            NSControlStateValueOn if checked else NSControlStateValueOff)
-        button.setEnabled_(not self.custom and not self.show_full)
-        return self._wire(button, callback)
+    @staticmethod
+    def _stack(views, *, vertical: bool, spacing: float = 8) -> NSStackView:
+        stack = NSStackView.stackViewWithViews_(list(views))
+        stack.setOrientation_(
+            NSUserInterfaceLayoutOrientationVertical
+            if vertical else NSUserInterfaceLayoutOrientationHorizontal)
+        stack.setSpacing_(spacing)
+        stack.setDistribution_(NSStackViewDistributionFill)
+        stack.setAlignment_(
+            NSLayoutAttributeLeading
+            if vertical else NSLayoutAttributeCenterY)
+        stack.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        return stack
+
+    @staticmethod
+    def _spacer() -> NSView:
+        spacer = NSView.alloc().init()
+        spacer.setContentHuggingPriority_forOrientation_(
+            NSLayoutPriorityDefaultLow, NSUserInterfaceLayoutOrientationHorizontal)
+        return spacer
 
     @objc.python_method
-    def _text_scroll(self, text, frame):
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(*frame))
+    def _text_scroll(
+        self, text: str, *, prose: bool, minimum_height: float
+    ) -> tuple[NSScrollView, NSTextView]:
+        scroll = NSScrollView.alloc().init()
         scroll.setHasVerticalScroller_(True)
-        scroll.setHasHorizontalScroller_(True)
-        scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
+        scroll.setHasHorizontalScroller_(not prose)
+        scroll.setBorderType_(1)
+        scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
         editor = NSTextView.alloc().initWithFrame_(
-            NSMakeRect(0, 0, frame[2] - 16, frame[3]))
+            NSMakeRect(0, 0, 700, minimum_height))
         editor.setRichText_(False)
+        editor.setAllowsUndo_(True)
+        editor.setEditable_(not self._busy)
         editor.setAutomaticQuoteSubstitutionEnabled_(False)
         editor.setAutomaticDashSubstitutionEnabled_(False)
         editor.setAutomaticTextReplacementEnabled_(False)
-        editor.setUsesFindBar_(True)
-        editor.setAllowsUndo_(True)
-        editor.setFont_(NSFont.userFixedPitchFontOfSize_(11.5))
+        editor.setFont_(
+            NSFont.systemFontOfSize_(13)
+            if prose else NSFont.userFixedPitchFontOfSize_(11.5))
+        editor.setHorizontallyResizable_(not prose)
+        editor.setVerticallyResizable_(True)
+        editor.setAutoresizingMask_(NSViewWidthSizable)
+        editor.textContainer().setWidthTracksTextView_(prose)
         editor.setDelegate_(self._text_delegate)
         editor.setString_(text)
         scroll.setDocumentView_(editor)
-        self._key_views.append(editor)
+        _activate(
+            scroll.heightAnchor().constraintGreaterThanOrEqualToConstant_(
+                minimum_height))
         return scroll, editor
 
     @objc.python_method
-    def _capture(self) -> None:
-        if self._programmatic or not self.editor:
+    def _heading(self, title: str, help_text: str | None = None) -> NSStackView:
+        label = self._label(title, size=12, bold=True)
+        views = [label]
+        if help_text:
+            info = self._button(
+                "ⓘ",
+                lambda sender, t=title, b=help_text: self.show_info(
+                    sender, t, b),
+                role="flat",
+                accessibility=f"About {title}",
+            )
+            views.append(info)
+        views.append(self._spacer())
+        return self._stack(views, vertical=False, spacing=6)
+
+    @objc.python_method
+    def _option_group(self, title: str, options, destination: dict) -> NSStackView:
+        heading = self._heading(
+            title,
+            "Runs when chooses the event that invokes the rule."
+            if title == "Runs when"
+            else "Reads chooses the evidence included when the rule runs.",
+        )
+        columns = [self._stack([], vertical=True, spacing=5) for _ in range(2)]
+        for index, (kind, label, help_text) in enumerate(options):
+            checkbox = NSButton.alloc().init()
+            checkbox.setButtonType_(NSButtonTypeSwitch)
+            checkbox.setTitle_(label)
+            checkbox.setAccessibilityLabel_(label)
+            self._wire(
+                checkbox,
+                lambda sender, value=kind, target=destination: self.toggle_metadata(
+                    target, value,
+                    sender.state() == NSControlStateValueOn),
+            )
+            info = self._button(
+                "ⓘ",
+                lambda sender, t=label, b=help_text: self.show_info(sender, t, b),
+                role="flat",
+                accessibility=f"About {label}",
+            )
+            row = self._stack([checkbox, info, self._spacer()],
+                              vertical=False, spacing=4)
+            columns[index % 2].addArrangedSubview_(row)
+            destination[kind] = checkbox
+        grid = self._stack(columns, vertical=False, spacing=18)
+        _activate(
+            columns[0].widthAnchor().constraintEqualToAnchor_(columns[1].widthAnchor()))
+        return self._stack([heading, grid], vertical=True, spacing=7)
+
+    @objc.python_method
+    def _build_content(self) -> None:
+        root = self.window.contentView()
+        footer = NSView.alloc().init()
+        footer.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        separator = NSBox.alloc().init()
+        separator.setBoxType_(NSBoxSeparator)
+        separator.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        scroll = NSScrollView.alloc().init()
+        scroll.setHasVerticalScroller_(True)
+        scroll.setDrawsBackground_(False)
+        scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        root.addSubview_(scroll)
+        root.addSubview_(separator)
+        root.addSubview_(footer)
+        _activate(
+            scroll.topAnchor().constraintEqualToAnchor_(root.topAnchor()),
+            scroll.leadingAnchor().constraintEqualToAnchor_(root.leadingAnchor()),
+            scroll.trailingAnchor().constraintEqualToAnchor_(root.trailingAnchor()),
+            scroll.bottomAnchor().constraintEqualToAnchor_(separator.topAnchor()),
+            separator.leadingAnchor().constraintEqualToAnchor_(root.leadingAnchor()),
+            separator.trailingAnchor().constraintEqualToAnchor_(root.trailingAnchor()),
+            separator.bottomAnchor().constraintEqualToAnchor_(footer.topAnchor()),
+            separator.heightAnchor().constraintEqualToConstant_(1),
+            footer.leadingAnchor().constraintEqualToAnchor_(root.leadingAnchor()),
+            footer.trailingAnchor().constraintEqualToAnchor_(root.trailingAnchor()),
+            footer.bottomAnchor().constraintEqualToAnchor_(root.bottomAnchor()),
+            footer.heightAnchor().constraintEqualToConstant_(54),
+        )
+
+        document = NSView.alloc().init()
+        document.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        scroll.setDocumentView_(document)
+        content = self._stack([], vertical=True, spacing=10)
+        document.addSubview_(content)
+        _activate(
+            document.topAnchor().constraintEqualToAnchor_(
+                scroll.contentView().topAnchor()),
+            document.leadingAnchor().constraintEqualToAnchor_(
+                scroll.contentView().leadingAnchor()),
+            document.widthAnchor().constraintEqualToAnchor_(
+                scroll.contentView().widthAnchor()),
+            document.heightAnchor().constraintGreaterThanOrEqualToAnchor_(
+                scroll.contentView().heightAnchor()),
+            content.topAnchor().constraintEqualToAnchor_constant_(
+                document.topAnchor(), 18),
+            content.leadingAnchor().constraintEqualToAnchor_constant_(
+                document.leadingAnchor(), 20),
+            content.trailingAnchor().constraintEqualToAnchor_constant_(
+                document.trailingAnchor(), -20),
+            content.bottomAnchor().constraintEqualToAnchor_constant_(
+                document.bottomAnchor(), -20),
+        )
+
+        self.name_field = NSTextField.alloc().init()
+        self.name_field.setFont_(NSFont.systemFontOfSize_(15))
+        self.name_field.setDelegate_(self._text_delegate)
+        self.name_field.setAccessibilityLabel_("Rule name")
+        name_row = self._stack(
+            [self._label("Rule name", size=12, bold=True), self.name_field],
+            vertical=False, spacing=12)
+        _activate(self.name_field.widthAnchor().constraintGreaterThanOrEqualToConstant_(360))
+        content.addArrangedSubview_(name_row)
+        self.state_label = self._label(
+            "Draft", size=10, bold=True, color=NSColor.controlAccentColor())
+        content.addArrangedSubview_(self.state_label)
+
+        if self.finding_context:
+            finding = (self.finding_context or {}).get("finding", {})
+            self.finding_label = self._label(
+                "Tuning from finding: "
+                + str(finding.get("message", "")).replace("\n", " "),
+                size=10, color=NSColor.secondaryLabelColor(), lines=2)
+            content.addArrangedSubview_(self.finding_label)
+
+        spec_heading = self._heading(
+            "Rule spec",
+            "Describe the behavior to audit in plain language. PAW compiles this "
+            "specification into a local rule program.",
+        )
+        self.advanced_button = self._button(
+            "View Python…", lambda _sender: self.show_advanced(),
+            role="flat", accessibility="View underlying Python")
+        spec_heading.insertArrangedSubview_atIndex_(self.advanced_button, 1)
+        content.addArrangedSubview_(spec_heading)
+        self.spec_scroll, self.description_editor = self._text_scroll(
+            self.description, prose=True, minimum_height=170)
+        self.spec_scroll.setContentHuggingPriority_forOrientation_(
+            NSLayoutPriorityDefaultLow,
+            NSUserInterfaceLayoutOrientationVertical)
+        self.spec_scroll.setContentCompressionResistancePriority_forOrientation_(
+            NSLayoutPriorityDefaultLow,
+            NSUserInterfaceLayoutOrientationVertical)
+        self.description_editor.setAccessibilityLabel_("Rule specification")
+        content.addArrangedSubview_(self.spec_scroll)
+        self.custom_label = self._label(
+            "This is a custom Python rule. Edit its behavior through View Python.",
+            size=11, color=NSColor.systemOrangeColor(), lines=2)
+        content.addArrangedSubview_(self.custom_label)
+
+        content.addArrangedSubview_(self._heading(
+            "Runs in",
+            "All projects includes current and future projects. Selected projects "
+            "runs only in the projects you choose.",
+        ))
+        self.all_projects_radio = NSButton.alloc().init()
+        self.all_projects_radio.setButtonType_(NSButtonTypeRadio)
+        self.all_projects_radio.setTitle_("All projects")
+        self._wire(
+            self.all_projects_radio,
+            lambda _sender: self.set_coverage_mode("all"))
+        self.selected_projects_radio = NSButton.alloc().init()
+        self.selected_projects_radio.setButtonType_(NSButtonTypeRadio)
+        self.selected_projects_radio.setTitle_("Selected projects")
+        self._wire(
+            self.selected_projects_radio,
+            lambda _sender: self.set_coverage_mode("selected"))
+        self.edit_projects_button = self._button(
+            "Choose projects…", lambda _sender: self.show_projects_sheet(),
+            role="flat")
+        scope_row = self._stack(
+            [
+                self.all_projects_radio,
+                self.selected_projects_radio,
+                self.edit_projects_button,
+                self._spacer(),
+            ],
+            vertical=False,
+            spacing=12,
+        )
+        content.addArrangedSubview_(scope_row)
+        self.scope_summary = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
+        content.addArrangedSubview_(self.scope_summary)
+
+        self.trigger_buttons: dict[str, NSButton] = {}
+        self.input_buttons: dict[str, NSButton] = {}
+        self.triggers_group = self._option_group(
+            "Runs when", RUN_OPTIONS, self.trigger_buttons)
+        self.inputs_group = self._option_group(
+            "Reads", READ_OPTIONS, self.input_buttons)
+        self.metadata_stack = self._stack(
+            [self.triggers_group, self.inputs_group],
+            vertical=True,
+            spacing=16,
+        )
+        content.addArrangedSubview_(self.metadata_stack)
+        self.inferred_label = self._label(
+            "Inputs are inferred from the Python source.",
+            size=10, color=NSColor.secondaryLabelColor())
+        content.addArrangedSubview_(self.inferred_label)
+
+        self.diagnostics_label = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=5)
+        self.diagnostics_label.setHidden_(True)
+        content.addArrangedSubview_(self.diagnostics_label)
+        self._content_stack = content
+
+        self.lifecycle_button = self._button(
+            self._lifecycle_title(),
+            lambda _sender: self.confirm_lifecycle_action(),
+            role="destructive",
+        )
+        self.footer_status = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor())
+        self.footer_advanced = self._button(
+            "Advanced…", lambda _sender: self.show_advanced(), role="flat")
+        self.deploy_button = self._button(
+            "Deploy", lambda _sender: self.deploy(), role="primary")
+        footer_stack = self._stack(
+            [
+                self.lifecycle_button,
+                self.footer_status,
+                self._spacer(),
+                self.footer_advanced,
+                self.deploy_button,
+            ],
+            vertical=False,
+            spacing=12,
+        )
+        footer.addSubview_(footer_stack)
+        _activate(
+            footer_stack.leadingAnchor().constraintEqualToAnchor_constant_(
+                footer.leadingAnchor(), 18),
+            footer_stack.trailingAnchor().constraintEqualToAnchor_constant_(
+                footer.trailingAnchor(), -18),
+            footer_stack.centerYAnchor().constraintEqualToAnchor_(
+                footer.centerYAnchor()),
+        )
+        self._interactive_controls = [
+            self.name_field,
+            self.description_editor,
+            self.all_projects_radio,
+            self.selected_projects_radio,
+            self.edit_projects_button,
+            self.advanced_button,
+            self.footer_advanced,
+            self.deploy_button,
+            self.lifecycle_button,
+            *self.trigger_buttons.values(),
+            *self.input_buttons.values(),
+        ]
+        self._recalculate_key_loop()
+        root.layoutSubtreeIfNeeded()
+        self._fit_spec_width()
+
+    @objc.python_method
+    def _recalculate_key_loop(self) -> None:
+        def visible(control) -> bool:
+            view = control
+            while view is not None:
+                if hasattr(view, "isHidden") and view.isHidden():
+                    return False
+                view = view.superview() if hasattr(view, "superview") else None
+            return True
+
+        ordered = [
+            self.name_field,
+            self.description_editor,
+            self.all_projects_radio,
+            self.selected_projects_radio,
+            self.edit_projects_button,
+            *self.trigger_buttons.values(),
+            *self.input_buttons.values(),
+            self.lifecycle_button,
+            self.footer_advanced,
+            self.deploy_button,
+        ]
+        ordered.extend(
+            control for control in self._key_views
+            if all(control != existing for existing in ordered)
+        )
+        ordered = [
+            control for control in ordered
+            if control is not None
+            and visible(control)
+            and (not hasattr(control, "isEnabled") or control.isEnabled())
+        ]
+        for current, following in zip(
+            ordered, ordered[1:] + ordered[:1]
+        ):
+            current.setNextKeyView_(following)
+        self.window.setInitialFirstResponder_(self.name_field)
+
+    @objc.python_method
+    def _fit_spec_width(self) -> None:
+        if not getattr(self, "spec_scroll", None):
             return
-        if self.name_field:
-            self.name = str(self.name_field.stringValue()).strip()
-        if self.show_full:
-            self.full_source = str(self.editor.string())
-        elif self.simple_fuzzy:
-            if self.description_editor:
-                value = str(self.description_editor.string()).strip()
-                if self.managed_fuzzy:
-                    self.description = value
-                else:
-                    self.spec = value
-                    self.cases = rules_api.spec_examples(value)
-            if self.managed_fuzzy and self.cases_editor:
-                self.cases = rules_api.spec_examples(
-                    str(self.cases_editor.string()))
-        else:
-            self.function_source = str(self.editor.string())
-            if self.spec_editor:
-                self.spec = str(self.spec_editor.string())
+        size = self.spec_scroll.contentSize()
+        if size.width <= 0:
+            return
+        height = max(float(size.height), float(
+            self.description_editor.frame().size.height))
+        self.description_editor.setFrameSize_(NSMakeSize(size.width, height))
+        self.description_editor.textContainer().setContainerSize_(
+            NSMakeSize(size.width, 10_000_000))
+
+    @objc.python_method
+    def _lifecycle_title(self) -> str:
+        if self.rule.get("new_draft") and not self.rule.get("path"):
+            return "Discard Draft"
+        if self.rule.get("new_draft"):
+            return "Delete Draft…"
+        if self.rule.get("scope") == "project" and self.rule.get("customized_from"):
+            return "Use Shared Version…"
+        if self.rule.get("is_builtin"):
+            return "Remove Installed Rule…"
+        return "Delete Rule…"
+
+    @objc.python_method
+    def _capture(self) -> None:
+        if self._programmatic:
+            return
+        self.name = str(self.name_field.stringValue()).strip()
+        if not self.custom:
+            self.description = str(self.description_editor.string()).strip()
 
     @objc.python_method
     def _compose(self) -> tuple[bool, str, str]:
         self._capture()
-        if self.show_full or self.custom:
-            projection = rules_api.source_projection(self.full_source)
-            rule_id = str(projection.get("id") or self.rule_id)
-            current_name = str(projection.get("name") or "")
-            source = self.full_source
-            if self.name and self.name != current_name:
-                ok, source, error = rules_api.patch_rule_identity(
-                    source, rule_id, self.name)
-                if not ok:
-                    return False, self.full_source, error
-            return True, source, ""
+        if self.custom:
+            ok, source, error = rules_api.patch_rule_identity(
+                self.full_source, self.rule_id, self.name)
+            return ok, source, error
         if self.managed_fuzzy:
-            if not self.name:
-                return False, self.full_source, "Rule name is required."
-            if not self.description:
-                return False, self.full_source, "Rule description is required."
             try:
                 source = rules_api.generate_managed_fuzzy_source(
                     self.rule_id,
@@ -347,221 +765,624 @@ class RAPRuleEditorDocument(NSObject):
             on=self.on,
             inputs=self.inputs,
             severity=self.severity,
-            function_source=self.function_source,
-            spec=self.spec if self.spec else None,
+            function_source=rules_api.source_projection(
+                self.full_source).get("function_source", ""),
+            spec=self.description or None,
         )
-        if not ok:
-            return ok, source, error
-        if self.name:
+        if ok:
             ok, source, error = rules_api.patch_rule_identity(
                 source, self.rule_id, self.name)
         return ok, source, error
 
     @objc.python_method
-    def _control_focus_key(self, view) -> str:
-        tag = int(view.tag()) if hasattr(view, "tag") else -1
-        return f"{view.__class__.__name__}:{tag}"
-
-    @objc.python_method
-    def _capture_focus_state(self) -> tuple[str, int, int] | None:
-        if not self.window:
-            return None
-        responder = self.window.firstResponder()
-        if responder is None:
-            return None
-        name_editor = self.name_field.currentEditor() if self.name_field else None
-        if name_editor is not None and responder == name_editor:
-            selected = responder.selectedRange()
-            return ("name", int(selected.location), int(selected.length))
-        candidates = (
-            ("description", self.description_editor),
-            ("cases", self.cases_editor),
-            ("source", self.editor if self.show_full else None),
-            ("results", self.results),
-        )
-        for semantic, view in candidates:
-            if view is not None and responder == view:
-                selected = responder.selectedRange()
-                return (semantic, int(selected.location), int(selected.length))
-        for view in self._key_views:
-            if responder == view:
-                return (f"control:{self._control_focus_key(view)}", 0, 0)
-        return None
-
-    @objc.python_method
-    def _restore_focus_state(
-        self, state: tuple[str, int, int] | None
-    ) -> None:
-        if not self.window or not self.name_field:
-            return
-        targets = {
-            "description": self.description_editor,
-            "cases": self.cases_editor,
-            "source": self.editor if self.show_full else None,
-            "results": self.results,
-        }
-        if state is None:
-            self.window.setInitialFirstResponder_(self.name_field)
-            self.window.makeFirstResponder_(self.name_field)
-            if not self._has_rendered and self.rule.get("new_draft"):
-                self.name_field.selectText_(None)
-            return
-        semantic, location, length = state
-        if semantic.startswith("control:"):
-            focus_key = semantic.removeprefix("control:")
-            for view in self._key_views:
-                if self._control_focus_key(view) == focus_key:
-                    self.window.makeFirstResponder_(view)
-                    return
-            semantic = "description"
-        if semantic == "name":
-            self.window.makeFirstResponder_(self.name_field)
-            target = self.name_field.currentEditor()
-        else:
-            target = targets.get(semantic)
-            if target is not None:
-                self.window.makeFirstResponder_(target)
-        if target is None:
-            target = self.description_editor or self.editor or self.name_field
-            self.window.makeFirstResponder_(target)
-        if not hasattr(target, "setSelectedRange_"):
-            return
-        text_length = appkit_text_length(target.string())
-        start = min(max(0, location), text_length)
-        size = min(max(0, length), text_length - start)
-        selected = NSMakeRange(start, size)
-        target.setSelectedRange_(selected)
-        if hasattr(target, "scrollRangeToVisible_"):
-            target.scrollRangeToVisible_(selected)
-
-    @objc.python_method
-    def _finish_key_loop(
-        self, focus_state: tuple[str, int, int] | None
-    ) -> None:
-        if not self.window:
-            return
-        self.window.recalculateKeyViewLoop()
-        key_views = [
-            view for view in self._key_views
-            if view is not None
-            and (not hasattr(view, "isEnabled") or view.isEnabled())
+    def _refresh_ui(self, *, sync_text: bool = False) -> None:
+        self._programmatic = True
+        if sync_text:
+            self.name_field.setStringValue_(self.name)
+            self.description_editor.setString_(self.description)
+        for kind, button in self.trigger_buttons.items():
+            button.setState_(
+                NSControlStateValueOn if kind in self.on
+                else NSControlStateValueOff)
+        for kind, button in self.input_buttons.items():
+            button.setState_(
+                NSControlStateValueOn if kind in self.inputs
+                else NSControlStateValueOff)
+        self.all_projects_radio.setState_(
+            NSControlStateValueOn
+            if self.coverage_mode == "all" else NSControlStateValueOff)
+        self.selected_projects_radio.setState_(
+            NSControlStateValueOn
+            if self.coverage_mode == "selected" else NSControlStateValueOff)
+        self.edit_projects_button.setEnabled_(
+            self.coverage_mode == "selected" and not self._busy)
+        selected_names = [
+            item["name"] for item in self.projects
+            if item.get("path") in self.selected_projects
         ]
-        for current, following in zip(
-            key_views, key_views[1:] + key_views[:1]
+        self.scope_summary.setStringValue_(
+            "Runs in every current and future project."
+            if self.coverage_mode == "all"
+            else (
+                ", ".join(selected_names)
+                if selected_names else "No projects selected."
+            )
+        )
+        self.custom_label.setHidden_(not self.custom)
+        self.metadata_stack.setHidden_(self.custom)
+        self.inferred_label.setHidden_(
+            self.custom or not self.inputs_inferred)
+        self.description_editor.setEditable_(not self.custom and not self._busy)
+        self.lifecycle_button.setTitle_(self._lifecycle_title())
+        if self._busy:
+            state = "Deploying"
+        elif self.rule.get("_deploy_failed"):
+            state = "Deploy failed"
+        elif self.rule.get("new_draft") and not self.rule.get("path"):
+            state = "Draft"
+        elif self._dirty or (
+            self._working_hash and self._active_hash
+            and self._working_hash != self._active_hash
         ):
-            current.setNextKeyView_(following)
-        self._restore_focus_state(focus_state)
+            state = "Changes not deployed"
+        elif self._active_hash:
+            state = "Deployed"
+        else:
+            state = "Not deployed"
+        self.state_label.setStringValue_(state)
+        deploy_needed = bool(
+            self.rule.get("new_draft")
+            or self._dirty
+            or not self._active_hash
+            or (
+                self._working_hash
+                and self._working_hash != self._active_hash
+            )
+        )
+        impact = (
+            len([
+                item for item in self.projects
+                if (
+                    item.get("path") not in self.project_overrides
+                    or (
+                        self.source_scope == "project"
+                        and item.get("path") == self.project_root
+                    )
+                )
+            ])
+            if self.coverage_mode == "all"
+            else len([
+                path for path in self.selected_projects
+                if (
+                    path not in self.project_overrides
+                    or (
+                        self.source_scope == "project"
+                        and path == self.project_root
+                    )
+                )
+            ])
+        )
+        self.footer_status.setStringValue_(
+            state
+            + (
+                f" · Updates {impact} project"
+                f"{'s' if impact != 1 else ''}"
+                if deploy_needed else ""
+            )
+        )
+        self.deploy_button.setEnabled_(deploy_needed and not self._busy)
+        self.deploy_button.setTitle_(
+            "Deploy" if deploy_needed else "Deployed")
+        self._recalculate_key_loop()
+        self._programmatic = False
 
     @objc.python_method
-    def _lifecycle_action_title(self) -> str:
-        if self.rule.get("new_draft"):
-            return "Discard Draft"
-        if (
-            self.rule.get("scope") == "project"
-            and self.rule.get("customized_from")
-        ):
-            return "Use Shared Version…"
-        if self.rule.get("is_builtin"):
-            return "Remove Installed Rule…"
-        if self.rule.get("scope") == "global":
-            return "Delete Shared Rule…"
-        return "Delete Rule…"
-
-    @objc.python_method
-    def _set_busy(self, busy: bool) -> None:
-        self._busy = busy
-        if self.lifecycle_button is not None:
-            self.lifecycle_button.setEnabled_(not busy)
-
-    @objc.python_method
-    def set_external_lifecycle_pending(self, pending: bool) -> None:
-        if pending:
-            if self._external_control_state:
-                return
-            state: list[tuple[Any, str, bool]] = []
-            for view in dict.fromkeys(self._key_views):
-                if hasattr(view, "isEditable") and hasattr(view, "setEditable_"):
-                    state.append((view, "editable", bool(view.isEditable())))
-                    view.setEditable_(False)
-                elif hasattr(view, "isEnabled") and hasattr(view, "setEnabled_"):
-                    state.append((view, "enabled", bool(view.isEnabled())))
-                    view.setEnabled_(False)
-            self._external_control_state = state
-            self.window.makeFirstResponder_(None)
-            self._set_busy(True)
+    def editor_changed(self) -> None:
+        if self._programmatic or self._busy:
             return
-        state, self._external_control_state = self._external_control_state, []
-        for view, kind, value in state:
-            if kind == "editable":
-                view.setEditable_(value)
-            else:
-                view.setEnabled_(value)
+        self._capture()
+        ok, source, _error = self._compose()
+        self._source_dirty = (
+            not ok or revisions.hash_source(source) != self._saved_source_hash)
+        self._dirty = self._source_dirty or self._coverage_dirty
+        self.rule["_deploy_failed"] = False
+        self.window.setDocumentEdited_(True)
+        self._refresh_ui()
+
+    @objc.python_method
+    def coverage_changed(self) -> None:
+        if self._programmatic or self._busy:
+            return
+        current = {
+            "mode": self.coverage_mode,
+            "selected_projects": sorted(
+                self.selected_projects
+                if self.coverage_mode == "selected" else []),
+        }
+        self._coverage_dirty = current != self._active_coverage
+        self._dirty = self._source_dirty or self._coverage_dirty
+        self.rule["_deploy_failed"] = False
+        self.window.setDocumentEdited_(True)
+        self._refresh_ui()
+
+    @objc.python_method
+    def toggle_metadata(
+        self, values: list[str], value: str, enabled: bool
+    ) -> None:
+        if enabled and value not in values:
+            values.append(value)
+        elif not enabled and value in values:
+            values.remove(value)
+        self.editor_changed()
+
+    @objc.python_method
+    def set_coverage_mode(self, mode: str) -> None:
+        self.coverage_mode = mode
+        self._scope_confirmed = True
+        self.coverage_changed()
+        if mode == "selected" and not self.selected_projects:
+            self.show_projects_sheet()
+
+    @objc.python_method
+    def show_info(self, sender, title: str, body: str) -> None:
+        controller = NSViewController.alloc().init()
+        view = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, 300, 132))
+        heading = self._label(title, size=13, bold=True)
+        heading.setFrame_(NSMakeRect(14, 14, 272, 20))
+        copy = self._label(body, size=11, lines=6)
+        copy.setFrame_(NSMakeRect(14, 40, 272, 78))
+        view.addSubview_(heading)
+        view.addSubview_(copy)
+        controller.setView_(view)
+        popover = NSPopover.alloc().init()
+        popover.setBehavior_(NSPopoverBehaviorTransient)
+        popover.setContentSize_(NSMakeSize(300, 132))
+        popover.setContentViewController_(controller)
+        popover.showRelativeToRect_ofView_preferredEdge_(
+            sender.bounds(), sender, NSMinYEdge)
+        self._info_popover = popover
+
+    @objc.python_method
+    def show_projects_sheet(
+        self, on_confirm: Callable[[], None] | None = None
+    ) -> None:
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Where should this rule run?")
+        alert.setInformativeText_(
+            "All projects includes future projects. Selected projects runs "
+            "only where explicitly checked.")
+        accessory = NSView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 430, 340))
+        all_radio = NSButton.alloc().initWithFrame_(
+            NSMakeRect(0, 312, 190, 24))
+        all_radio.setButtonType_(NSButtonTypeRadio)
+        all_radio.setTitle_("All projects")
+        selected_radio = NSButton.alloc().initWithFrame_(
+            NSMakeRect(200, 312, 190, 24))
+        selected_radio.setButtonType_(NSButtonTypeRadio)
+        selected_radio.setTitle_("Selected projects")
+        all_radio.setState_(
+            NSControlStateValueOn
+            if self.coverage_mode == "all" else NSControlStateValueOff)
+        selected_radio.setState_(
+            NSControlStateValueOn
+            if self.coverage_mode == "selected" else NSControlStateValueOff)
+        self._wire(
+            all_radio,
+            lambda _sender: (
+                all_radio.setState_(NSControlStateValueOn),
+                selected_radio.setState_(NSControlStateValueOff),
+            ),
+            key_view=False,
+        )
+        self._wire(
+            selected_radio,
+            lambda _sender: (
+                selected_radio.setState_(NSControlStateValueOn),
+                all_radio.setState_(NSControlStateValueOff),
+            ),
+            key_view=False,
+        )
+        accessory.addSubview_(all_radio)
+        accessory.addSubview_(selected_radio)
+        search = NSSearchField.alloc().initWithFrame_(
+            NSMakeRect(0, 276, 430, 26))
+        search.setPlaceholderString_("Search projects")
+        accessory.addSubview_(search)
+        project_scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 430, 266))
+        project_scroll.setHasVerticalScroller_(True)
+        project_scroll.setDrawsBackground_(False)
+        document_height = max(266, len(self.projects) * 26)
+        project_document = RAPFlippedView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 414, document_height))
+        project_scroll.setDocumentView_(project_document)
+        accessory.addSubview_(project_scroll)
+        checks: list[tuple[NSButton, str, str]] = []
+        for index, project in enumerate(self.projects):
+            project_name = project.get("name") or Path(project["path"]).name
+            check = NSButton.alloc().initWithFrame_(
+                NSMakeRect(0, index * 26, 400, 24))
+            check.setButtonType_(NSButtonTypeSwitch)
+            check.setTitle_(project_name)
+            check.setState_(
+                NSControlStateValueOn
+                if project["path"] in self.selected_projects
+                else NSControlStateValueOff)
+            project_document.addSubview_(check)
+            checks.append((check, project["path"], project_name))
+
+        def filter_projects(sender):
+            query = str(sender.stringValue()).strip().lower()
+            visible = [
+                item for item in checks
+                if not query or query in item[2].lower()
+                or query in item[1].lower()
+            ]
+            height = max(266, len(visible) * 26)
+            project_document.setFrameSize_(NSMakeSize(414, height))
+            visible_ids = {id(item[0]) for item in visible}
+            row = 0
+            for check, _path, _name in checks:
+                shown = id(check) in visible_ids
+                check.setHidden_(not shown)
+                if shown:
+                    check.setFrameOrigin_((0, row * 26))
+                    row += 1
+
+        self._wire(search, filter_projects, key_view=False)
+        alert.setAccessoryView_(accessory)
+        alert.addButtonWithTitle_("Apply")
+        alert.addButtonWithTitle_("Cancel")
+
+        def completed(response):
+            if response != NSAlertFirstButtonReturn:
+                return
+            self.coverage_mode = (
+                "all"
+                if all_radio.state() == NSControlStateValueOn
+                and selected_radio.state() != NSControlStateValueOn
+                else "selected"
+            )
+            self.selected_projects = [
+                path for check, path, _name in checks
+                if check.state() == NSControlStateValueOn
+            ]
+            self._scope_confirmed = True
+            self.coverage_changed()
+            if on_confirm:
+                on_confirm()
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def show_advanced(self) -> None:
+        if self._advanced_window:
+            self._advanced_window.makeKeyAndOrderFront_(None)
+            return
+        ok, composed, error = self._compose()
+        if ok:
+            self.full_source = composed
+        else:
+            self.diagnostics_label.setStringValue_(error)
+            self.diagnostics_label.setHidden_(False)
+            return
+        mask = (
+            NSWindowStyleMaskTitled
+            | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskResizable
+        )
+        window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, 900, 680), mask,
+            NSBackingStoreBuffered, False)
+        window.setTitle_(f"Underlying Python — {self.name}")
+        window.setDelegate_(self)
+        window.setContentMinSize_(NSMakeSize(680, 520))
+        root = window.contentView()
+        heading = self._label(
+            f"{len(self.cases)} test case(s) · {len(self.probes)} command probe(s)",
+            size=10, color=NSColor.secondaryLabelColor())
+        heading.setFrame_(NSMakeRect(18, 642, 520, 20))
+        heading.setAutoresizingMask_(
+            NSViewWidthSizable | NSViewMinYMargin)
+        root.addSubview_(heading)
+        scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(18, 58, 864, 574))
+        scroll.setAutoresizingMask_(
+            NSViewWidthSizable | NSViewHeightSizable)
+        scroll.setHasVerticalScroller_(True)
+        scroll.setHasHorizontalScroller_(True)
+        editor = NSTextView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 848, 574))
+        editor.setRichText_(False)
+        editor.setAllowsUndo_(True)
+        editor.setFont_(NSFont.userFixedPitchFontOfSize_(11.5))
+        editor.setAutoresizingMask_(
+            NSViewWidthSizable | NSViewHeightSizable)
+        editor.setString_(self.full_source)
+        scroll.setDocumentView_(editor)
+        root.addSubview_(scroll)
+        apply = self._button(
+            "Apply Python", lambda _sender: self.apply_advanced(),
+            role="primary", key_view=False)
+        apply.setEnabled_(not self._busy)
+        apply.setFrame_(NSMakeRect(750, 16, 132, 30))
+        apply.setAutoresizingMask_(NSViewMinXMargin)
+        root.addSubview_(apply)
+        copy_id = self._button(
+            "Copy Rule ID", lambda _sender: self.copy_rule_id(), role="flat",
+            key_view=False)
+        copy_id.setFrame_(NSMakeRect(18, 16, 100, 30))
+        root.addSubview_(copy_id)
+        open_file = self._button(
+            "Open File", lambda _sender: self.open_external(), role="flat",
+            key_view=False)
+        open_file.setFrame_(NSMakeRect(126, 16, 88, 30))
+        root.addSubview_(open_file)
+        self._advanced_window = window
+        self._advanced_editor = editor
+        self._advanced_apply = apply
+        window.center()
+        window.makeKeyAndOrderFront_(None)
+
+    @objc.python_method
+    def apply_advanced(self) -> None:
+        if self._busy:
+            return
+        source = str(self._advanced_editor.string())
+        projection = rules_api.source_projection(source)
+        self.full_source = source
+        if projection.get("ok"):
+            self._apply_projection(projection)
+        else:
+            self.custom = True
+        self._source_dirty = True
+        self._dirty = True
+        self.window.setDocumentEdited_(True)
+        self._advanced_window.close()
+        self._advanced_window = None
+        self._advanced_editor = None
+        self._advanced_apply = None
+        self._refresh_ui(sync_text=not self.custom)
+
+    @objc.python_method
+    def _set_busy(self, busy: bool, status: str = "") -> None:
+        self._busy = busy
+        for control in self._interactive_controls:
+            if hasattr(control, "setEnabled_"):
+                control.setEnabled_(not busy)
+        if hasattr(self.description_editor, "setEditable_"):
+            self.description_editor.setEditable_(not busy and not self.custom)
+        if self._advanced_editor:
+            self._advanced_editor.setEditable_(not busy)
+        if self._advanced_apply:
+            self._advanced_apply.setEnabled_(not busy)
+        if status:
+            self.diagnostics_label.setStringValue_(status)
+            self.diagnostics_label.setHidden_(False)
+        self._refresh_ui()
+
+    @objc.python_method
+    def deploy(self) -> None:
+        if self._busy or not self.deploy_button.isEnabled():
+            return
+        if not self._active_hash and not self._scope_confirmed:
+            self.show_projects_sheet(on_confirm=self.deploy)
+            return
+        ok, source, error = self._compose()
+        if not ok:
+            self._deployment_failed(error)
+            return
+        source_hash = revisions.hash_source(source)
+        source_changed = source_hash != self._active_hash
+        self._set_busy(True, "Validating, testing, and compiling…")
+
+        def prepared(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    self._deployment_failed(
+                        result.get("error", "Deployment preparation failed."))
+                    return
+                self.diagnostics_label.setStringValue_(
+                    "Activating revision and project coverage…")
+                self.model.perform({
+                    "type": "commit_deployment",
+                    "token": result["token"],
+                }, committed, timeout=30)
+            _on_main(apply)
+
+        def committed(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    self._deployment_failed(
+                        result.get("error", "Deployment failed."))
+                    return
+                old_id = self.rule_id
+                info = dict(result.get("rule") or {})
+                info["projection"] = rules_api.source_projection(
+                    info.get("source", source))
+                info["deployment"] = {
+                    "coverage": result.get("coverage") or {},
+                    "projects": self.projects,
+                    "impact_count": result.get("impact_count", 0),
+                }
+                self.rule.update(info)
+                self.source_scope = str(info.get("scope", "global"))
+                self.rule["new_draft"] = False
+                self.rule_id = str(info.get("id", self.rule_id))
+                self.full_source = str(info.get("source", source))
+                self._apply_projection(info["projection"])
+                coverage = result.get("coverage") or {}
+                self.coverage_mode = str(
+                    coverage.get("mode", self.coverage_mode))
+                self.selected_projects = list(
+                    coverage.get("selected_projects") or [])
+                self._active_coverage = {
+                    "mode": self.coverage_mode,
+                    "selected_projects": sorted(
+                        self.selected_projects
+                        if self.coverage_mode == "selected" else []),
+                }
+                self._active_hash = str(
+                    (result.get("active") or {}).get("source_hash", ""))
+                self._working_hash = str(
+                    info.get("working_hash", self._active_hash))
+                self._definition_hash = str(
+                    (info.get("definition") or {}).get("source_hash", ""))
+                self._saved_source_hash = revisions.hash_source(self.full_source)
+                self._source_dirty = False
+                self._coverage_dirty = False
+                self._dirty = False
+                self.rule["_deploy_failed"] = False
+                self.window.setDocumentEdited_(False)
+                self.window.setTitle_(f"Rule — {self.name}")
+                self.diagnostics_label.setStringValue_(
+                    f"Deployed to {result.get('impact_count', 0)} project(s).")
+                self._set_busy(False)
+                self._refresh_ui(sync_text=True)
+                if self.manager:
+                    if old_id != self.rule_id:
+                        self.manager.renamed(self, old_id, self.rule_id)
+                    self.manager.changed(result)
+            _on_main(apply)
+
+        self.model.perform({
+            "type": "prepare_deployment",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "source": source,
+            "source_changed": source_changed,
+            "expected_active_hash": self._active_hash,
+            "coverage": {
+                "mode": self.coverage_mode,
+                "selected_projects": self.selected_projects,
+            },
+        }, prepared, timeout=180)
+
+    @objc.python_method
+    def _deployment_failed(self, error: str) -> None:
+        self.rule["_deploy_failed"] = True
+        self.diagnostics_label.setStringValue_(
+            f"Deploy failed. The previous deployment is still active.\n{error}")
+        self.diagnostics_label.setHidden_(False)
         self._set_busy(False)
+
+    @objc.python_method
+    def save_draft(self) -> None:
+        if self._busy:
+            return
+        ok, source, error = self._compose()
+        if not ok:
+            self._deployment_failed(error)
+            return
+        self._set_busy(True, "Saving local draft…")
+        definition = self.rule.get("definition") or {}
+        if self.rule.get("scope") == "project":
+            request = {
+                "type": "save_project_draft",
+                "rule_id": self.rule_id,
+                "source": source,
+                "project_root": (
+                    definition.get("project_root") or self.project_root),
+                "expected_source_hash": definition.get("source_hash", ""),
+                "coverage": {
+                    "mode": self.coverage_mode,
+                    "selected_projects": self.selected_projects,
+                    "confirmed": self._scope_confirmed,
+                },
+            }
+        else:
+            request = {
+                "type": "save_library_draft",
+                "rule_id": self.rule_id,
+                "source": source,
+                "expected_source_hash": definition.get("source_hash", ""),
+                "expected_absent": not bool(definition),
+                "coverage": {
+                    "mode": self.coverage_mode,
+                    "selected_projects": self.selected_projects,
+                    "confirmed": self._scope_confirmed,
+                },
+            }
+
+        def complete(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    self._close_after_save = False
+                    self._deployment_failed(
+                        result.get("error", "Draft could not be saved."))
+                    return
+                self.rule.update(result)
+                self.rule["new_draft"] = not bool(self._active_hash)
+                self.full_source = str(result.get("source", source))
+                self._definition_hash = str(
+                    (result.get("definition") or {}).get("source_hash", ""))
+                self._working_hash = str(result.get("working_hash", ""))
+                self._saved_source_hash = revisions.hash_source(self.full_source)
+                self._source_dirty = False
+                self._dirty = self._coverage_dirty
+                self.window.setDocumentEdited_(self._dirty)
+                self.diagnostics_label.setStringValue_(
+                    "Draft saved. Deploy when ready.")
+                self._set_busy(False)
+                if self.manager:
+                    self.manager.changed(result)
+                if self._close_after_save:
+                    self._close_after_save = False
+                    self.window.close()
+            _on_main(apply)
+
+        self.model.perform(request, complete)
 
     @objc.python_method
     def confirm_lifecycle_action(self) -> None:
         if self._busy:
-            self._set_result("Wait for the current save or check to finish.")
             return
-        if self.rule.get("new_draft") and not self._dirty:
+        if self.rule.get("new_draft") and not self.rule.get("path"):
+            self._dirty = False
             self.window.close()
             return
         definition = self.rule.get("definition") or {}
-        if not self.rule.get("new_draft") and not definition:
-            self._set_result("Reload this rule before removing it.")
+        if not definition:
+            self.diagnostics_label.setStringValue_(
+                "Reload this rule before removing it.")
             return
         reverting = bool(
             self.rule.get("scope") == "project"
-            and self.rule.get("customized_from")
+            and self.rule.get("customized_from"))
+        state = self.manager.definition_state(definition)
+        if state["busy"]:
+            self.diagnostics_label.setStringValue_(
+                "Wait for the open editor to finish deploying.")
+            self.diagnostics_label.setHidden_(False)
+            return
+        self._lifecycle_confirmation_state = dict(state)
+        title = (
+            f"Use the library version of “{self.name}”?"
+            if reverting else f"Delete “{self.name}”?")
+        message = (
+            "This removes the project customization and preserves project coverage."
+            if reverting else
+            "Open findings without a remaining rule move to Reviewed. "
+            "Recorded source and audit history are kept."
         )
-        if self.rule.get("new_draft"):
-            title = f"Discard draft “{self.name}”?"
-            message = "This draft has not been saved, so no rule file will be deleted."
-            confirm_title = "Discard Draft"
-        elif reverting:
-            title = f"Use the shared version of “{self.name}”?"
-            message = (
-                "This removes only the project customization and preserves this "
-                "project's Run/Don't Run assignment."
+        if state["dirty"]:
+            message += (
+                f" {state['dirty']} open editor(s) have unsaved changes; "
+                "those changes will be discarded."
             )
-            confirm_title = "Use Shared Version"
-        else:
-            title = f"{self._lifecycle_action_title().rstrip('…')} “{self.name}”?"
-            message = (
-                "This removes exactly this definition. Open findings without "
-                "a remaining rule move to Reviewed; audit history is kept."
-            )
-            confirm_title = (
-                "Remove Rule" if self.rule.get("is_builtin") else "Delete Rule")
-        source_path = definition.get("source_path", "")
-        if source_path:
-            message += f"\n\nSource: {source_path}"
-        if self.manager and definition:
-            state = self.manager.definition_state(definition)
-            if state["busy"]:
-                self._set_result(
-                    "Another editor is saving this definition. Wait for it to finish.")
-                return
-            if state["dirty"]:
-                message += (
-                    f"\n\n{state['dirty']} open editor(s) have unsaved changes. "
-                    "Those changes will be discarded."
-                )
-            self._lifecycle_confirmation_state = dict(state)
-        else:
-            self._lifecycle_confirmation_state = None
         alert = NSAlert.alloc().init()
         alert.setAlertStyle_(NSAlertStyleCritical)
         alert.setMessageText_(title)
         alert.setInformativeText_(message)
-        confirm = alert.addButtonWithTitle_(confirm_title)
-        if hasattr(confirm, "setContentTintColor_"):
-            confirm.setContentTintColor_(NSColor.systemRedColor())
+        alert.addButtonWithTitle_(
+            "Use Library Version" if reverting else "Delete Rule")
         alert.addButtonWithTitle_("Cancel")
 
         def completed(response):
             if response == NSAlertFirstButtonReturn:
-                self._perform_lifecycle_action()
+                self._perform_lifecycle_action(reverting)
             else:
                 self._lifecycle_confirmation_state = None
 
@@ -569,32 +1390,20 @@ class RAPRuleEditorDocument(NSObject):
             self.window, completed)
 
     @objc.python_method
-    def _perform_lifecycle_action(self) -> None:
-        if self._busy:
-            self._set_result("Wait for the current save or check to finish.")
-            return
-        if self.rule.get("new_draft"):
-            self._dirty = False
-            self.window.setDocumentEdited_(False)
-            self.window.close()
-            return
+    def _perform_lifecycle_action(self, reverting: bool) -> None:
         definition = dict(self.rule.get("definition") or {})
         if (
-            self.manager
-            and definition
-            and self._lifecycle_confirmation_state is not None
+            self._lifecycle_confirmation_state is not None
             and self.manager.definition_state(definition)
             != self._lifecycle_confirmation_state
         ):
             self._lifecycle_confirmation_state = None
-            self._set_result(
+            self.diagnostics_label.setStringValue_(
                 "Open editors changed after confirmation. Review and try again.")
+            self.diagnostics_label.setHidden_(False)
             return
         self._lifecycle_confirmation_state = None
-        reverting = bool(
-            self.rule.get("scope") == "project"
-            and self.rule.get("customized_from")
-        )
+        self.manager.set_definition_pending(definition, True)
         request = {
             "type": "revert_to_shared" if reverting else "delete_rule",
             "rule_id": self.rule_id,
@@ -603,598 +1412,28 @@ class RAPRuleEditorDocument(NSObject):
         if reverting:
             request["project_root"] = (
                 definition.get("project_root") or self.project_root)
-        if self.manager:
-            self.manager.set_definition_pending(definition, True)
-        else:
-            self._set_busy(True)
-        self.status_label.setStringValue_(
-            "Using shared version…" if reverting else "Removing rule…")
 
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
                 if not result.get("ok"):
-                    if self.manager:
-                        self.manager.set_definition_pending(definition, False)
-                    else:
-                        self._set_busy(False)
-                    self._set_result(
-                        result.get("error", "The rule could not be removed."))
-                    self.status_label.setStringValue_("Remove failed")
+                    self.manager.set_definition_pending(definition, False)
+                    self.diagnostics_label.setStringValue_(
+                        result.get("error", "Rule could not be removed."))
                     return
-                self._dirty = False
-                self.window.setDocumentEdited_(False)
-                if self.manager:
-                    self.manager.lifecycle_completed(self, result)
-                else:
-                    self._set_busy(False)
-                self.window.close()
+                self.manager.lifecycle_completed(self, result)
             _on_main(apply)
 
         self.model.perform(request, complete)
 
     @objc.python_method
-    def _render(self) -> None:
-        focus_state = self._capture_focus_state()
-        self._capture()
-        self._callbacks.clear()
-        self._next_tag = 1
-        self._key_views = []
-        content = self.window.contentView()
-        for view in list(content.subviews()):
-            view.removeFromSuperview()
-        width = content.frame().size.width or WINDOW_W
-        height = content.frame().size.height or WINDOW_H
-
-        content.addSubview_(self._label(
-            "Name", (18, height - 38, 48, 20), 11, True))
-        name_field = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(68, height - 44, 430, 27))
-        name_field.setStringValue_(self.name)
-        name_field.setEditable_(True)
-        name_field.setDelegate_(self._text_delegate)
-        name_field.setFont_(NSFont.systemFontOfSize_(14))
-        name_field.setAutoresizingMask_(NSViewMinYMargin | NSViewWidthSizable)
-        content.addSubview_(name_field)
-        self.name_field = name_field
-        self._key_views.append(name_field)
-        scope = self.rule.get("scope", "project")
-        if self.rule.get("new_draft"):
-            draft = "Draft"
-        elif self.rule.get("draft_changes"):
-            draft = "Draft changes · previous revision active"
-        elif self.rule.get("active_hash"):
-            draft = "Active revision"
-        elif self.rule.get("enabled"):
-            draft = "Enabled legacy source · check to pin revision"
-        else:
-            draft = "Disabled · needs check"
-        content.addSubview_(self._label(
-            f"{scope} · {draft} · {Path(self.project_root).name or 'global'}",
-            (18, height - 64, 550, 18), 10, False,
-            NSColor.secondaryLabelColor()))
-
-        enabled = NSButton.alloc().initWithFrame_(
-            NSMakeRect(width - 170, height - 52, 152, 26))
-        enabled.setButtonType_(NSSwitchButton)
-        enabled.setTitle_(
-            "Runs by default"
-            if scope == "global" and not self.project_root
-            else "Runs in this project")
-        enabled.setState_(
-            NSControlStateValueOn if self.rule.get("enabled") else NSControlStateValueOff)
-        enabled.setEnabled_(
-            not self.rule.get("new_draft")
-            and bool(self.rule.get("active_hash") or self.rule.get("enabled")))
-        enabled.setAutoresizingMask_(NSViewMinXMargin | NSViewMinYMargin)
-        self._wire(enabled, lambda sender: self.toggle_enabled(
-            sender.state() == NSControlStateValueOn))
-        content.addSubview_(enabled)
-
-        controls_y = height - 112
-        if self.finding_context:
-            finding = self.finding_context.get("finding", {})
-            content.addSubview_(self._label(
-                "Tune from finding", (18, height - 96, 110, 18), 10, True))
-            content.addSubview_(self._label(
-                str(finding.get("message", "")).replace("\n", " "),
-                (130, height - 98, width - 392, 20), 10, False,
-                NSColor.secondaryLabelColor()))
-            content.addSubview_(self._button(
-                "This should be allowed", (width - 252, height - 103, 132, 27),
-                lambda _sender: self.add_finding_case(self.allowed_label)))
-            content.addSubview_(self._button(
-                "This is a violation", (width - 116, height - 103, 102, 27),
-                lambda _sender: self.add_finding_case(
-                    self._captured_severity_label())))
-            controls_y -= 46
-        y = controls_y
-        content.addSubview_(self._label("Runs when", (18, y + 3, 72, 20), 10, True))
-        x = 92
-        for kind, label in RUN_OPTIONS:
-            content.addSubview_(self._checkbox(
-                label, (x, y, 135, 24), kind in self.on,
-                lambda sender, value=kind: self.toggle_metadata(
-                    self.on, value, sender.state() == NSControlStateValueOn)))
-            x += 142
-
-        y -= 31
-        reads_title = "Reads (inferred)" if self.inputs_inferred else "Reads"
-        content.addSubview_(self._label(reads_title, (18, y + 3, 90, 20), 10, True))
-        x = 92
-        for kind, label in READ_OPTIONS:
-            content.addSubview_(self._checkbox(
-                label, (x, y, 135, 24), kind in self.inputs,
-                lambda sender, value=kind: self.toggle_metadata(
-                    self.inputs, value, sender.state() == NSControlStateValueOn)))
-            x += 142
-        if self.has_probes:
-            content.addSubview_(self._label(
-                "Includes command checks in function",
-                (width - 220, y - 18, 205, 16), 9, False,
-                NSColor.secondaryLabelColor()))
-
-        mode_y = y - 38
-        mode = NSSegmentedControl.alloc().initWithFrame_(
-            NSMakeRect(18, mode_y, 210, 26))
-        mode.setSegmentCount_(2)
-        mode.setLabel_forSegment_("Fuzzy Rule", 0)
-        mode.setLabel_forSegment_("Advanced Python", 1)
-        mode.setSelectedSegment_(1 if self.show_full else 0)
-        mode.setEnabled_forSegment_(self.simple_fuzzy, 0)
-        self._wire(mode, lambda sender: self.change_mode(sender.selectedSegment() == 1))
-        content.addSubview_(mode)
-        if self.managed_fuzzy and not self.show_full:
-            content.addSubview_(self._button(
-                "Hide examples" if self.show_examples else "Improve with examples",
-                (238, mode_y, 160, 26),
-                lambda _sender: self.toggle_examples()))
-        if self.custom:
-            content.addSubview_(self._label(
-                "Custom Python — simple fields are read-only",
-                (400, mode_y + 4, 320, 18), 10, False,
-                NSColor.systemOrangeColor()))
-
-        editor_bottom = 190
-        editor_top = mode_y - 10
-        self.description_editor = None
-        self.cases_editor = None
-        self.spec_editor = None
-        if self.show_full or not self.simple_fuzzy:
-            self._programmatic = True
-            editor_scroll, editor = self._text_scroll(
-                self.full_source,
-                (18, editor_bottom, width - 36, max(150, editor_top - editor_bottom)))
-            self._programmatic = False
-            content.addSubview_(editor_scroll)
-            self.editor = editor
-        else:
-            if self.managed_fuzzy:
-                description_top = editor_top
-                content.addSubview_(self._label(
-                    "Rule description", (18, description_top - 22, 180, 18),
-                    10, True))
-                examples_height = 120 if self.show_examples else 0
-                description_bottom = editor_bottom + examples_height
-                description_height = max(
-                    100, description_top - 24 - description_bottom)
-                self._programmatic = True
-                description_scroll, description_editor = self._text_scroll(
-                    self.description,
-                    (18, description_bottom, width - 36, description_height))
-                self._programmatic = False
-                content.addSubview_(description_scroll)
-                self.description_editor = description_editor
-                self.editor = description_editor
-                if self.show_examples:
-                    content.addSubview_(self._label(
-                        "Input / Output cases",
-                        (18, editor_bottom + 96, 180, 18), 10, True))
-                    cases_text = "\n\n".join(
-                        f"Input: {evidence}\nOutput: {label}"
-                        for evidence, label in self.cases)
-                    self._programmatic = True
-                    cases_scroll, cases_editor = self._text_scroll(
-                        cases_text, (18, editor_bottom, width - 36, 92))
-                    self._programmatic = False
-                    content.addSubview_(cases_scroll)
-                    self.cases_editor = cases_editor
-            else:
-                content.addSubview_(self._label(
-                    "PAW Decision", (18, editor_top - 22, 180, 18),
-                    10, True))
-                self._programmatic = True
-                spec_scroll, spec_editor = self._text_scroll(
-                    self.spec,
-                    (18, editor_bottom, width - 36,
-                     max(150, editor_top - editor_bottom - 26)))
-                self._programmatic = False
-                content.addSubview_(spec_scroll)
-                self.description_editor = spec_editor
-                self.spec_editor = spec_editor
-                self.editor = spec_editor
-
-        results_scroll = NSScrollView.alloc().initWithFrame_(
-            NSMakeRect(18, 54, width - 36, 105))
-        results_scroll.setHasVerticalScroller_(True)
-        results_scroll.setAutoresizingMask_(NSViewWidthSizable)
-        results = NSTextView.alloc().initWithFrame_(
-            NSMakeRect(0, 0, width - 52, 105))
-        results.setEditable_(False)
-        results.setSelectable_(True)
-        results.setRichText_(False)
-        results.setFont_(NSFont.userFixedPitchFontOfSize_(10))
-        results.setString_(str(self.rule.get("_results", "Ready. Save or Check Rule.")))
-        results_scroll.setDocumentView_(results)
-        content.addSubview_(results_scroll)
-        self.results = results
-        self._key_views.append(results)
-
-        lifecycle = self._button(
-            self._lifecycle_action_title(), (18, 12, 148, 30),
-            lambda _sender: self.confirm_lifecycle_action(),
-            role="destructive",
-            accessibility=self._lifecycle_action_title().rstrip("…"))
-        lifecycle.setEnabled_(not self._busy)
-        self.lifecycle_button = lifecycle
-        content.addSubview_(lifecycle)
-        self.status_label = self._label(
-            "Unsaved" if self._dirty else "Ready",
-            (174, 18, width - 526, 20), 10, False,
-            NSColor.secondaryLabelColor())
-        content.addSubview_(self.status_label)
-        more = self._button(
-            "More", (width - 330, 12, 70, 30), self.show_advanced)
-        more.setAutoresizingMask_(NSViewMinXMargin)
-        content.addSubview_(more)
-        activate_title = (
-            "Check & Activate" if self.rule.get("enabled")
-            else "Check & Enable"
-        )
-        check = self._button(
-            activate_title, (width - 274, 12, 124, 30),
-            lambda _sender: self.save(activate=True),
-            role="primary")
-        check.setKeyEquivalent_("\r")
-        check.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
-        check.setAutoresizingMask_(NSViewMinXMargin)
-        content.addSubview_(check)
-        save = self._button(
-            "Save Draft", (width - 142, 12, 74, 30),
-            lambda _sender: self.save())
-        save.setKeyEquivalent_("s")
-        save.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
-        save.setAutoresizingMask_(NSViewMinXMargin)
-        content.addSubview_(save)
-        close = self._button(
-            "Close", (width - 62, 12, 54, 30),
-            lambda _sender: self.window.performClose_(None))
-        close.setKeyEquivalent_("w")
-        close.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
-        close.setAutoresizingMask_(NSViewMinXMargin)
-        content.addSubview_(close)
-        self._finish_key_loop(focus_state)
-        self._has_rendered = True
+    def set_external_lifecycle_pending(self, pending: bool) -> None:
+        self._set_busy(pending, "Removing rule…" if pending else "")
 
     @objc.python_method
-    def editor_changed(self) -> None:
-        if self._programmatic:
-            return
-        if self.name_field:
-            self.name = str(self.name_field.stringValue()).strip()
-        self._dirty = True
-        self.window.setDocumentEdited_(True)
-        if self.status_label:
-            function_name = scaffold.slugify(
-                self.name or "rule").replace("-", "_")
-            self.status_label.setStringValue_(
-                f"Unsaved · Python function {function_name}")
-
-    @objc.python_method
-    def toggle_metadata(self, values: list[str], value: str, enabled: bool) -> None:
-        if enabled and value not in values:
-            values.append(value)
-        elif not enabled and value in values:
-            values.remove(value)
-        self.editor_changed()
-
-    @objc.python_method
-    def change_mode(self, full: bool) -> None:
-        ok, source, error = self._compose()
-        if not ok:
-            self._set_result(error)
-            return
-        self.full_source = source
-        if not full:
-            projection = rules_api.source_projection(self.full_source)
-            self._apply_projection(projection)
-            if self.custom:
-                self._set_result(
-                    projection.get("error", "Custom source requires Full Python."))
-                return
-        self.show_full = full
-        self._render()
-
-    @objc.python_method
-    def toggle_examples(self) -> None:
-        self._capture()
-        self.show_examples = not self.show_examples
-        self._render()
-
-    @objc.python_method
-    def add_finding_case(self, label: str) -> None:
-        if not self.simple_fuzzy or not self.finding_context:
-            self._set_result(
-                "Captured cases require a managed fuzzy rule. Use Advanced Python.")
-            return
-        evidence = ""
-        for item in reversed(self.finding_context.get("trace", [])):
-            if item.get("type") == "paw" and item.get("input"):
-                evidence = str(item["input"])
-                break
-            if item.get("type") == "evidence" and item.get("text"):
-                evidence = str(item["text"])
-                break
-        if not evidence:
-            self._set_result("No captured evidence is available for this finding.")
-            return
-        if self.managed_fuzzy:
-            if (evidence, label) not in self.cases:
-                self.cases.append((evidence, label))
-            self.show_examples = True
-        else:
-            case = f"Input: {evidence}\nOutput: {label}"
-            if case not in self.spec:
-                self.spec = self.spec.rstrip() + "\n\n" + case
-        self._review_on_activate = label == self.allowed_label
-        self.editor_changed()
-        self._render()
-
-    @objc.python_method
-    def _captured_severity_label(self) -> str:
-        severity = str(
-            (self.finding_context or {}).get("finding", {}).get(
-                "severity", "warn")
-        ).lower()
-        return {
-            "info": "INFO",
-            "warn": "WARNING",
-            "warning": "WARNING",
-            "critical": "CRITICAL",
-        }.get(severity, "WARNING")
-
-    @objc.python_method
-    def _set_result(self, text: str) -> None:
-        self.rule["_results"] = text
-        if self.results:
-            self.results.setString_(text)
-
-    @objc.python_method
-    def save(self, activate: bool = False) -> None:
-        if self._busy:
-            return
-        ok, source, error = self._compose()
-        if not ok:
-            self._set_result(error)
-            return
-        if (
-            self.name != self.original_name
-            and not self.rule.get("new_draft")
-            and not self._rename_confirmed
-        ):
-            alert = NSAlert.alloc().init()
-            alert.setMessageText_(f"Rename rule to “{self.name}”?")
-            alert.setInformativeText_(
-                "The immutable ID and folder stay unchanged. The Python "
-                "function and matching Shared/project override Names will update; "
-                "historical findings keep their recorded Name.")
-            alert.addButtonWithTitle_("Rename")
-            alert.addButtonWithTitle_("Cancel")
-
-            def completed(response):
-                if response == NSAlertFirstButtonReturn:
-                    self._rename_confirmed = True
-                    self.save(activate=activate)
-
-            alert.beginSheetModalForWindow_completionHandler_(
-                self.window, completed)
-            return
-        self._set_busy(True)
-        self.status_label.setStringValue_("Saving…")
-
-        def complete(result):
-            def apply():
-                self._set_busy(False)
-                if not result.get("ok"):
-                    self._rename_confirmed = False
-                    self._close_after_save = False
-                    self._set_result(result.get("error", "Save failed."))
-                    self.status_label.setStringValue_("Save failed")
-                    return
-                old_id = self.rule_id
-                self.rule_id = result.get("id", self.rule_id)
-                self.rule.update(result)
-                self.rule["new_draft"] = False
-                saved_source = result.get("source") or source
-                self.rule["source"] = saved_source
-                self.full_source = saved_source
-                self.original_name = self.name
-                self._rename_confirmed = False
-                self._dirty = False
-                self.window.setDocumentEdited_(False)
-                self.window.setTitle_(f"Rule Editor — {self.name}")
-                self.status_label.setStringValue_("Saved")
-                self._set_result(
-                    "Draft saved. Previous active revision is unchanged.")
-                if self.manager and old_id != self.rule_id:
-                    self.manager.renamed(self, old_id, self.rule_id)
-                if self._close_after_save:
-                    self._close_after_save = False
-                    self.window.close()
-                else:
-                    self._render()
-                if activate:
-                    self._activate()
-            _on_main(apply)
-
-        if self.name != self.original_name and not self.rule.get("new_draft"):
-            request = {
-                "type": "rename_rule",
-                "rule_id": self.rule_id,
-                "name": self.name,
-                "source": source,
-                "project_root": self.project_root,
-            }
-        else:
-            request = {
-                "type": "save_rule",
-                "rule_id": self.rule_id,
-                "source": source,
-                "scope": self.rule.get("scope", "project"),
-                "project_root": self.project_root,
-                "new_draft": bool(self.rule.get("new_draft")),
-                "strict": not self.custom,
-            }
-        self.model.perform(request, complete)
-
-    @objc.python_method
-    def _activate(self) -> None:
-        self._set_busy(True)
-        self._set_result("Checking and preparing rule…")
-
-        def complete(result):
-            def apply():
-                self._set_busy(False)
-                if result.get("ok"):
-                    self.rule["enabled"] = bool(result.get("enabled", True))
-                    active = result.get("active", {})
-                    self.rule["active_hash"] = active.get("source_hash", "")
-                    self.rule["working_hash"] = active.get("source_hash", "")
-                    self.rule["draft_changes"] = False
-                    self._set_result("Active revision is ready.")
-                    if self._review_on_activate and self.finding_context:
-                        ids = [
-                            int(item["id"])
-                            for item in self.finding_context.get("occurrences", [])
-                            if item.get("id")
-                        ]
-                        finding_id = self.finding_context.get("finding", {}).get("id")
-                        if not ids and finding_id:
-                            ids = [int(finding_id)]
-                        if ids:
-                            self.model.perform({
-                                "type": "review",
-                                "ids": ids,
-                                "reason": "false_positive",
-                            })
-                        self._review_on_activate = False
-                    self._render()
-                else:
-                    self._set_result(
-                        "Check failed — previous active revision still runs.\n"
-                        + result.get("error", "Could not activate rule."))
-            _on_main(apply)
-
-        self.model.perform({
-            "type": "activate_rule",
-            "rule_id": self.rule_id,
-            "project_root": self.project_root,
-            "enable": True,
-        }, complete, timeout=180)
-
-    @objc.python_method
-    def check_rule(self) -> None:
-        if self._busy:
-            return
-        ok, source, error = self._compose()
-        if not ok:
-            self._set_result(error)
-            return
-        self._set_busy(True)
-        self._set_result("Validating source…")
-
-        def validated(result):
-            if not result.get("ok"):
-                _on_main(lambda: (
-                    self._set_busy(False),
-                    self._set_result(result.get("error", "Rule is invalid."))))
-                return
-
-            def tested(test_result):
-                def apply():
-                    self._set_busy(False)
-                    if not test_result.get("ok"):
-                        self._set_result(test_result.get("error", "Check failed."))
-                    elif not test_result.get("total"):
-                        self._set_result("Source is valid. No PAW Input/Output cases found.")
-                    else:
-                        rows = [
-                            f"[{'PASS' if row.get('ok') else 'FAIL'}] "
-                            f"expected={row.get('want')!r} got={row.get('got')!r}"
-                            for row in test_result.get("results", [])
-                        ]
-                        self._set_result(
-                            f"{test_result.get('passed')}/{test_result.get('total')} "
-                            "PAW cases passed\n" + "\n".join(rows))
-                _on_main(apply)
-            self.model.perform({
-                "type": "test", "rule_id": self.rule_id,
-                "project_root": self.project_root, "source": source,
-            }, tested, timeout=180)
-
-        self.model.perform({
-            "type": "validate_rule", "source": source, "strict": not self.custom,
-        }, validated)
-
-    @objc.python_method
-    def toggle_enabled(self, enabled: bool) -> None:
-        if self.rule.get("new_draft"):
-            return
-        self.model.set_rule_enabled(
-            self.rule_id, self.project_root, enabled,
-            name=self.name,
-            callback=lambda result: _on_main(
-                lambda: self._enabled_result(result, enabled)))
-
-    @objc.python_method
-    def _enabled_result(self, result: dict[str, Any], enabled: bool) -> None:
-        if result.get("ok"):
-            self.rule["enabled"] = enabled
-            self._set_result("Rule enabled." if enabled else "Rule disabled.")
-        else:
-            self._set_result(result.get("error", "Could not change rule state."))
-        self._render()
-
-    @objc.python_method
-    def show_advanced(self, sender) -> None:
-        menu = NSMenu.alloc().initWithTitle_("Advanced")
-        self._advanced_menus.append(menu)
-        for title, callback, enabled in [
-            ("Compile and warm now", self.compile_now, bool(self.spec)),
-            ("Open Python file", self.open_external, bool(self.rule.get("path"))),
-            ("Copy Python path", self.copy_path, bool(self.rule.get("path"))),
-            ("Copy Rule ID", self.copy_rule_id, True),
-        ]:
-            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                title, "invoke:", "")
-            self._wire(item, lambda _sender, fn=callback: fn())
-            item.setEnabled_(enabled)
-            menu.addItem_(item)
-        menu.popUpMenuPositioningItem_atLocation_inView_(
-            None, (0, sender.bounds().size.height), sender)
-
-    @objc.python_method
-    def compile_now(self) -> None:
-        ok, source, error = self._compose()
-        if not ok:
-            self._set_result(error)
-            return
-        self._set_result("Compiling and warming…")
-        self.model.perform({
-            "type": "compile", "rule_id": self.rule_id,
-            "project_root": self.project_root, "source": source,
-        }, lambda result: _on_main(lambda: self._set_result(
-            "PAW rule ready." if result.get("ok")
-            else result.get("error", "Compile failed."))), timeout=180)
+    def copy_rule_id(self) -> None:
+        board = NSPasteboard.generalPasteboard()
+        board.clearContents()
+        board.setString_forType_(self.rule_id, NSPasteboardTypeString)
 
     @objc.python_method
     def open_external(self) -> None:
@@ -1203,50 +1442,61 @@ class RAPRuleEditorDocument(NSObject):
             NSWorkspace.sharedWorkspace().openFile_(path)
 
     @objc.python_method
-    def copy_path(self) -> None:
-        path = str(self.rule.get("path", ""))
-        board = NSPasteboard.generalPasteboard()
-        board.clearContents()
-        board.setString_forType_(path, NSPasteboardTypeString)
-        self._set_result("Path copied.")
-
-    @objc.python_method
-    def copy_rule_id(self) -> None:
-        board = NSPasteboard.generalPasteboard()
-        board.clearContents()
-        board.setString_forType_(self.rule_id, NSPasteboardTypeString)
-        self._set_result(f"Rule ID {self.rule_id} copied.")
-
-    @objc.python_method
     def show(self) -> None:
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self.window.makeKeyAndOrderFront_(None)
-        self.window.center()
+        self.window.contentView().layoutSubtreeIfNeeded()
+        self._fit_spec_width()
+        if not self._shown:
+            self.window.center()
+            self.window.makeFirstResponder_(self.name_field)
+            if self.rule.get("new_draft"):
+                self.name_field.selectText_(None)
+            self._shown = True
+
+    def windowDidResize_(self, _notification):
+        self._fit_spec_width()
 
     def windowShouldClose_(self, _sender):
+        if self._advanced_window and _sender == self._advanced_window:
+            return True
         if self._busy:
-            self._set_result("Wait for the current save or check to finish.")
             return False
         if not self._dirty:
             return True
         alert = NSAlert.alloc().init()
-        alert.setMessageText_("Save changes to this rule?")
-        alert.setInformativeText_("The Python draft has unsaved changes.")
-        alert.addButtonWithTitle_("Save")
+        alert.setMessageText_("Save this draft before closing?")
+        alert.setInformativeText_(
+            "Saving keeps your edits local. It does not deploy them.")
+        alert.addButtonWithTitle_("Save Draft")
         alert.addButtonWithTitle_("Discard")
         alert.addButtonWithTitle_("Cancel")
 
         def completed(response):
             if response == NSAlertFirstButtonReturn:
                 self._close_after_save = True
-                self.save()
+                self.save_draft()
             elif response == NSAlertSecondButtonReturn:
                 self._dirty = False
                 self.window.close()
-        alert.beginSheetModalForWindow_completionHandler_(self.window, completed)
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
         return False
 
-    def windowWillClose_(self, _notification):
+    def windowWillClose_(self, notification):
+        if self._advanced_window and notification.object() == self._advanced_window:
+            self._advanced_window = None
+            self._advanced_editor = None
+            self._advanced_apply = None
+            return
+        if self._advanced_window:
+            advanced = self._advanced_window
+            self._advanced_window = None
+            self._advanced_editor = None
+            self._advanced_apply = None
+            advanced.setDelegate_(None)
+            advanced.close()
         if self.manager:
             self.manager.closed(self)
 
@@ -1263,7 +1513,7 @@ class RuleEditorManager:
         self._pending_sources: set[str] = set()
 
     def open(self, rule: dict[str, Any], project_root: str) -> None:
-        key = (project_root or "", str(rule.get("id", "rule")))
+        key = (project_root or "", str(rule.get("id", "")))
         document = self.documents.get(key)
         if document is None:
             document = RAPRuleEditorDocument.alloc().init()
@@ -1286,12 +1536,15 @@ class RuleEditorManager:
         self.documents.pop((document.project_root, old_id), None)
         self.documents[(document.project_root, new_id)] = document
 
+    def changed(self, result: dict[str, Any]) -> None:
+        if self.on_changed:
+            self.on_changed(result)
+
     def lifecycle_completed(
         self, document: RAPRuleEditorDocument, result: dict[str, Any]
     ) -> None:
         self.definition_removed(document.rule.get("definition") or {})
-        if self.on_changed:
-            self.on_changed(result)
+        self.changed(result)
 
     def definition_state(self, definition: dict[str, Any]) -> dict[str, int]:
         source_path = str(definition.get("source_path", ""))
@@ -1330,7 +1583,6 @@ class RuleEditorManager:
             current = document.rule.get("definition") or {}
             if str(current.get("source_path", "")) != source_path:
                 continue
-            document.set_external_lifecycle_pending(False)
             document._dirty = False
-            document.window.setDocumentEdited_(False)
+            document.set_external_lifecycle_pending(False)
             document.window.close()

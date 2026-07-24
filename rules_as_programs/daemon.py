@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import secrets
 import socketserver
 import sys
 import threading
@@ -94,6 +95,8 @@ class _RulesCache:
                     active_rule.title = rule.title
                     active_rule.source_path = info["cache_path"]
                     active_rule.working_source_path = rule.source_path
+                    active_rule.compiler = str(info.get("compiler", ""))
+                    active_rule.program_id = str(info.get("program_id", ""))
                     active_rules.append(active_rule)
                     continue
             active_rules.append(rule)
@@ -133,6 +136,8 @@ class Daemon:
         self._state_lock = threading.Lock()
         self._warm_state: dict[str, dict[str, dict[str, Any]]] = {}
         self._project_activity: dict[str, dict[str, Any]] = {}
+        self._prepared_deployments: dict[str, dict[str, Any]] = {}
+        self._deployment_lock = threading.Lock()
         self._last_successful_audit = 0.0
         self._stop = threading.Event()
 
@@ -209,7 +214,8 @@ class Daemon:
             if rule is None or rule.channel != "attention":
                 return
             context = RuleContext(
-                ledger, self.runtime, rule.inputs, rule.probes)
+                ledger, self.runtime, rule.inputs, rule.probes,
+                rule.compiler or None)
             result = rule.fn(context)
             if not result:
                 return
@@ -251,7 +257,8 @@ class Daemon:
                         project_root, rule.id, "failed", "PAW SDK is unavailable")
                     results[rule.id] = False
                     continue
-                pid = self.runtime.program_id_for_spec(rule.spec, None)
+                pid = self.runtime.program_id_for_spec(
+                    rule.spec, rule.compiler or None)
                 if not pid:
                     self._set_warm_state(
                         project_root, rule.id, "failed", "Rule compilation failed")
@@ -553,7 +560,8 @@ class Daemon:
         return {"ok": True, "program_id": pid, "finalized": finalize}
 
     def test_rule(self, rule_id: str, project_root: str,
-                  source: str | None = None) -> dict[str, Any]:
+                  source: str | None = None,
+                  compiler: str | None = None) -> dict[str, Any]:
         if not self.runtime.available:
             return {"ok": False, "error": "PAW SDK not available"}
         rule = self._rule_from(rule_id, project_root, source)
@@ -563,7 +571,7 @@ class Daemon:
         if not rule.spec or not cases:
             return {"ok": True, "results": [], "passed": 0, "total": 0,
                     "note": "no PAW spec Input/Output cases to test"}
-        pid = self.runtime.program_id_for_spec(rule.spec, None)
+        pid = self.runtime.program_id_for_spec(rule.spec, compiler)
         if not pid:
             return {"ok": False, "error": "compile failed"}
         self.runtime.warm(pid)
@@ -576,6 +584,371 @@ class Daemon:
             passed += 1 if ok else 0
             results.append({"want": want_u, "got": got_raw, "ok": ok})
         return {"ok": True, "results": results, "passed": passed, "total": len(cases)}
+
+    def _project_catalog(self) -> list[dict[str, str]]:
+        discovered = cursor_projects.discover_projects(limit=100)
+        by_path = {
+            str(item["path"]): {
+                "path": str(item["path"]),
+                "name": str(item.get("name") or Path(item["path"]).name),
+            }
+            for item in discovered if item.get("path")
+        }
+        with self._state_lock:
+            known = list(self.known_projects)
+        for path in known:
+            by_path.setdefault(path, {"path": path, "name": Path(path).name})
+        return sorted(
+            by_path.values(), key=lambda item: item["name"].lower())
+
+    def deployment_plan(
+        self, rule_id: str, project_root: str = ""
+    ) -> dict[str, Any]:
+        projects = self._project_catalog()
+        if project_root and all(
+            item["path"] != project_root for item in projects
+        ):
+            projects.append({
+                "path": project_root,
+                "name": Path(project_root).name,
+            })
+            projects.sort(key=lambda item: item["name"].lower())
+        roots = [item["path"] for item in projects]
+        info = rules_api.get_rule(rule_id, project_root or None)
+        if info and info.get("scope") == "builtin":
+            info = None
+        coverage = (
+            rules_api.rule_coverage(rule_id, roots)
+            if info else {
+                "mode": "selected",
+                "all_projects": False,
+                "selected_projects": [project_root] if project_root else [],
+            }
+        )
+        draft_coverage = rules_api.deployment_coverage_draft(rule_id)
+        source_path = str(
+            ((info or {}).get("definition") or {}).get("source_path", ""))
+        consumers = []
+        overrides = []
+        for root in roots:
+            effective = rules_api.get_rule(rule_id, root)
+            effective_path = str(
+                ((effective or {}).get("definition") or {}).get(
+                    "source_path", ""))
+            if effective and effective.get("scope") == "project":
+                overrides.append(root)
+            if source_path and effective_path == source_path and rules_api.is_enabled(
+                rule_id, root
+            ):
+                consumers.append(root)
+        return {
+            "ok": True,
+            "rule_id": rule_id,
+            "definition": (info or {}).get("definition"),
+            "source_scope": (info or {}).get("scope", ""),
+            "working_hash": (info or {}).get("working_hash", ""),
+            "active_hash": (info or {}).get("active_hash", ""),
+            "coverage": coverage,
+            "draft_coverage": draft_coverage,
+            "projects": projects,
+            "consumers": consumers,
+            "project_overrides": overrides,
+            "impact_count": len(consumers),
+        }
+
+    def prepare_rule_deployment(self, req: dict[str, Any]) -> dict[str, Any]:
+        rule_id = str(req.get("rule_id", ""))
+        source = str(req.get("source", ""))
+        project_root = str(req.get("project_root", ""))
+        valid, error = rules_api.validate_editor_source(source)
+        if not valid:
+            return {"ok": False, "error": error}
+        projection = rules_api.source_projection(source)
+        if projection.get("id") != rule_id:
+            return {"ok": False, "error": "source ID does not match the rule"}
+        current = rules_api.get_rule(rule_id, project_root or None)
+        if current and current.get("scope") == "builtin":
+            current = None
+        current_active = (current or {}).get("active") or {}
+        coverage_roots = [
+            item["path"] for item in self._project_catalog()]
+        expected_coverage = (
+            rules_api.rule_coverage(rule_id, coverage_roots)
+            if current else {
+                "mode": "selected",
+                "all_projects": False,
+                "selected_projects": [],
+            }
+        )
+        expected_active_hash = str(
+            req.get("expected_active_hash", "")
+            if "expected_active_hash" in req
+            else current_active.get("source_hash", ""))
+        source_changed = bool(req.get("source_changed", True))
+        compiler = str(
+            req.get("compiler")
+            if req.get("compiler") is not None
+            else current_active.get("compiler", ""))
+        tested = {"ok": True, "results": [], "passed": 0, "total": 0}
+        program_id = str(current_active.get("program_id", ""))
+        if source_changed or not current_active:
+            rule = self._rule_from(rule_id, project_root, source)
+            if rule is None:
+                return {"ok": False, "error": "rule could not be loaded"}
+            if rule.spec:
+                tested = self.test_rule(
+                    rule_id, project_root, source, compiler or None)
+                if not tested.get("ok"):
+                    return tested
+                if tested.get("total") and tested.get("passed") != tested.get("total"):
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"{tested.get('passed', 0)}/"
+                            f"{tested.get('total', 0)} examples passed"),
+                        "test": tested,
+                    }
+                compiled = self.compile_rule(
+                    rule_id,
+                    project_root,
+                    finalize=compiler == "paw-ft-bs48",
+                    source=source,
+                )
+                if not compiled.get("ok"):
+                    return compiled
+                program_id = str(compiled.get("program_id", ""))
+        token = secrets.token_urlsafe(24)
+        prepared = {
+            "token": token,
+            "rule_id": rule_id,
+            "source": source,
+            "source_hash": revisions.hash_source(source),
+            "project_root": project_root,
+            "definition": (current or {}).get("definition"),
+            "source_scope": (current or {}).get("scope", ""),
+            "expected_active_hash": expected_active_hash,
+            "expected_coverage": expected_coverage,
+            "compiler": compiler,
+            "program_id": program_id,
+            "coverage": dict(req.get("coverage") or {}),
+            "source_changed": source_changed,
+            "created_at": time.time(),
+            "test": tested,
+        }
+        with self._state_lock:
+            self._prepared_deployments[token] = prepared
+        return {
+            "ok": True,
+            "token": token,
+            "source_hash": prepared["source_hash"],
+            "test": tested,
+            "program_id": program_id,
+        }
+
+    def commit_rule_deployment(self, token: str) -> dict[str, Any]:
+        with self._deployment_lock:
+            return self._commit_rule_deployment(token)
+
+    def _commit_rule_deployment(self, token: str) -> dict[str, Any]:
+        with self._state_lock:
+            prepared = self._prepared_deployments.pop(token, None)
+        if not prepared:
+            return {"ok": False, "error": "deployment expired; prepare again"}
+        if time.time() - float(prepared.get("created_at", 0)) > 900:
+            return {"ok": False, "error": "deployment expired; prepare again"}
+        rule_id = prepared["rule_id"]
+        project_root = prepared.get("project_root", "")
+        current = rules_api.get_rule(rule_id, project_root or None)
+        if current and current.get("scope") == "builtin":
+            current = None
+        prepared_definition = prepared.get("definition") or {}
+        current_definition = (current or {}).get("definition") or {}
+        if prepared_definition:
+            if (
+                str(current_definition.get("source_path", ""))
+                != str(prepared_definition.get("source_path", ""))
+                or str(current_definition.get("source_hash", ""))
+                != str(prepared_definition.get("source_hash", ""))
+            ):
+                return {
+                    "ok": False,
+                    "error": "the working draft changed; prepare again",
+                }
+        elif current:
+            return {
+                "ok": False,
+                "error": "a rule with this ID appeared; prepare again",
+            }
+        current_active = (current or {}).get("active") or {}
+        if str(current_active.get("source_hash", "")) != str(
+            prepared.get("expected_active_hash", "")
+        ):
+            return {
+                "ok": False,
+                "error": "the deployed revision changed; prepare again",
+            }
+        migrated_to_library = bool(
+            current and current.get("scope") == "project")
+        if migrated_to_library and (
+            config.global_rules_dir() / rule_id / "rule.py"
+        ).exists():
+            return {
+                "ok": False,
+                "error": "My Rule Library already contains this rule ID",
+                "conflict": True,
+            }
+        expected_hash = (
+            ""
+            if migrated_to_library
+            else str(prepared_definition.get("source_hash", ""))
+        )
+        projects = self._project_catalog()
+        roots = [item["path"] for item in projects]
+        old_coverage = rules_api.rule_coverage(rule_id, roots)
+        expected_coverage = prepared.get("expected_coverage") or {}
+        if prepared_definition and (
+            str(old_coverage.get("mode")) != str(expected_coverage.get("mode"))
+            or sorted(old_coverage.get("selected_projects") or [])
+            != sorted(expected_coverage.get("selected_projects") or [])
+        ):
+            return {
+                "ok": False,
+                "error": "project coverage changed; prepare again",
+                "expected_coverage": expected_coverage,
+                "current_coverage": old_coverage,
+            }
+        saved = rules_api.save_library_draft(
+            rule_id,
+            prepared["source"],
+            expected_source_hash=expected_hash,
+            expected_absent=not bool(current) or migrated_to_library,
+        )
+        if not saved.get("ok"):
+            return saved
+        path = saved["path"]
+        previous_active = revisions.active_info(rule_id, path)
+        active = (
+            revisions.activate(
+                rule_id,
+                path,
+                saved["source"],
+                compiler=prepared.get("compiler") or None,
+                program_id=prepared.get("program_id") or None,
+            )
+            if prepared.get("source_changed") or not previous_active
+            else previous_active
+        )
+        coverage_request = prepared.get("coverage") or {}
+        coverage = rules_api.set_rule_coverage(
+            rule_id,
+            str(coverage_request.get("mode", "selected")),
+            list(coverage_request.get("selected_projects") or []),
+            roots,
+            name=str(saved.get("name", "")),
+        )
+        if not coverage.get("ok"):
+            revisions.restore_active(rule_id, path, previous_active)
+            if not current or migrated_to_library:
+                definition = saved.get("definition") or {}
+                rules_api.delete_rule_definition(
+                    rule_id,
+                    "global",
+                    None,
+                    str(definition.get("source_path", "")),
+                    str(definition.get("source_hash", "")),
+                    project_roots=roots,
+                )
+            if migrated_to_library:
+                restored = rules_api.set_rule_coverage(
+                    rule_id,
+                    str(old_coverage.get("mode", "selected")),
+                    list(old_coverage.get("selected_projects") or []),
+                    roots,
+                    name=str(saved.get("name", "")),
+                )
+                if not restored.get("ok"):
+                    all_projects = old_coverage.get("mode") == "all"
+                    rules_api.set_enabled(rule_id, all_projects, None)
+                    selected_before = set(
+                        old_coverage.get("selected_projects") or [])
+                    for root in roots:
+                        rules_api.set_enabled(
+                            rule_id,
+                            all_projects or root in selected_before,
+                            root,
+                            name=str(saved.get("name", "")))
+            self.rules_cache.invalidate()
+            return coverage
+        if migrated_to_library:
+            definition = current_definition
+            removed = rules_api.delete_rule_definition(
+                rule_id,
+                "project",
+                str(definition.get("project_root") or project_root),
+                str(definition.get("source_path", "")),
+                str(definition.get("source_hash", "")),
+                project_roots=roots,
+            )
+            if not removed.get("ok"):
+                restored = rules_api.set_rule_coverage(
+                    rule_id,
+                    str(old_coverage.get("mode", "selected")),
+                    list(old_coverage.get("selected_projects") or []),
+                    roots,
+                    name=str(saved.get("name", "")),
+                )
+                if not restored.get("ok"):
+                    all_projects = old_coverage.get("mode") == "all"
+                    rules_api.set_enabled(rule_id, all_projects, None)
+                    selected_before = set(
+                        old_coverage.get("selected_projects") or [])
+                    for root in roots:
+                        rules_api.set_enabled(
+                            rule_id,
+                            all_projects or root in selected_before,
+                            root,
+                            name=str(saved.get("name", "")))
+                revisions.restore_active(rule_id, path, previous_active)
+                global_definition = saved.get("definition") or {}
+                rules_api.delete_rule_definition(
+                    rule_id,
+                    "global",
+                    None,
+                    str(global_definition.get("source_path", "")),
+                    str(global_definition.get("source_hash", "")),
+                    project_roots=roots,
+                )
+                self.rules_cache.invalidate()
+                return removed
+        rules_api.clear_deployment_coverage_draft(rule_id)
+        self.rules_cache.invalidate()
+        desired = (
+            roots
+            if coverage.get("mode") == "all"
+            else list(coverage.get("selected_projects") or [])
+        )
+        affected = []
+        canonical_path = str(Path(path).resolve())
+        for root in desired:
+            effective = rules_api.get_rule(rule_id, root)
+            effective_path = str(
+                ((effective or {}).get("definition") or {}).get(
+                    "source_path", ""))
+            if effective_path and str(Path(effective_path).resolve()) == canonical_path:
+                affected.append(root)
+        for root in affected:
+            with self._state_lock:
+                self._warmed.add(root)
+            self.work.submit(self._warm, root)
+        return {
+            "ok": True,
+            "rule": rules_api.get_rule(rule_id, None),
+            "active": active,
+            "coverage": coverage,
+            "affected_projects": affected,
+            "impact_count": len(affected),
+            "migrated_to_library": migrated_to_library,
+        }
 
     # --- request dispatch ------------------------------------------------
     def dispatch(self, req: dict[str, Any]) -> dict[str, Any]:
@@ -802,14 +1175,24 @@ class Daemon:
                 "builtins": scaffold.builtin_ids(),
             }
         if rtype == "rule_get":
+            project_root = req.get("project_root") or ""
             info = rules_api.get_rule(
-                req["rule_id"], req.get("project_root") or None)
+                req["rule_id"], project_root or None)
             if info:
                 info["projection"] = rules_api.source_projection(
                     info.get("source", ""))
                 info["is_builtin"] = info["id"] in set(scaffold.builtin_ids())
+                info["deployment"] = self.deployment_plan(
+                    info["id"], project_root)
             return {"ok": bool(info), "rule": info,
                     **({} if info else {"error": "rule not found"})}
+        if rtype == "deployment_plan":
+            return self.deployment_plan(
+                req["rule_id"], req.get("project_root", ""))
+        if rtype == "prepare_deployment":
+            return self.prepare_rule_deployment(req)
+        if rtype == "commit_deployment":
+            return self.commit_rule_deployment(str(req.get("token", "")))
         if rtype == "validate_rule":
             if req.get("strict"):
                 valid, error = rules_api.validate_editor_source(
@@ -819,12 +1202,10 @@ class Daemon:
             return {"ok": valid, "error": error}
         if rtype == "new_rule_draft":
             project_root = req.get("project_root", "")
-            if not project_root:
-                return {"ok": False, "error": "project_root is required"}
-            existing = {rule["id"] for rule in rules_api.list_rules(project_root)}
+            existing = {rule["id"] for rule in rules_api.list_rules(None)}
             rule_id = new_rule_id()
             while rule_id in existing or (
-                config.project_rules_dir(project_root) / rule_id / "rule.py"
+                config.global_rules_dir() / rule_id / "rule.py"
             ).exists():
                 rule_id = new_rule_id()
             template = req.get("template", "paw")
@@ -842,7 +1223,7 @@ class Daemon:
                         if template == "python"
                         else "Use Git for source synchronization."
                     ),
-                    "scope": "project",
+                    "scope": "global",
                     "project_root": project_root,
                     "source": source,
                     "projection": rules_api.source_projection(source),
@@ -850,8 +1231,48 @@ class Daemon:
                     "enabled": False,
                     "muted": False,
                     "new_draft": True,
+                    "deployment": self.deployment_plan(
+                        rule_id, project_root),
                 },
             }
+        if rtype == "save_library_draft":
+            valid, error = rules_api.validate_editor_source(
+                req.get("source", ""))
+            if not valid:
+                return {"ok": False, "error": error}
+            result = rules_api.save_library_draft(
+                req["rule_id"],
+                req.get("source", ""),
+                expected_source_hash=req.get("expected_source_hash", ""),
+                expected_absent=bool(req.get("expected_absent")),
+            )
+            if result.get("ok"):
+                if req.get("coverage"):
+                    coverage_saved = rules_api.save_deployment_coverage_draft(
+                        result["id"], dict(req["coverage"]))
+                    if not coverage_saved.get("ok"):
+                        return coverage_saved
+                self.rules_cache.invalidate()
+            return result
+        if rtype == "save_project_draft":
+            valid, error = rules_api.validate_editor_source(
+                req.get("source", ""))
+            if not valid:
+                return {"ok": False, "error": error}
+            result = rules_api.save_project_draft(
+                req["rule_id"],
+                req.get("source", ""),
+                req["project_root"],
+                expected_source_hash=req.get("expected_source_hash", ""),
+            )
+            if result.get("ok"):
+                if req.get("coverage"):
+                    coverage_saved = rules_api.save_deployment_coverage_draft(
+                        result["id"], dict(req["coverage"]))
+                    if not coverage_saved.get("ok"):
+                        return coverage_saved
+                self.rules_cache.invalidate()
+            return result
         if rtype == "save_rule":
             if req.get("strict"):
                 valid, error = rules_api.validate_editor_source(
@@ -923,6 +1344,8 @@ class Daemon:
                 rule_id, scope, project_root, overwrite=replace)
             if not installed:
                 return {"ok": False, "error": "Built-in rule could not be installed."}
+            if scope == "global":
+                rules_api.set_enabled(loaded_builtin[0].id, False, None)
             self.rules_cache.invalidate()
             return {"ok": True, "id": rule_id, "path": str(installed), "scope": scope}
         if rtype == "convert_rules":

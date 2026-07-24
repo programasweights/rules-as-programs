@@ -1186,8 +1186,9 @@ class MacOSController(NSObject):
         from .rule_editor import RuleEditorManager
         rule = dict(rule)
         if rule.get("scope") == "builtin":
-            rule["scope"] = "project"
+            rule["scope"] = "global"
             rule["path"] = ""
+            rule["new_draft"] = True
         if self._studio is None:
             self._studio = RuleEditorManager(
                 self.model, self._rule_document_changed)
@@ -1234,9 +1235,6 @@ class MacOSController(NSObject):
     ) -> None:
         project_root = project_root or (
             self.selected_project if self.rules_context == "project" else "")
-        if not project_root:
-            self._set_banner("Choose a project before creating a rule.")
-            return
 
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
@@ -1280,8 +1278,8 @@ class MacOSController(NSObject):
         self.model.perform({
             "type": "add_builtin",
             "rule_id": rule_id,
-            "scope": "project",
-            "project_root": self.selected_project,
+            "scope": "global",
+            "project_root": "",
             "replace": replace,
         }, complete)
 

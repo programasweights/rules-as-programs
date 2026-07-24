@@ -830,7 +830,7 @@ class PopoverRenderer:
             "+ Add Rule", (326, content_top + 5, 88, 28),
             lambda sender: (
                 self.controller.show_add_rule_menu(sender)
-                if not library else self.controller.begin_add_rule("", sender)
+                if not library else self.controller._new_rule("")
             ),
             role="primary"))
         root.addSubview_(self._label(
@@ -877,7 +877,7 @@ class PopoverRenderer:
                 ),
                 "+ Add rule",
                 lambda: (
-                    self.controller.begin_add_rule("", None)
+                    self.controller._new_rule("")
                     if library
                     else self.controller.show_add_rule_menu(None)
                 ))

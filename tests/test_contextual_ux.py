@@ -18,7 +18,10 @@ from rules_as_programs.core import revisions
 from rules_as_programs.core.store import finding_fingerprint
 from rules_as_programs.ui.model import UISnapshot
 from rules_as_programs.ui.status import status_presentation
-from rules_as_programs.ui.layout import fit_popover_layout
+from rules_as_programs.ui.layout import (
+    fit_popover_layout,
+    fit_rule_editor_layout,
+)
 
 
 def _snapshot(*, findings=None, attention=None, status="ready", health="ready"):
@@ -344,6 +347,26 @@ def test_popover_height_fits_content_and_caps_scroll():
     assert compact.height < normal.height < capped.height
     assert status.height > normal.height
     assert capped.height == 520
+
+
+def test_rule_editor_layout_fits_mode_and_visible_screen():
+    managed = fit_rule_editor_layout(
+        advanced=False, available_width=1400, available_height=900)
+    advanced = fit_rule_editor_layout(
+        advanced=True, available_width=1400, available_height=900)
+    compact = fit_rule_editor_layout(
+        advanced=False, available_width=700, available_height=560)
+    with_callout = fit_rule_editor_layout(
+        advanced=False, optional_height=72,
+        available_width=1400, available_height=900)
+
+    assert (managed.width, managed.height) == (760, 600)
+    assert advanced.width > managed.width
+    assert advanced.height > managed.height
+    assert compact.width == 680
+    assert compact.height == 520
+    assert compact.stacked_metadata
+    assert with_callout.height > managed.height
 
 
 def test_timed_snooze_api_is_not_part_of_finding_workflow():
