@@ -32,7 +32,13 @@ from Foundation import NSMakeRange, NSMakeRect, NSObject
 from PyObjCTools import AppHelper
 
 from .. import config
-from .macos_controls import RAPCommandWindow, appkit_text_length
+from .macos_controls import (
+    ButtonRole,
+    RAPCommandWindow,
+    RAPHoverButton,
+    appkit_text_length,
+    style_button,
+)
 from .macos_views import RAPFlippedView
 from .model import UIModel
 
@@ -121,10 +127,14 @@ class RAPFindingInspector(NSObject):
     def _button(
         self, title: str, frame: tuple[float, float, float, float],
         callback: Callable[[], None], *, focus_id: str,
+        role: ButtonRole = "secondary",
     ) -> NSButton:
-        button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
+        button_class = (
+            RAPHoverButton if role in ("flat", "icon") else NSButton)
+        button = button_class.alloc().initWithFrame_(NSMakeRect(*frame))
         button.setTitle_(title)
         button.setIdentifier_(focus_id)
+        style_button(button, role=role)
         return self._wire(button, callback)
 
     @staticmethod
@@ -272,7 +282,8 @@ class RAPFindingInspector(NSObject):
         content.addSubview_(edit)
         reviewed = self._button(
             "Mark Reviewed", (WINDOW_W - 112, 16, 98, 30),
-            self.mark_reviewed, focus_id="header.mark-reviewed")
+            self.mark_reviewed, focus_id="header.mark-reviewed",
+            role="primary")
         reviewed.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(reviewed)
 
@@ -327,11 +338,11 @@ class RAPFindingInspector(NSObject):
                     else "View Python"
                 ),
                 (PAD, y, 110, 26), self.toggle_source,
-                focus_id="rule.toggle-source"))
+                focus_id="rule.toggle-source", role="flat"))
         document.addSubview_(self._button(
             "Tune Rule", (PAD + 118, y, 90, 26),
             lambda: self.manager.edit_rule(self.detail),
-            focus_id="rule.tune"))
+            focus_id="rule.tune", role="flat"))
         y += 36
         rule_text = source if self.show_python else spec
         rule_heading = "Python source" if self.show_python else "PAW rule specification"
@@ -353,11 +364,11 @@ class RAPFindingInspector(NSObject):
             "Raw event log", (PAD, y, 180, 20), size=12, bold=True))
         document.addSubview_(self._button(
             "Copy", (WINDOW_W - 190, y - 4, 66, 26),
-            self.copy_raw, focus_id="raw.copy"))
+            self.copy_raw, focus_id="raw.copy", role="flat"))
         document.addSubview_(self._button(
             "JSON" if not self.raw_json else "Readable",
             (WINDOW_W - 116, y - 4, 96, 26),
-            self.toggle_raw, focus_id="raw.toggle-format"))
+            self.toggle_raw, focus_id="raw.toggle-format", role="flat"))
         y += 26
         raw_text = self._raw_log_text()
         raw_scroll, raw_view = self._text_view(
@@ -370,20 +381,20 @@ class RAPFindingInspector(NSObject):
         if ledger.get("has_earlier"):
             document.addSubview_(self._button(
                 "Load earlier", (PAD, y, 92, 26),
-                self.load_earlier, focus_id="ledger.load-earlier"))
+                self.load_earlier, focus_id="ledger.load-earlier", role="flat"))
         document.addSubview_(self._button(
             "Jump to trigger", (PAD + 100, y, 110, 26),
-            self.jump_to_trigger, focus_id="ledger.jump-trigger"))
+            self.jump_to_trigger, focus_id="ledger.jump-trigger", role="flat"))
         if ledger.get("has_later"):
             document.addSubview_(self._button(
                 "Load later", (PAD + 218, y, 88, 26),
-                self.load_later, focus_id="ledger.load-later"))
+                self.load_later, focus_id="ledger.load-later", role="flat"))
         document.addSubview_(self._button(
             "Open audit log", (WINDOW_W - 282, y, 116, 26),
-            self.open_audit, focus_id="ledger.open-audit"))
+            self.open_audit, focus_id="ledger.open-audit", role="flat"))
         document.addSubview_(self._button(
             "Open full ledger", (WINDOW_W - 158, y, 138, 26),
-            self.open_ledger, focus_id="ledger.open-full"))
+            self.open_ledger, focus_id="ledger.open-full", role="flat"))
         document.setFrameSize_((WINDOW_W, max(document_height, y + 50)))
         self._finish_key_loop(focus_state, scroll_y)
 

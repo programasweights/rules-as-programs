@@ -39,7 +39,12 @@ from AppKit import (
 )
 from Foundation import NSMakeRect, NSObject
 
-from .macos_controls import RAPInteractiveRow, ButtonRole, style_button
+from .macos_controls import (
+    RAPHoverButton,
+    RAPInteractiveRow,
+    ButtonRole,
+    style_button,
+)
 from .model import UISnapshot
 from .layout import (
     FOOTER_HEIGHT,
@@ -156,11 +161,17 @@ class PopoverRenderer:
         tooltip: str | None = None,
         role: ButtonRole | None = None,
     ) -> NSButton:
-        button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
+        resolved_role = role or ("secondary" if bordered else "flat")
+        button_class = (
+            RAPHoverButton
+            if resolved_role in ("flat", "icon")
+            else NSButton
+        )
+        button = button_class.alloc().initWithFrame_(NSMakeRect(*frame))
         button.setTitle_(title)
         style_button(
             button,
-            role=role or ("secondary" if bordered else "flat"),
+            role=resolved_role,
             accessibility=accessibility,
             tooltip=tooltip,
         )
@@ -352,7 +363,8 @@ class PopoverRenderer:
             root.addSubview_(self._button(
                 "+ Rule", (316, controls_y - 1, 98, 29),
                 lambda sender: self.controller.begin_add_rule(
-                    getattr(self.controller, "home_project", ""), sender)))
+                    getattr(self.controller, "home_project", ""), sender),
+                role="primary"))
         else:
             root.addSubview_(self._button(
                 "‹ Findings", (PAD, controls_y - 1, 88, 28),
@@ -792,7 +804,8 @@ class PopoverRenderer:
             lambda sender: (
                 self.controller.show_add_rule_menu(sender)
                 if not library else self.controller.begin_add_rule("", sender)
-            )))
+            ),
+            role="primary"))
         root.addSubview_(self._label(
             (
                 "Choose which rules run in this project."
@@ -1057,7 +1070,8 @@ class PopoverRenderer:
         if action_title and action:
             root.addSubview_(self._button(
                 action_title, (PAD + 20, y + 78, 130, 30),
-                lambda _sender: action()))
+                lambda _sender: action(),
+                role="primary"))
 
     # --- action menus ---------------------------------------------------
     def popup_menu(

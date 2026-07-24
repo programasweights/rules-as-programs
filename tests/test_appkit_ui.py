@@ -24,7 +24,10 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         NSStatusBar,
     )
     from rules_as_programs.ui.macos_app import MacOSController, _paw_template_image
-    from rules_as_programs.ui.macos_controls import RAPInteractiveRow
+    from rules_as_programs.ui.macos_controls import (
+        RAPHoverButton,
+        RAPInteractiveRow,
+    )
     from rules_as_programs.ui.model import demo_snapshot
 
     NSApplication.sharedApplication()
@@ -190,7 +193,11 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         control for control in _walk(controller.content_controller.view())
         if isinstance(control, NSButton)
         and str(control.title()) == "Actions…")
-    assert actions.showsBorderOnlyWhileMouseInside()
+    assert isinstance(actions, RAPHoverButton)
+    resting_action = rendered_png(actions)
+    actions.mouseEntered_(None)
+    assert actions.hovered()
+    assert rendered_png(actions) != resting_action
     assert controller.rules_context == "library"
     controller._apply_snapshot(snapshot)
     assert controller.rules_context == "library"

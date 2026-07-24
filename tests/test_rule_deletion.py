@@ -380,3 +380,33 @@ def test_state_cleanup_failure_is_returned_as_warning(monkeypatch, tmp_path):
 
     assert deleted["ok"]
     assert any("read-only state" in warning for warning in deleted["warnings"])
+
+
+def test_multiple_rules_can_be_deleted_sequentially(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    first_id = new_rule_id()
+    second_id = new_rule_id()
+    _save(first_id, "global", None, "First Rule")
+    _save(second_id, "global", None, "Second Rule")
+
+    first = rules_api.get_rule(first_id, None)["definition"]
+    first_result = rules_api.delete_rule_definition(
+        first_id,
+        "global",
+        None,
+        first["source_path"],
+        first["source_hash"],
+    )
+    library, errors = rules_api.list_rule_library_with_errors([])
+    second = next(rule for rule in library if rule["id"] == second_id)
+    second_result = rules_api.delete_rule_definition(
+        second_id,
+        "global",
+        None,
+        second["definition"]["source_path"],
+        second["definition"]["source_hash"],
+    )
+
+    assert first_result["ok"]
+    assert not errors
+    assert second_result["ok"]

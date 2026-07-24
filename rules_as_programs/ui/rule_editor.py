@@ -852,7 +852,8 @@ class RAPRuleEditorDocument(NSObject):
         )
         check = self._button(
             activate_title, (width - 274, 12, 124, 30),
-            lambda _sender: self.save(activate=True))
+            lambda _sender: self.save(activate=True),
+            role="primary")
         check.setKeyEquivalent_("\r")
         check.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
         check.setAutoresizingMask_(NSViewMinXMargin)
