@@ -36,6 +36,7 @@ from .core.events import (
     Event, MESSAGE, QUESTION_REQUEST, SESSION_START, SESSION_STOP, USER_PROMPT,
 )
 from .core.ledger import LedgerStore
+from .core.incidents import IncidentStore
 from .core import revisions
 from .core.rule import (
     LoadedRule, RuleLoadError, load_rule_file, load_rules_with_errors,
@@ -122,12 +123,14 @@ class Daemon:
         self.runtime = paw_runtime.shared()
         self.store = VerdictStore()
         self.attention = AttentionStore()
+        self.incidents = IncidentStore()
         self.ledgers = LedgerStore()
         self.rules_cache = _RulesCache()
         self.engine = Engine(
             self.runtime, self.store, self.rules_cache.get,
             on_verdict=self._on_verdict,
             on_error=self._on_rule_error,
+            on_success=self._on_rule_success,
             is_muted=rules_api.is_muted, is_enabled=rules_api.is_enabled,
         )
         self.work = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rap-work")
@@ -135,6 +138,7 @@ class Daemon:
         self.known_projects: set[str] = set()
         self._state_lock = threading.Lock()
         self._warm_state: dict[str, dict[str, dict[str, Any]]] = {}
+        self._warm_generation: dict[str, int] = {}
         self._project_activity: dict[str, dict[str, Any]] = {}
         self._prepared_deployments: dict[str, dict[str, Any]] = {}
         self._deployment_lock = threading.Lock()
@@ -232,6 +236,11 @@ class Daemon:
             _log(f"attention evaluate error: {exc!r}")
 
     def _warm(self, project_root: str) -> None:
+        with self._state_lock:
+            if not hasattr(self, "_warm_generation"):
+                self._warm_generation = {}
+            generation = self._warm_generation.get(project_root, 0) + 1
+            self._warm_generation[project_root] = generation
         rules = list(self.rules_cache.get(project_root))
         with self._state_lock:
             project_state = self._warm_state.setdefault(project_root, {})
@@ -249,30 +258,60 @@ class Daemon:
                     results[rule.id] = False
                     continue
                 if not rule.spec:
-                    self._set_warm_state(project_root, rule.id, "ready")
+                    self._set_warm_state(
+                        project_root, rule.id, "ready", generation=generation)
                     results[rule.id] = True
                     continue
                 if not self.runtime.available:
                     self._set_warm_state(
-                        project_root, rule.id, "failed", "PAW SDK is unavailable")
+                        project_root, rule.id, "failed", "PAW SDK is unavailable",
+                        generation=generation)
                     results[rule.id] = False
                     continue
                 pid = self.runtime.program_id_for_spec(
                     rule.spec, rule.compiler or None)
                 if not pid:
                     self._set_warm_state(
-                        project_root, rule.id, "failed", "Rule compilation failed")
+                        project_root, rule.id, "failed", "Rule compilation failed",
+                        generation=generation)
                     results[rule.id] = False
                     continue
                 ok = self.runtime.warm(pid)
                 self._set_warm_state(
                     project_root, rule.id, "ready" if ok else "failed",
-                    "" if ok else "Local PAW model failed to warm")
+                    "" if ok else "Local PAW model failed to warm",
+                    generation=generation)
                 results[rule.id] = ok
+            with self._state_lock:
+                if self._warm_generation.get(project_root) != generation:
+                    return
+            for rule in rules:
+                if not self._rule_enabled(rule.id, project_root):
+                    continue
+                if results.get(rule.id):
+                    self.incidents.clear(
+                        project_root=project_root, rule_id=rule.id,
+                        code="warm_failure")
+                    continue
+                state = self._warm_state.get(
+                    project_root, {}).get(rule.id, {})
+                if state.get("status") == "failed":
+                    self.incidents.record(
+                        "warm_failure",
+                        project_root=project_root,
+                        rule_id=rule.id,
+                        rule_name=rule.title,
+                        summary=f"{rule.title} could not prepare its local model",
+                        detail=str(state.get("error", "")),
+                        impact="this fuzzy rule is not running",
+                        threshold=1,
+                    )
             _log(f"warmed {project_root}: {results}")
         except Exception as exc:
             _log(f"warm error: {exc!r}")
             with self._state_lock:
+                if self._warm_generation.get(project_root) != generation:
+                    return
                 state = self._warm_state.setdefault(project_root, {})
                 for rule in rules:
                     if state.get(rule.id, {}).get("status") == "warming":
@@ -281,6 +320,17 @@ class Daemon:
                             "updated_at": time.time(),
                             "error": str(exc),
                         }
+                        self.incidents.record(
+                            "warm_failure",
+                            project_root=project_root,
+                            rule_id=rule.id,
+                            rule_name=rule.title,
+                            summary=(
+                                f"{rule.title} could not prepare its local model"),
+                            detail=str(exc),
+                            impact="this fuzzy rule is not running",
+                            threshold=1,
+                        )
 
     @staticmethod
     def _rule_enabled(rule_id: str, project_root: str) -> bool:
@@ -291,9 +341,15 @@ class Daemon:
             return bool(rules_api.is_enabled(rule_id))
 
     def _set_warm_state(
-        self, project_root: str, rule_id: str, status: str, error: str = ""
+        self, project_root: str, rule_id: str, status: str, error: str = "",
+        *, generation: int | None = None,
     ) -> None:
         with self._state_lock:
+            if (
+                generation is not None
+                and self._warm_generation.get(project_root) != generation
+            ):
+                return
             self._warm_state.setdefault(project_root, {})[rule_id] = {
                 "status": status,
                 "updated_at": time.time(),
@@ -308,8 +364,34 @@ class Daemon:
     def _on_rule_error(
         self, rule: LoadedRule, project_root: str, message: str
     ) -> None:
-        self._set_warm_state(project_root, rule.id, "failed", message)
-        _log(f"rule error {rule.id}: {message}")
+        code = (
+            "invalid_output"
+            if "invalid fuzzy severity" in message
+            else "runtime_exception"
+        )
+        summary = (
+            f"{rule.title} check returned no valid decision"
+            if code == "invalid_output"
+            else f"{rule.title} check failed"
+        )
+        self.incidents.record(
+            code,
+            project_root=project_root,
+            rule_id=rule.id,
+            rule_name=rule.title,
+            summary=summary,
+            detail=message,
+            impact="this rule check was skipped",
+            threshold=2,
+        )
+        _log(f"rule error {rule.id} project={project_root}: {message}")
+
+    def _on_rule_success(self, rule: LoadedRule, project_root: str) -> None:
+        for code in ("invalid_output", "runtime_exception"):
+            self.incidents.clear(
+                code=code, project_root=project_root, rule_id=rule.id)
+        with self._state_lock:
+            self._last_successful_audit = time.time()
 
     # --- status snapshot -------------------------------------------------
     @staticmethod
@@ -362,13 +444,13 @@ class Daemon:
             has_paw = any(r.spec for r in enabled)
             if globally_paused or not monitoring:
                 status = "paused"
+            elif load_errors and not rules:
+                status = "failed"
             elif not hooks or not rules:
                 status = "setup_needed"
             elif not enabled:
                 status = "disabled"
             elif has_paw and not self.runtime.available:
-                status = "failed"
-            elif load_errors and not rules:
                 status = "failed"
             elif load_errors:
                 status = "degraded"
@@ -474,11 +556,55 @@ class Daemon:
         }
         attention = self.attention.active()
         projects = self._project_summaries(active_findings, attention)
+        health_issues = self.incidents.active()
+        import_groups: dict[tuple[str, str], dict[str, Any]] = {}
+        for project in projects:
+            for error in project.get("rule_errors", []):
+                rule_name = Path(error.get("path", "")).parent.name
+                key = (rule_name, str(error.get("error", "")))
+                issue = import_groups.setdefault(key, {
+                    "code": "import_error",
+                    "project_root": project["path"],
+                    "rule_id": "",
+                    "rule_name": rule_name,
+                    "summary": f"{rule_name or 'A rule'} could not load",
+                    "detail": error.get("error", ""),
+                    "impact": "that rule is not running",
+                    "count": 1,
+                    "threshold": 1,
+                    "affected_projects": [],
+                })
+                if project["path"] not in issue["affected_projects"]:
+                    issue["affected_projects"].append(project["path"])
+            if (
+                not project.get("hooks_installed")
+                and project.get("rule_count")
+                and project.get("monitoring")
+            ):
+                health_issues.append({
+                    "code": "hooks_missing",
+                    "project_root": project["path"],
+                    "rule_id": "",
+                    "rule_name": "",
+                    "summary": f"Auditing is not connected to {project['name']}",
+                    "detail": "Cursor hooks are missing or invalid.",
+                    "impact": "agent activity is not being audited",
+                    "count": 1,
+                    "threshold": 1,
+                    "affected_projects": [project["path"]],
+                })
+        for issue in import_groups.values():
+            affected = len(issue["affected_projects"])
+            if affected > 1:
+                issue["summary"] = (
+                    f"{issue['rule_name'] or 'A rule'} could not load in "
+                    f"{affected} projects")
+            health_issues.append(issue)
         statuses = {item["status"] for item in projects}
         paused = rules_api.monitoring_paused()
         if paused:
             health = "paused"
-        elif "failed" in statuses or "degraded" in statuses:
+        elif health_issues or "failed" in statuses or "degraded" in statuses:
             health = "degraded"
         elif "warming" in statuses:
             health = "warming"
@@ -503,6 +629,7 @@ class Daemon:
                 "last_successful_audit": last_audit,
             },
             "projects": projects,
+            "health_issues": health_issues,
             "findings_by_project": combined,
             "stale_findings_by_project": stale_findings,
             "attention": attention,
@@ -976,6 +1103,14 @@ class Daemon:
                     self.known_projects.add(proj)
             self.work.submit(self._warm, proj)
             return {"ok": True}
+        if rtype == "retry_health_issue":
+            project_root = str(req.get("project_root", ""))
+            roots = list(req.get("affected_projects") or [])
+            if project_root and project_root not in roots:
+                roots.append(project_root)
+            for root in roots:
+                self.work.submit(self._warm, str(root))
+            return {"ok": True}
         if rtype == "verdicts":
             return {"ok": True, "verdicts": self.store.recent(
                 limit=int(req.get("limit", 100)), project_root=req.get("project_root"),
@@ -1375,6 +1510,7 @@ class Daemon:
                 self.rules_cache.invalidate()
                 result["archived_findings"] = (
                     self._archive_orphaned_findings(req["rule_id"]))
+                self.incidents.clear(rule_id=req["rule_id"])
             return result
         if rtype == "stop_rule_everywhere":
             rule_id = req["rule_id"]
@@ -1436,6 +1572,10 @@ class Daemon:
                 with self._state_lock:
                     self._warmed.add(project_root)
                 self.work.submit(self._warm, project_root)
+            elif result.get("ok") and not req.get("enabled"):
+                self.incidents.clear(
+                    project_root=project_root or None,
+                    rule_id=req["rule_id"])
             return result
         if rtype == "set_project_monitoring":
             result = rules_api.set_project_enabled(
@@ -1444,6 +1584,8 @@ class Daemon:
                 with self._state_lock:
                     self._warmed.add(req["project_root"])
                 self.work.submit(self._warm, req["project_root"])
+            elif result.get("ok"):
+                self.incidents.clear(project_root=req["project_root"])
             return result
         if rtype == "reset_project_assignments":
             return rules_api.reset_project_assignments(req["project_root"])

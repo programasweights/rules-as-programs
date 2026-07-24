@@ -105,11 +105,14 @@ plus any you converted.
 - **Reload Cursor** (or restart it) so it picks up `.cursor/hooks.json`. Hooks
   do not activate until Cursor reloads them.
 - Findings appear in the **top-right menu-bar item** as a severity-colored
-  number beside the paw. A purple `?` separately indicates that an agent likely needs a
-  reply; this is a local inference, not a violation or native approval signal.
+  number beside the paw. The count remains primary when monitoring has an
+  operational issue; concrete project/rule failures appear separately with
+  Retry/Test/Details actions. A purple `?` separately indicates that an agent
+  likely needs a reply.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
   finding opens the native Inspector with the exact rule snapshot, surrounding
-  agent timeline, probes, and scrollable raw event log.
+  agent timeline, probes, and raw event log. Persistent native table views keep
+  selection, search, keyboard focus, and scroll position stable across polling.
 - Rule source opens in the intent-first **Rule Editor**: Name, Rule spec,
   Runs in, Runs when, and Reads. **Deploy** validates, tests, compiles,
   activates, and applies All Projects or Selected Projects coverage; failure

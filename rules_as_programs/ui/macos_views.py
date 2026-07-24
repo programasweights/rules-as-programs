@@ -265,10 +265,12 @@ class PopoverRenderer:
             group.get("project_root") for group in groups if not group.get("stale")
         })
         attention = len(snapshot.attention) if mode == "open" else 0
-        if not (current or stale or attention):
+        issues = len(snapshot.data.get("health_issues") or []) if mode == "open" else 0
+        if not (current or stale or attention or issues):
             return 140
         return (
             38
+            + (30 + issues * 82 if issues else 0)
             + (30 + attention * 70 if attention else 0)
             + (30 + stale * 40 if stale else 0)
             + projects * 30
@@ -337,7 +339,15 @@ class PopoverRenderer:
     def _health_copy(self, snapshot: UISnapshot) -> tuple[str, Any]:
         banner = str(getattr(self.controller, "banner", "") or "")
         if banner:
-            return banner, NSColor.systemBlueColor()
+            color = {
+                "success": NSColor.systemGreenColor(),
+                "warning": NSColor.systemOrangeColor(),
+                "error": NSColor.systemRedColor(),
+            }.get(
+                getattr(self.controller, "banner_kind", "info"),
+                NSColor.systemBlueColor(),
+            )
+            return banner, color
         if snapshot.status == "loading":
             return "Connecting…", NSColor.secondaryLabelColor()
         if snapshot.status == "unavailable":
@@ -345,8 +355,6 @@ class PopoverRenderer:
         health = snapshot.daemon.get("health", "ready")
         if health == "warming":
             return "Preparing local rules…", NSColor.systemOrangeColor()
-        if health == "degraded":
-            return "Some rules need attention", NSColor.systemOrangeColor()
         if health == "paused":
             return "Monitoring paused", NSColor.secondaryLabelColor()
         return "", NSColor.secondaryLabelColor()
@@ -498,6 +506,17 @@ class PopoverRenderer:
                 item for item in attention
                 if item.get("project_root") == selected_project
             ]
+        health_issues = (
+            list(snapshot.data.get("health_issues") or [])
+            if mode == "open" else []
+        )
+        if selected_project:
+            health_issues = [
+                issue for issue in health_issues
+                if not issue.get("project_root")
+                or issue.get("project_root") == selected_project
+                or selected_project in (issue.get("affected_projects") or [])
+            ]
         ordered: list[tuple[str, list[dict[str, Any]]]] = []
         for project, groups in by_project.items():
             sorted_groups = sorted(
@@ -519,7 +538,7 @@ class PopoverRenderer:
             reverse=True,
         )
 
-        if not ordered and not attention and not stale_groups:
+        if not ordered and not attention and not stale_groups and not health_issues:
             if mode == "history":
                 self._render_message_state(
                     root, "No reviewed findings yet",
@@ -558,6 +577,7 @@ class PopoverRenderer:
         total_height = (
             10
             + (30 + len(attention) * 70 if attention else 0)
+            + (30 + len(health_issues) * 82 if health_issues else 0)
             + (30 + len(stale_groups) * 40 if stale_groups else 0)
             + sum(30 + len(groups) * row_height for _, groups in ordered)
         )
@@ -566,6 +586,37 @@ class PopoverRenderer:
              max(40, content_height - 34)), total_height)
         root.addSubview_(scroll)
         y = 8
+        if health_issues:
+            document.addSubview_(self._label(
+                "Monitoring issues", (PAD, y + 3, 180, 22),
+                size=12, bold=True, color=NSColor.systemOrangeColor()))
+            y += 30
+            for issue in health_issues:
+                summary = str(issue.get("summary", "Rule check issue"))
+                impact = str(issue.get("impact", ""))
+                document.addSubview_(self._label(
+                    summary, (PAD, y + 4, 286, 20), size=11.5, bold=True))
+                document.addSubview_(self._label(
+                    impact, (PAD, y + 26, 286, 32), size=9.5, lines=2,
+                    color=NSColor.secondaryLabelColor()))
+                document.addSubview_(self._button(
+                    "Retry", (304, y + 4, 54, 25),
+                    lambda _sender, value=issue:
+                    self.controller.retry_health_issue(value),
+                    bordered=False))
+                document.addSubview_(self._button(
+                    "Details", (360, y + 4, 64, 25),
+                    lambda _sender, value=issue:
+                    self.controller.show_health_issue(value),
+                    bordered=False))
+                if issue.get("rule_id"):
+                    document.addSubview_(self._button(
+                        "Test rule", (326, y + 34, 98, 25),
+                        lambda _sender, value=issue:
+                        self.controller.test_health_issue_rule(value),
+                        bordered=False))
+                self._separator(document, y + 78)
+                y += 82
         if attention:
             document.addSubview_(self._label(
                 "Needs reply", (PAD, y + 3, 180, 22),

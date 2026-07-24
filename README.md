@@ -66,8 +66,9 @@ See [`AGENTS.md`](AGENTS.md) for the agent-facing setup guide.
 A large PAW item lives in the top-right (macOS menu bar; system tray on other
 platforms) and starts automatically at login. A number beside it is the
 actionable finding-group count, colored by highest severity: blue Info, yellow
-Warning, or red Critical. A separate purple `?` means an agent likely needs your
-reply; it is not treated as a violation.
+Warning, or red Critical. The count remains visible when a rule check has an
+operational problem; a secondary marker and tooltip describe that issue. A
+separate purple `?` means an agent likely needs your reply.
 
 Click it to open the native macOS popover:
 
@@ -97,6 +98,9 @@ Click it to open the native macOS popover:
 - Interactive rows and flat actions visibly highlight on hover/press. The
   footer keeps the current Findings / Rules / Projects destination selected,
   and rule/project overflow controls are labelled **Actions…**.
+- The native popover keeps one persistent table hierarchy across refreshes, so
+  search, selection, keyboard focus, and scroll position remain stable. Native
+  table selection and SF Symbols replace custom row overlays and text glyphs.
 - The Rule Editor supports native Undo/Cut/Copy/Paste and Select All
   (`Command-A`, plus `Control-A`), preserves selection when its layout changes,
   and exposes the appropriate remove action directly in the window.
@@ -124,9 +128,10 @@ Action names are deliberately precise:
 A failed deployment leaves the previous active revision and coverage running.
 `Command-S` can still save a local draft without deploying it.
 
-Warming is short-lived inline progress. PAW missing, rule import failures,
-partial warm failures, stale daemons, disabled monitoring, and incomplete hook
-setup are shown as distinct recoverable states rather than “all clear.”
+Warming is short-lived inline progress. Repeated runtime failures, model
+preparation failures, rule import errors, and missing hooks become concrete,
+project-scoped issues with Retry/Test/Details actions. A successful check clears
+its runtime incident automatically.
 
 ### Per-project audit log
 

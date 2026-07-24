@@ -31,6 +31,8 @@ from AppKit import (
     NSLayoutConstraint,
     NSLayoutPriorityDefaultLow,
     NSMinYEdge,
+    NSMenu,
+    NSMenuItem,
     NSPasteboard,
     NSPasteboardTypeString,
     NSPopover,
@@ -40,6 +42,9 @@ from AppKit import (
     NSScreen,
     NSStackView,
     NSStackViewDistributionFill,
+    NSToolbar,
+    NSToolbarFlexibleSpaceItemIdentifier,
+    NSToolbarItem,
     NSTextField,
     NSTextView,
     NSUserInterfaceLayoutOrientationHorizontal,
@@ -63,7 +68,12 @@ from PyObjCTools import AppHelper
 from .. import rules_api, scaffold
 from ..core import revisions
 from .layout import fit_rule_editor_layout
-from .macos_controls import ButtonRole, RAPCommandWindow, style_button
+from .macos_controls import (
+    ButtonRole,
+    RAPCommandWindow,
+    set_button_symbol,
+    style_button,
+)
 from .macos_views import RAPFlippedView
 from .model import UIModel
 
@@ -110,6 +120,43 @@ class RAPRuleEditorTextDelegate(NSObject):
             owner.editor_changed()
 
 
+class RAPRuleToolbarDelegate(NSObject):
+    def toolbarAllowedItemIdentifiers_(self, _toolbar):
+        return [
+            "rule.actions", "rule.state",
+            NSToolbarFlexibleSpaceItemIdentifier,
+            "rule.advanced", "rule.deploy",
+        ]
+
+    def toolbarDefaultItemIdentifiers_(self, _toolbar):
+        return [
+            "rule.actions", "rule.state",
+            NSToolbarFlexibleSpaceItemIdentifier,
+            "rule.advanced", "rule.deploy",
+        ]
+
+    def toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar_(
+        self, _toolbar, identifier, _inserted
+    ):
+        owner = getattr(self, "owner", None)
+        if owner is None:
+            return None
+        views = {
+            "rule.actions": (owner.rule_actions_button, "Rule"),
+            "rule.state": (owner.footer_status, "Status"),
+            "rule.advanced": (owner.footer_advanced, "Advanced"),
+            "rule.deploy": (owner.deploy_button, "Deploy"),
+        }
+        value = views.get(str(identifier))
+        if value is None:
+            return None
+        view, label = value
+        item = NSToolbarItem.alloc().initWithItemIdentifier_(identifier)
+        item.setLabel_(label)
+        item.setPaletteLabel_(label)
+        item.setView_(view)
+        return item
+
 class RAPRuleEditorWindow(RAPCommandWindow):
     def performKeyEquivalent_(self, event):
         owner = getattr(self, "owner", None)
@@ -149,6 +196,8 @@ class RAPRuleEditorDocument(NSObject):
         self._text_delegate = RAPRuleEditorTextDelegate.alloc().init()
         self._text_delegate.owner = self
         self._next_tag = 1
+        self._toolbar_delegate = RAPRuleToolbarDelegate.alloc().init()
+        self._toolbar_delegate.owner = self
         self._key_views: list[Any] = []
         self._programmatic = False
         self._dirty = False
@@ -415,12 +464,14 @@ class RAPRuleEditorDocument(NSObject):
         views = [label]
         if help_text:
             info = self._button(
-                "ⓘ",
+                "",
                 lambda sender, t=title, b=help_text: self.show_info(
                     sender, t, b),
                 role="flat",
                 accessibility=f"About {title}",
             )
+            set_button_symbol(
+                info, "info.circle", f"About {title}", fallback="Info")
             views.append(info)
         views.append(self._spacer())
         return self._stack(views, vertical=False, spacing=6)
@@ -446,11 +497,13 @@ class RAPRuleEditorDocument(NSObject):
                     sender.state() == NSControlStateValueOn),
             )
             info = self._button(
-                "ⓘ",
+                "",
                 lambda sender, t=label, b=help_text: self.show_info(sender, t, b),
                 role="flat",
                 accessibility=f"About {label}",
             )
+            set_button_symbol(
+                info, "info.circle", f"About {label}", fallback="Info")
             row = self._stack([checkbox, info, self._spacer()],
                               vertical=False, spacing=4)
             columns[index % 2].addArrangedSubview_(row)
@@ -475,6 +528,8 @@ class RAPRuleEditorDocument(NSObject):
         root.addSubview_(scroll)
         root.addSubview_(separator)
         root.addSubview_(footer)
+        self._footer_height_constraint = (
+            footer.heightAnchor().constraintEqualToConstant_(1))
         _activate(
             scroll.topAnchor().constraintEqualToAnchor_(root.topAnchor()),
             scroll.leadingAnchor().constraintEqualToAnchor_(root.leadingAnchor()),
@@ -487,7 +542,7 @@ class RAPRuleEditorDocument(NSObject):
             footer.leadingAnchor().constraintEqualToAnchor_(root.leadingAnchor()),
             footer.trailingAnchor().constraintEqualToAnchor_(root.trailingAnchor()),
             footer.bottomAnchor().constraintEqualToAnchor_(root.bottomAnchor()),
-            footer.heightAnchor().constraintEqualToConstant_(54),
+            self._footer_height_constraint,
         )
 
         document = NSView.alloc().init()
@@ -623,32 +678,20 @@ class RAPRuleEditorDocument(NSObject):
             lambda _sender: self.confirm_lifecycle_action(),
             role="destructive",
         )
+        self.lifecycle_button.setHidden_(True)
+        self.rule_actions_button = self._button(
+            "Rule…", lambda sender: self.show_rule_actions(sender), role="flat")
         self.footer_status = self._label(
             "", size=10, color=NSColor.secondaryLabelColor())
         self.footer_advanced = self._button(
             "Advanced…", lambda _sender: self.show_advanced(), role="flat")
         self.deploy_button = self._button(
             "Deploy", lambda _sender: self.deploy(), role="primary")
-        footer_stack = self._stack(
-            [
-                self.lifecycle_button,
-                self.footer_status,
-                self._spacer(),
-                self.footer_advanced,
-                self.deploy_button,
-            ],
-            vertical=False,
-            spacing=12,
-        )
-        footer.addSubview_(footer_stack)
-        _activate(
-            footer_stack.leadingAnchor().constraintEqualToAnchor_constant_(
-                footer.leadingAnchor(), 18),
-            footer_stack.trailingAnchor().constraintEqualToAnchor_constant_(
-                footer.trailingAnchor(), -18),
-            footer_stack.centerYAnchor().constraintEqualToAnchor_(
-                footer.centerYAnchor()),
-        )
+        toolbar = NSToolbar.alloc().initWithIdentifier_("RuleEditorToolbar")
+        toolbar.setDelegate_(self._toolbar_delegate)
+        toolbar.setAllowsUserCustomization_(False)
+        self.window.setToolbar_(toolbar)
+        self.toolbar = toolbar
         self._interactive_controls = [
             self.name_field,
             self.description_editor,
@@ -658,7 +701,7 @@ class RAPRuleEditorDocument(NSObject):
             self.advanced_button,
             self.footer_advanced,
             self.deploy_button,
-            self.lifecycle_button,
+            self.rule_actions_button,
             *self.trigger_buttons.values(),
             *self.input_buttons.values(),
         ]
@@ -684,7 +727,7 @@ class RAPRuleEditorDocument(NSObject):
             self.edit_projects_button,
             *self.trigger_buttons.values(),
             *self.input_buttons.values(),
-            self.lifecycle_button,
+            self.rule_actions_button,
             self.footer_advanced,
             self.deploy_button,
         ]
@@ -1334,6 +1377,26 @@ class RAPRuleEditorDocument(NSObject):
             _on_main(apply)
 
         self.model.perform(request, complete)
+
+    @objc.python_method
+    def show_rule_actions(self, sender) -> None:
+        menu = NSMenu.alloc().initWithTitle_("Rule")
+        lifecycle = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            self._lifecycle_title(), "invoke:", "")
+        self._wire(
+            lifecycle,
+            lambda _sender: self.confirm_lifecycle_action(),
+            key_view=False,
+        )
+        menu.addItem_(lifecycle)
+        menu.addItem_(NSMenuItem.separatorItem())
+        copy_id = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Copy Rule ID", "invoke:", "")
+        self._wire(
+            copy_id, lambda _sender: self.copy_rule_id(), key_view=False)
+        menu.addItem_(copy_id)
+        menu.popUpMenuPositioningItem_atLocation_inView_(
+            None, (0, sender.bounds().size.height), sender)
 
     @objc.python_method
     def confirm_lifecycle_action(self) -> None:

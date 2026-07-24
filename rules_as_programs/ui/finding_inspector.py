@@ -15,6 +15,7 @@ from AppKit import (
     NSFont,
     NSPasteboard,
     NSPasteboardTypeString,
+    NSSegmentedControl,
     NSScrollView,
     NSTextField,
     NSTextView,
@@ -77,6 +78,7 @@ class RAPFindingInspector(NSObject):
         self._next_tag = 1
         self.raw_json = False
         self.show_python = False
+        self.selected_tab = 0
         return self
 
     @objc.python_method
@@ -292,9 +294,21 @@ class RAPFindingInspector(NSObject):
         reviewed.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(reviewed)
 
-        document_height = 1060
+        tabs = NSSegmentedControl.alloc().initWithFrame_(
+            NSMakeRect(PAD, 70, WINDOW_W - 2 * PAD, 28))
+        tabs.setSegmentCount_(4)
+        for index, label in enumerate(("Overview", "Rule", "Activity", "Raw Log")):
+            tabs.setLabel_forSegment_(label, index)
+        tabs.setSelectedSegment_(self.selected_tab)
+        self._wire(
+            tabs,
+            lambda: self.select_tab(int(tabs.selectedSegment())))
+        tabs.setAutoresizingMask_(NSViewWidthSizable)
+        content.addSubview_(tabs)
+
+        document_height = 620
         scroll = NSScrollView.alloc().initWithFrame_(
-            NSMakeRect(0, 70, WINDOW_W, WINDOW_H - 70))
+            NSMakeRect(0, 106, WINDOW_W, WINDOW_H - 106))
         scroll.setHasVerticalScroller_(True)
         scroll.setDrawsBackground_(False)
         scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
@@ -305,15 +319,9 @@ class RAPFindingInspector(NSObject):
         content.addSubview_(scroll)
         self.content_scroll = scroll
 
-        y = 18
-        y = self._section(
-            document, y, "Why it was flagged",
-            str(finding.get("message", "")), height=54)
         decision = next(
             (str(item.get("output", "")) for item in reversed(
                 self.detail.get("trace", [])) if item.get("type") == "paw"), "")
-        if decision:
-            y = self._section(document, y, "Decision", decision, height=34, mono=True)
 
         current_rule = self.detail.get("current_rule", {})
         audit = self.detail.get("audit") or {}
@@ -334,73 +342,83 @@ class RAPFindingInspector(NSObject):
             f"{provenance}\nScope: {audit.get('rule_scope') or current_rule.get('scope', '')}"
             f"\nRuns when: {runs}\nReads: {reads}"
         )
-        y = self._section(document, y, "Rule that ran", rule_copy, height=72)
-        if source:
+        y = 18
+        if self.selected_tab == 0:
+            y = self._section(
+                document, y, "Why it was flagged",
+                str(finding.get("message", "")), height=72)
+            if decision:
+                y = self._section(
+                    document, y, "Decision", decision,
+                    height=42, mono=True)
+            y = self._section(
+                document, y, "Rule that ran", rule_copy, height=86)
+        elif self.selected_tab == 1:
+            if source:
+                document.addSubview_(self._button(
+                    "View PAW spec" if self.show_python and spec else "View Python",
+                    (PAD, y, 110, 26), self.toggle_source,
+                    focus_id="rule.toggle-source", role="flat"))
             document.addSubview_(self._button(
-                (
-                    "View PAW spec" if self.show_python and spec
-                    else "Hide Python" if self.show_python
-                    else "View Python"
-                ),
-                (PAD, y, 110, 26), self.toggle_source,
-                focus_id="rule.toggle-source", role="flat"))
-        document.addSubview_(self._button(
-            "Tune Rule", (PAD + 118, y, 90, 26),
-            lambda: self.manager.edit_rule(self.detail),
-            focus_id="rule.tune", role="flat"))
-        y += 36
-        rule_text = source if self.show_python else spec
-        rule_heading = "Python source" if self.show_python else "PAW rule specification"
-        if not rule_text and not self.show_python:
-            rule_text = "Custom Python rule — no PAW specification."
-        document.addSubview_(self._label(
-            rule_heading, (PAD, y, 220, 18), size=10, bold=True))
-        y += 22
-        rule_scroll, rule_view = self._text_view(
-            rule_text, (PAD, y, WINDOW_W - 2 * PAD, 180))
-        rule_scroll.setAutoresizingMask_(NSViewWidthSizable)
-        document.addSubview_(rule_scroll)
-        self.rule_view = rule_view
-        y += 196
-
-        timeline = self._readable_timeline()
-        y = self._section(document, y, "Evidence timeline", timeline, height=190, mono=True)
-        document.addSubview_(self._label(
-            "Raw event log", (PAD, y, 180, 20), size=12, bold=True))
-        document.addSubview_(self._button(
-            "Copy", (WINDOW_W - 190, y - 4, 66, 26),
-            self.copy_raw, focus_id="raw.copy", role="flat"))
-        document.addSubview_(self._button(
-            "JSON" if not self.raw_json else "Readable",
-            (WINDOW_W - 116, y - 4, 96, 26),
-            self.toggle_raw, focus_id="raw.toggle-format", role="flat"))
-        y += 26
-        raw_text = self._raw_log_text()
-        raw_scroll, raw_view = self._text_view(
-            raw_text, (PAD, y, WINDOW_W - 2 * PAD, 240))
-        raw_scroll.setAutoresizingMask_(NSViewWidthSizable)
-        document.addSubview_(raw_scroll)
-        self.raw_view = raw_view
-        y += 250
-        ledger = self.detail.get("ledger", {})
-        if ledger.get("has_earlier"):
+                "Tune Rule", (PAD + 118, y, 90, 26),
+                lambda: self.manager.edit_rule(self.detail),
+                focus_id="rule.tune", role="flat"))
+            y += 36
+            rule_text = source if self.show_python else spec
+            if not rule_text:
+                rule_text = "Custom Python rule — no PAW specification."
+            rule_scroll, rule_view = self._text_view(
+                rule_text, (PAD, y, WINDOW_W - 2 * PAD, 440))
+            rule_scroll.setAutoresizingMask_(
+                NSViewWidthSizable | NSViewHeightSizable)
+            document.addSubview_(rule_scroll)
+            self.rule_view = rule_view
+            y += 456
+        elif self.selected_tab == 2:
+            timeline = self._readable_timeline()
+            activity_scroll, activity_view = self._text_view(
+                timeline, (PAD, y, WINDOW_W - 2 * PAD, 470))
+            activity_scroll.setAutoresizingMask_(
+                NSViewWidthSizable | NSViewHeightSizable)
+            document.addSubview_(activity_scroll)
+            self.raw_view = activity_view
+            y += 486
+        else:
             document.addSubview_(self._button(
-                "Load earlier", (PAD, y, 92, 26),
-                self.load_earlier, focus_id="ledger.load-earlier", role="flat"))
-        document.addSubview_(self._button(
-            "Jump to trigger", (PAD + 100, y, 110, 26),
-            self.jump_to_trigger, focus_id="ledger.jump-trigger", role="flat"))
-        if ledger.get("has_later"):
+                "Copy", (WINDOW_W - 190, y, 66, 26),
+                self.copy_raw, focus_id="raw.copy", role="flat"))
             document.addSubview_(self._button(
-                "Load later", (PAD + 218, y, 88, 26),
-                self.load_later, focus_id="ledger.load-later", role="flat"))
-        document.addSubview_(self._button(
-            "Open audit log", (WINDOW_W - 282, y, 116, 26),
-            self.open_audit, focus_id="ledger.open-audit", role="flat"))
-        document.addSubview_(self._button(
-            "Open full ledger", (WINDOW_W - 158, y, 138, 26),
-            self.open_ledger, focus_id="ledger.open-full", role="flat"))
-        document.setFrameSize_((WINDOW_W, max(document_height, y + 50)))
+                "JSON" if not self.raw_json else "Readable",
+                (WINDOW_W - 116, y, 96, 26),
+                self.toggle_raw, focus_id="raw.toggle-format", role="flat"))
+            y += 34
+            raw_scroll, raw_view = self._text_view(
+                self._raw_log_text(), (PAD, y, WINDOW_W - 2 * PAD, 400))
+            raw_scroll.setAutoresizingMask_(
+                NSViewWidthSizable | NSViewHeightSizable)
+            document.addSubview_(raw_scroll)
+            self.raw_view = raw_view
+            y += 416
+            ledger = self.detail.get("ledger", {})
+            if ledger.get("has_earlier"):
+                document.addSubview_(self._button(
+                    "Load earlier", (PAD, y, 92, 26),
+                    self.load_earlier, focus_id="ledger.load-earlier", role="flat"))
+            document.addSubview_(self._button(
+                "Jump to trigger", (PAD + 100, y, 110, 26),
+                self.jump_to_trigger, focus_id="ledger.jump-trigger", role="flat"))
+            if ledger.get("has_later"):
+                document.addSubview_(self._button(
+                    "Load later", (PAD + 218, y, 88, 26),
+                    self.load_later, focus_id="ledger.load-later", role="flat"))
+            document.addSubview_(self._button(
+                "Open audit log", (WINDOW_W - 282, y, 116, 26),
+                self.open_audit, focus_id="ledger.open-audit", role="flat"))
+            document.addSubview_(self._button(
+                "Open full ledger", (WINDOW_W - 158, y, 138, 26),
+                self.open_ledger, focus_id="ledger.open-full", role="flat"))
+            y += 40
+        document.setFrameSize_((WINDOW_W, max(document_height, y + 24)))
         self._finish_key_loop(focus_state, scroll_y)
 
     @objc.python_method
@@ -435,6 +453,11 @@ class RAPFindingInspector(NSObject):
         if self.raw_json:
             return "\n".join(json.dumps(event, ensure_ascii=False) for event in events)
         return self._readable_timeline()
+
+    @objc.python_method
+    def select_tab(self, index: int) -> None:
+        self.selected_tab = max(0, min(3, int(index)))
+        self._render()
 
     @objc.python_method
     def toggle_source(self) -> None:

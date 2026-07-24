@@ -101,7 +101,22 @@ def _run_pystray() -> int:
             )
         items: list[Any] = []
         findings = data.get("findings_by_project", {})
-        if not findings:
+        issues = list(data.get("health_issues") or [])
+        for issue in issues[:8]:
+            summary = str(issue.get("summary", "Monitoring issue"))
+            items.append(pystray.MenuItem(
+                f"Monitoring: {summary}", None, enabled=False))
+            items.append(pystray.MenuItem(
+                "Retry check",
+                lambda _icon, _item, value=issue: ipc.send_request({
+                    "type": "retry_health_issue",
+                    "code": value.get("code", ""),
+                    "project_root": value.get("project_root", ""),
+                    "affected_projects": value.get("affected_projects", []),
+                    "rule_id": value.get("rule_id", ""),
+                }),
+            ))
+        if not findings and not issues:
             items.append(pystray.MenuItem(
                 "All reviewed", None, enabled=False))
         for project, groups in findings.items():
@@ -146,9 +161,11 @@ def _run_pystray() -> int:
             data = ipc.send_request({"type": "snapshot"}, timeout=3) if compatible else None
             state["snapshot"] = data
             count = int((data or {}).get("open_count", 0) or 0)
+            issue_count = len((data or {}).get("health_issues") or [])
             icon.icon = _icon_image(count, unavailable=not bool(data))
             icon.title = (
                 f"Rules as Programs — {count} open"
+                + (f" · {issue_count} monitoring issue(s)" if issue_count else "")
                 if data else "Rules as Programs — daemon unavailable")
             try:
                 icon.update_menu()

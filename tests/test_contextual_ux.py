@@ -48,8 +48,23 @@ def test_status_presentation_prioritizes_operations_then_severity_and_attention(
 
     unavailable = status_presentation(_snapshot(
         findings=critical, status="unavailable"))
-    assert unavailable.kind == "unavailable"
-    assert unavailable.badge_text == "!"
+    assert unavailable.kind == "finding"
+    assert unavailable.badge_text == "1"
+    assert unavailable.unavailable
+
+    degraded = status_presentation(_snapshot(
+        findings=critical, health="degraded"))
+    assert degraded.kind == "finding"
+    assert degraded.badge_text == "1"
+    assert degraded.incident_count == 1
+    issue_snapshot = _snapshot(findings=critical)
+    issue_snapshot.data["health_issues"] = [{
+        "summary": "GitHub synchronization check failing",
+    }]
+    issue = status_presentation(issue_snapshot)
+    assert issue.badge_text == "1"
+    assert issue.incident_count == 1
+    assert "GitHub synchronization" in issue.tooltip
 
     attention = status_presentation(_snapshot(attention=[{"id": 1}]))
     assert attention.kind == "attention"

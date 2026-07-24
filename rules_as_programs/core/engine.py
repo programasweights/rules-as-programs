@@ -169,6 +169,7 @@ class Engine:
         rules_provider: Callable[[str], list[LoadedRule]],
         on_verdict: Callable[[Verdict], None] | None = None,
         on_error: Callable[[LoadedRule, str, str], None] | None = None,
+        on_success: Callable[[LoadedRule, str], None] | None = None,
         is_muted: Callable[..., bool] | None = None,
         is_enabled: Callable[..., bool] | None = None,
     ):
@@ -177,6 +178,7 @@ class Engine:
         self.rules_provider = rules_provider
         self.on_verdict = on_verdict
         self.on_error = on_error
+        self.on_success = on_success
         self.is_muted = is_muted
         self.is_enabled = is_enabled
         self._last_sig: dict[str, str] = {}
@@ -232,6 +234,11 @@ class Engine:
                 except Exception:
                     pass
             return None  # a buggy rule must never crash the worker
+        if self.on_success:
+            try:
+                self.on_success(rule, ledger.project_root)
+            except Exception:
+                pass
         if parsed is None:
             return None
         severity, message = parsed

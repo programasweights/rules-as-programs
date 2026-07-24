@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -43,7 +44,11 @@ from Foundation import NSData
 from PyObjCTools import AppHelper
 
 from .. import config
-from .macos_views import POPOVER_HEIGHT, POPOVER_WIDTH, PopoverRenderer
+from .layout import (
+    POPOVER_MAX_HEIGHT as POPOVER_HEIGHT,
+    POPOVER_WIDTH,
+)
+from .native_popover import PersistentPopoverRenderer
 from .model import UIModel, UISnapshot, demo_snapshot
 from .status import StatusPresentation, status_presentation
 
@@ -143,6 +148,18 @@ def _status_attributed_title(
     elif presentation.kind == "degraded":
         append(" !", NSColor.systemOrangeColor())
     if (
+        presentation.unavailable
+        and presentation.kind not in ("unavailable",)
+    ):
+        append(" !", NSColor.systemRedColor())
+    elif (
+        presentation.incident_count
+        and presentation.kind not in ("degraded", "unavailable")
+    ):
+        append(" !", NSColor.secondaryLabelColor())
+    if presentation.paused and presentation.kind not in ("paused",):
+        append(" ‖", NSColor.secondaryLabelColor())
+    if (
         presentation.attention_count
         and presentation.kind not in ("attention", "unavailable", "paused")
     ):
@@ -181,6 +198,7 @@ class MacOSController(NSObject):
         self.rules_filter = ""
         self._rules_request_token = 0
         self.banner = ""
+        self.banner_kind = "info"
         self.confirmation: dict[str, Any] | None = None
         self.snapshot = UISnapshot.loading()
         self.status_item = None
@@ -188,7 +206,7 @@ class MacOSController(NSObject):
         self.content_controller = None
         self.content_view = None
         self._last_popover_size = None
-        self.renderer = PopoverRenderer(self)
+        self.renderer = PersistentPopoverRenderer(self)
         self.model = UIModel(listener=self._snapshot_received)
         self._status_target = RAPStatusTarget.alloc().init()
         self._status_target.owner = self
@@ -376,14 +394,62 @@ class MacOSController(NSObject):
             self._last_popover_size = size
 
     @objc.python_method
-    def _set_banner(self, message: str) -> None:
+    def _set_banner(
+        self, message: str, *, kind: str = "info", duration: float = 7.0
+    ) -> None:
         self.banner = message
+        self.banner_kind = kind
         self._render()
+        if message and duration > 0:
+            expected = message
+
+            def clear() -> None:
+                def apply() -> None:
+                    if self.banner == expected:
+                        self.banner = ""
+                        self._render()
+                _on_main(apply)
+
+            timer = threading.Timer(duration, clear)
+            timer.daemon = True
+            timer.start()
 
     @objc.python_method
     def retry(self) -> None:
         self.banner = ""
         self.model.refresh()
+
+    @objc.python_method
+    def retry_health_issue(self, issue: dict[str, Any]) -> None:
+        self._set_banner("Retrying rule check…")
+        self.model.perform({
+            "type": "retry_health_issue",
+            "code": issue.get("code", ""),
+            "project_root": issue.get("project_root", ""),
+            "affected_projects": issue.get("affected_projects", []),
+            "rule_id": issue.get("rule_id", ""),
+        }, lambda result: _on_main(lambda: (
+            self.model.refresh() if result.get("ok")
+            else self._set_banner(
+                result.get("error", "Could not retry rule check."))
+        )))
+
+    @objc.python_method
+    def test_health_issue_rule(self, issue: dict[str, Any]) -> None:
+        self._test_rule_quick({
+            "id": issue.get("rule_id", ""),
+            "name": issue.get("rule_name", "Rule"),
+            "project_root": issue.get("project_root", ""),
+        })
+
+    @objc.python_method
+    def show_health_issue(self, issue: dict[str, Any]) -> None:
+        detail = str(issue.get("detail") or issue.get("impact") or "")
+        self._set_banner(
+            f"{issue.get('summary', 'Monitoring issue')}: {detail}",
+            kind="warning",
+            duration=12,
+        )
 
     @objc.python_method
     def request_confirmation(

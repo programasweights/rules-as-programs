@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 import objc
+import AppKit
 from AppKit import (
     NSBezierPath,
     NSBezelStyleInline,
@@ -18,6 +19,8 @@ from AppKit import (
     NSEventModifierFlagShift,
     NSFocusRingOnly,
     NSFocusRingTypeExterior,
+    NSImage,
+    NSImageOnly,
     NSSetFocusRingStyle,
     NSTrackingActiveInActiveApp,
     NSTrackingArea,
@@ -32,6 +35,53 @@ ButtonRole = Literal["primary", "secondary", "flat", "icon", "destructive"]
 def appkit_text_length(value) -> int:
     """Return NSString-compatible UTF-16 units for NSRange clamping."""
     return len(str(value).encode("utf-16-le")) // 2
+
+
+def system_symbol(
+    name: str,
+    accessibility: str,
+    *,
+    point_size: float = 13,
+):
+    """Return an SF Symbol when supported, otherwise None."""
+    try:
+        image = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
+            name, accessibility)
+        symbol_config = getattr(AppKit, "NSImageSymbolConfiguration", None)
+        font_weight = getattr(AppKit, "NSFontWeightRegular", 0.0)
+        if (
+            image and symbol_config is not None
+            and hasattr(image, "imageWithSymbolConfiguration_")
+        ):
+            config = (
+                symbol_config
+                .configurationWithPointSize_weight_(
+                    point_size, font_weight)
+            )
+            image = image.imageWithSymbolConfiguration_(config)
+        return image
+    except (AttributeError, TypeError):
+        return None
+
+
+def set_button_symbol(
+    button: NSButton,
+    name: str,
+    accessibility: str,
+    *,
+    fallback: str = "",
+    point_size: float = 13,
+) -> bool:
+    image = system_symbol(
+        name, accessibility, point_size=point_size)
+    if image is None:
+        button.setTitle_(fallback or accessibility)
+        return False
+    button.setTitle_("")
+    button.setImage_(image)
+    button.setImagePosition_(NSImageOnly)
+    button.setAccessibilityLabel_(accessibility)
+    return True
 
 
 def style_button(
