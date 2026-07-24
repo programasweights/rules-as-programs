@@ -89,13 +89,15 @@ def _paw_template_image() -> NSImage | None:
             bounds = alpha.getbbox()
             _PAW_ALPHA = alpha.crop(bounds) if bounds else alpha
         scale = 2
-        width_pt = height_pt = 22
+        width_pt = height_pt = 18
         canvas = Image.new(
             "RGBA", (width_pt * scale, height_pt * scale), (0, 0, 0, 0))
-        paw_alpha = _PAW_ALPHA.resize((21 * scale, 21 * scale), Image.Resampling.LANCZOS)
+        paw_alpha = _PAW_ALPHA.resize(
+            (17 * scale, 17 * scale), Image.Resampling.LANCZOS)
         paw = Image.new("RGBA", paw_alpha.size, (0, 0, 0, 255))
         paw.putalpha(paw_alpha)
-        canvas.alpha_composite(paw, (0, 0))
+        offset = ((width_pt * scale - paw.size[0]) // 2,) * 2
+        canvas.alpha_composite(paw, offset)
         buffer = io.BytesIO()
         canvas.save(buffer, format="PNG")
         raw = buffer.getvalue()

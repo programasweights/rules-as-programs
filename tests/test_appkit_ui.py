@@ -96,8 +96,8 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     controller._render()
     assert controller.renderer._health_copy(snapshot)[0] == ""
     icon = _paw_template_image()
-    assert icon.size().height == 22
-    assert icon.size().width == 22
+    assert icon.size().height == 18
+    assert icon.size().width == 18
     assert icon.isTemplate()
     status_text = str(controller.status_item.button().attributedTitle().string())
     assert "●" not in status_text
