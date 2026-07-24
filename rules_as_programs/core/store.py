@@ -314,6 +314,24 @@ class VerdictStore:
                 )
             return cur.rowcount
 
+    def acknowledge_rule(
+        self,
+        rule_id: str,
+        project_root: str,
+        reason: str = "rule_deleted",
+    ) -> int:
+        """Archive actionable findings for one no-longer-installed rule."""
+        reviewed_at = time.time()
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                """UPDATE verdicts SET acknowledged=1, reviewed_at=?,
+                   review_reason=?
+                   WHERE rule_id=? AND project_root=?
+                     AND acknowledged=0 AND suppressed=0""",
+                (reviewed_at, reason, rule_id, project_root),
+            )
+            return cur.rowcount
+
     def reopen(self, ids: list[int] | None = None,
                fingerprint: str | None = None) -> int:
         with self._lock, self._connect() as conn:

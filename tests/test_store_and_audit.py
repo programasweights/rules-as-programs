@@ -86,6 +86,18 @@ def test_suppressed_findings_stay_out_of_inbox_but_in_history(tmp_path):
     assert history[0]["suppressed"] == 1
 
 
+def test_deleted_rule_findings_move_to_reviewed_history(tmp_path):
+    store = VerdictStore(tmp_path / "verdicts.db")
+    project = str(tmp_path)
+    finding_id = store.record(_verdict(project))
+
+    assert store.acknowledge_rule("verify", project) == 1
+    assert store.by_project() == {}
+    history = store.history_grouped()
+    assert history[0]["ids"] == [finding_id]
+    assert history[0]["review_reason"] == "rule_deleted"
+
+
 def test_audit_lookup_uses_exact_finding_id(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"

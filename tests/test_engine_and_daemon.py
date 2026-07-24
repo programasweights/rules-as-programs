@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import threading
 
+from rules_as_programs import rules_api
 from rules_as_programs.core import audit
 from rules_as_programs.core.attention import AttentionStore
 from rules_as_programs.core.engine import Engine, RuleContext
 from rules_as_programs.core.events import Event, MESSAGE, SESSION_STOP
 from rules_as_programs.core.ledger import Ledger
 from rules_as_programs.core.rule import LoadedRule, new_rule_id
-from rules_as_programs.core.store import VerdictStore
+from rules_as_programs.core.store import Verdict, VerdictStore
 from rules_as_programs.daemon import Daemon
 
 
@@ -27,6 +28,42 @@ class FakeRuntime:
 
     def run(self, _program_id, _text):
         return self.output
+
+
+def test_orphaned_findings_archive_but_fallback_findings_remain(
+    monkeypatch, tmp_path
+):
+    missing_project = str(tmp_path / "missing")
+    fallback_project = str(tmp_path / "fallback")
+    store = VerdictStore(tmp_path / "verdicts.db")
+    common = dict(
+        rule_id="rule",
+        rule_title="Rule",
+        severity="warn",
+        message="violation",
+        conversation_id="conversation",
+    )
+    store.record(Verdict(project_root=missing_project, **common))
+    store.record(Verdict(project_root=fallback_project, **common))
+    monkeypatch.setattr(
+        rules_api,
+        "get_rule",
+        lambda _rule_id, project_root: (
+            {
+                "scope": "global",
+                "definition": {"source_hash": "fallback"},
+            }
+            if project_root == fallback_project else None
+        ),
+    )
+    daemon = Daemon.__new__(Daemon)
+    daemon.store = store
+
+    assert daemon._archive_orphaned_findings("rule") == 1
+    assert missing_project not in store.by_project()
+    assert fallback_project in store.by_project()
+    history = store.history_grouped(missing_project)
+    assert history[0]["review_reason"] == "rule_deleted"
 
 
 def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(

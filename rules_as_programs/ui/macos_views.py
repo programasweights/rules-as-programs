@@ -650,6 +650,8 @@ class PopoverRenderer:
         title = group.get("rule_title") or group.get("rule_id", "Rule")
         if mode == "stale":
             title = f"{title} · rule changed"
+        elif mode == "history" and group.get("review_reason") == "rule_deleted":
+            title = f"{title} · rule deleted"
         parent.addSubview_(self._label(
             title, (82, y + 7, 225, 22), size=12, bold=True))
         age = _relative_time(group.get("last_seen") or group.get("ts", 0))

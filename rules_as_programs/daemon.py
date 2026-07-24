@@ -407,7 +407,38 @@ class Daemon:
         )
         return out
 
+    def _archive_orphaned_findings(self, rule_id: str | None = None) -> int:
+        """Move findings without an installed rule definition into history."""
+        archived = 0
+        for grouped_root, groups in self.store.by_project().items():
+            project_root = str(
+                (groups[0].get("project_root") if groups else "")
+                or ("" if grouped_root == "(unknown)" else grouped_root)
+            )
+            candidate_ids = {
+                str(group.get("rule_id", ""))
+                for group in groups
+                if group.get("rule_id")
+                and (rule_id is None or group.get("rule_id") == rule_id)
+            }
+            for candidate_id in candidate_ids:
+                try:
+                    current = rules_api.get_rule(candidate_id, project_root)
+                except Exception:
+                    # A transient read/import failure is not a deletion.
+                    continue
+                installed = bool(
+                    current
+                    and current.get("scope") in ("global", "project")
+                    and current.get("definition")
+                )
+                if not installed:
+                    archived += self.store.acknowledge_rule(
+                        candidate_id, project_root, reason="rule_deleted")
+        return archived
+
     def snapshot(self) -> dict[str, Any]:
+        self._archive_orphaned_findings()
         all_findings = self.store.by_project()
         active_findings: dict[str, list[dict[str, Any]]] = {}
         stale_findings: dict[str, list[dict[str, Any]]] = {}
@@ -422,7 +453,7 @@ class Daemon:
                 )
                 recorded_hash = group.get("source_hash") or ""
                 stale = bool(
-                    recorded_hash and current_hash and recorded_hash != current_hash)
+                    recorded_hash and recorded_hash != current_hash)
                 group["stale"] = stale
                 group["current_source_hash"] = current_hash
                 target = stale_findings if stale else active_findings
@@ -919,6 +950,8 @@ class Daemon:
                 project_roots=project_roots)
             if result.get("ok"):
                 self.rules_cache.invalidate()
+                result["archived_findings"] = (
+                    self._archive_orphaned_findings(req["rule_id"]))
             return result
         if rtype == "stop_rule_everywhere":
             rule_id = req["rule_id"]

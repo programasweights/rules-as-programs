@@ -528,8 +528,8 @@ class RAPRuleEditorDocument(NSObject):
         else:
             title = f"{self._lifecycle_action_title().rstrip('…')} “{self.name}”?"
             message = (
-                "This removes exactly this definition. Existing finding and "
-                "audit history will be kept."
+                "This removes exactly this definition. Open findings without "
+                "a remaining rule move to Reviewed; audit history is kept."
             )
             confirm_title = (
                 "Remove Rule" if self.rule.get("is_builtin") else "Delete Rule")

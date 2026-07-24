@@ -110,9 +110,11 @@ Action names are deliberately precise:
   project assignment.
 - **Delete project rule**, **Delete shared rule**, and **Remove installed
   built-in copy** remove exactly the named source definition after showing its
-  path and impact. Finding/audit history is retained; shared-rule assignment
-  and hidden-finding choices remain dormant under the immutable ID so surviving
-  project overrides and a later reinstall keep the same behavior.
+  path and impact. Open findings with no surviving definition move to
+  **Reviewed** with a **Rule deleted** marker; their recorded source and audit
+  history remain available. Shared-rule assignment and hidden-finding choices
+  remain dormant under the immutable ID so surviving project overrides and a
+  later reinstall keep the same behavior.
 - **Pause monitoring** stops all evaluation for its project or globally and
   requires confirmation.
 

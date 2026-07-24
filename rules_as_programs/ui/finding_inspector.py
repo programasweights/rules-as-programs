@@ -269,10 +269,15 @@ class RAPFindingInspector(NSObject):
         title = finding.get("rule_title") or finding.get("rule_id", "Finding")
         severity = str(finding.get("severity", "info")).upper()
         project = Path(finding.get("project_root", "")).name
+        lifecycle = (
+            " · RULE DELETED"
+            if finding.get("review_reason") == "rule_deleted" else "")
         content.addSubview_(self._label(
             title, (PAD, 14, 470, 26), size=17, bold=True))
         content.addSubview_(self._label(
-            f"{severity} · {project} · {len(self.detail.get('occurrences', [])) or 1} occurrence(s)",
+            f"{severity} · {project} · "
+            f"{len(self.detail.get('occurrences', [])) or 1} occurrence(s)"
+            f"{lifecycle}",
             (PAD, 42, 520, 18), size=10, color=NSColor.secondaryLabelColor()))
         edit = self._button(
             "Tune Rule", (WINDOW_W - 210, 16, 92, 30),

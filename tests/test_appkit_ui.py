@@ -265,6 +265,23 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     controller.show_rule_menu(None, rule)
     assert "Delete shared rule…" in [item[0] for item in captured]
 
+    deleted_group = {
+        "id": 99,
+        "ids": [99],
+        "rule_id": rule["id"],
+        "rule_title": "Deleted example",
+        "project_root": project,
+        "severity": "warn",
+        "review_reason": "rule_deleted",
+        "ts": group["ts"],
+    }
+    captured.clear()
+    controller.inbox_mode = "history"
+    controller.show_finding_menu(None, deleted_group)
+    history_actions = {title: enabled for title, _callback, enabled in captured}
+    assert history_actions["Rule deleted — history only"] is False
+    assert "Reopen finding" not in history_actions
+
     controller.model.stop()
     NSStatusBar.systemStatusBar().removeStatusItem_(controller.status_item)
 

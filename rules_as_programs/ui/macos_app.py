@@ -644,7 +644,9 @@ class MacOSController(NSObject):
         history = self.inbox_mode == "history"
         items: list[tuple[str, Callable[[], None], bool]] = []
         if history:
-            if group.get("suppressed"):
+            if group.get("review_reason") == "rule_deleted":
+                items.append(("Rule deleted — history only", lambda: None, False))
+            elif group.get("suppressed"):
                 items.append((
                     "Show future findings",
                     lambda: self.model.perform({
@@ -918,7 +920,8 @@ class MacOSController(NSObject):
         self.request_confirmation(
             f"{action} “{name}”?",
             effect + f"\n\nSource: {source_path}\n"
-            "Existing finding and audit history will be kept.",
+            "Open findings without a remaining rule move to Reviewed. "
+            "Finding and audit history will be kept.",
             action,
             lambda state=editor_state: self._delete_rule(rule, state),
             destructive=True,
@@ -960,8 +963,14 @@ class MacOSController(NSObject):
                 ):
                     self._studio.definition_removed(definition)
                 warnings = [str(item) for item in result.get("warnings", [])]
+                archived = int(result.get("archived_findings", 0) or 0)
+                archive_copy = (
+                    f" {archived} open finding"
+                    f"{'s' if archived != 1 else ''} moved to Reviewed."
+                    if archived else ""
+                )
                 self._set_banner(
-                    "Rule definition removed. Existing history was kept."
+                    "Rule definition removed." + archive_copy
                     + (
                         " Cleanup warning: " + "; ".join(warnings)
                         if warnings else ""
@@ -1187,8 +1196,16 @@ class MacOSController(NSObject):
     @objc.python_method
     def _rule_document_changed(self, result: dict[str, Any]) -> None:
         warnings = [str(item) for item in result.get("warnings", [])]
+        archived = int(result.get("archived_findings", 0) or 0)
+        messages = []
+        if archived:
+            messages.append(
+                f"{archived} open finding"
+                f"{'s' if archived != 1 else ''} moved to Reviewed.")
         if warnings:
-            self._set_banner("Cleanup warning: " + "; ".join(warnings))
+            messages.append("Cleanup warning: " + "; ".join(warnings))
+        if messages:
+            self._set_banner(" ".join(messages))
         if self.route == "rules":
             self._load_rules()
         else:

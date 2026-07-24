@@ -120,7 +120,9 @@ plus any you converted.
   `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay
   local. Every rule row has a labelled **Actions…** menu, and the Rule Editor
   exposes **Delete Rule…**, **Remove Installed Rule…**, or **Use Shared
-  Version…** as appropriate. Removal keeps finding and audit history.
+  Version…** as appropriate. Removal moves orphaned open findings to
+  **Reviewed** as **Rule deleted**, while keeping their recorded source and
+  audit history.
 - Rules live at `.cursor/rules-as-programs/rules/<id>/rule.py`; per-project
   violation logs are at `.cursor/rules-as-programs/log/audit.jsonl`.
 
