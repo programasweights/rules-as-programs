@@ -22,17 +22,17 @@ from AppKit import (
     NSViewMinXMargin,
     NSViewMinYMargin,
     NSViewWidthSizable,
-    NSWindow,
     NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable,
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
     NSWorkspace,
 )
-from Foundation import NSMakeRect, NSObject
+from Foundation import NSMakeRange, NSMakeRect, NSObject
 from PyObjCTools import AppHelper
 
 from .. import config
+from .macos_controls import RAPCommandWindow, appkit_text_length
 from .macos_views import RAPFlippedView
 from .model import UIModel
 
@@ -63,6 +63,8 @@ class RAPFindingInspector(NSObject):
         self.window = None
         self.content_scroll = None
         self.raw_view = None
+        self.rule_view = None
+        self._key_views: list[Any] = []
         self._callbacks: dict[int, Callable[[], None]] = {}
         self._target = RAPInspectorTarget.alloc().init()
         self._target._callbacks = self._callbacks
@@ -92,7 +94,7 @@ class RAPFindingInspector(NSObject):
             | NSWindowStyleMaskResizable
             | NSWindowStyleMaskMiniaturizable
         )
-        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        self.window = RAPCommandWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, WINDOW_W, WINDOW_H),
             mask,
             NSBackingStoreBuffered,
@@ -100,6 +102,7 @@ class RAPFindingInspector(NSObject):
         )
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
+        self.window.setAutorecalculatesKeyViewLoop_(True)
         self.window.setMinSize_((650, 520))
         self.window.setTitle_("Finding Inspector")
 
@@ -111,15 +114,17 @@ class RAPFindingInspector(NSObject):
         button.setTag_(tag)
         button.setTarget_(self._target)
         button.setAction_("invoke:")
+        self._key_views.append(button)
         return button
 
     @objc.python_method
     def _button(
         self, title: str, frame: tuple[float, float, float, float],
-        callback: Callable[[], None],
+        callback: Callable[[], None], *, focus_id: str,
     ) -> NSButton:
         button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
         button.setTitle_(title)
+        button.setIdentifier_(focus_id)
         return self._wire(button, callback)
 
     @staticmethod
@@ -160,12 +165,91 @@ class RAPFindingInspector(NSObject):
         view.setFont_(NSFont.userFixedPitchFontOfSize_(10.5))
         view.setString_(text)
         scroll.setDocumentView_(view)
+        self._key_views.append(view)
         return scroll, view
 
     @objc.python_method
+    def _control_focus_key(self, view) -> str:
+        if hasattr(view, "identifier") and view.identifier():
+            return str(view.identifier())
+        tag = int(view.tag()) if hasattr(view, "tag") else -1
+        return f"{view.__class__.__name__}:{tag}"
+
+    @objc.python_method
+    def _capture_focus_state(self) -> tuple[str, int, int] | None:
+        responder = self.window.firstResponder() if self.window else None
+        for semantic, view in (
+            ("rule", self.rule_view),
+            ("raw", self.raw_view),
+        ):
+            if responder is not None and view is not None and responder == view:
+                selected = responder.selectedRange()
+                return (semantic, int(selected.location), int(selected.length))
+        for view in self._key_views:
+            if responder == view:
+                return (f"control:{self._control_focus_key(view)}", 0, 0)
+        return None
+
+    @objc.python_method
+    def _finish_key_loop(
+        self, focus_state: tuple[str, int, int] | None, scroll_y: float
+    ) -> None:
+        self.window.recalculateKeyViewLoop()
+        for current, following in zip(
+            self._key_views, self._key_views[1:] + self._key_views[:1]
+        ):
+            current.setNextKeyView_(following)
+        if focus_state is None:
+            if self._key_views:
+                self.window.setInitialFirstResponder_(self._key_views[0])
+        else:
+            semantic, location, length = focus_state
+            if semantic.startswith("control:"):
+                focus_key = semantic.removeprefix("control:")
+                matched = False
+                for view in self._key_views:
+                    if self._control_focus_key(view) == focus_key:
+                        self.window.makeFirstResponder_(view)
+                        matched = True
+                        break
+                if not matched and self._key_views:
+                    self.window.makeFirstResponder_(self._key_views[0])
+                target = None
+            else:
+                target = self.rule_view if semantic == "rule" else self.raw_view
+            if target is None:
+                if not semantic.startswith("control:") and self._key_views:
+                    self.window.makeFirstResponder_(self._key_views[0])
+            else:
+                self.window.makeFirstResponder_(target)
+                text_length = appkit_text_length(target.string())
+                start = min(max(0, location), text_length)
+                size = min(max(0, length), text_length - start)
+                selected = NSMakeRange(start, size)
+                target.setSelectedRange_(selected)
+                target.scrollRangeToVisible_(selected)
+        if self.content_scroll is not None:
+            clip = self.content_scroll.contentView()
+            document = self.content_scroll.documentView()
+            maximum = max(
+                0.0,
+                float(document.frame().size.height - clip.bounds().size.height),
+            )
+            clip.scrollToPoint_((0, min(max(0.0, scroll_y), maximum)))
+            self.content_scroll.reflectScrolledClipView_(clip)
+
+    @objc.python_method
     def _render(self) -> None:
+        focus_state = self._capture_focus_state()
+        scroll_y = (
+            float(self.content_scroll.contentView().bounds().origin.y)
+            if self.content_scroll is not None else 0.0
+        )
         self._callbacks.clear()
         self._next_tag = 1
+        self._key_views = []
+        self.rule_view = None
+        self.raw_view = None
         content = RAPFlippedView.alloc().initWithFrame_(
             NSMakeRect(0, 0, WINDOW_W, WINDOW_H))
         content.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
@@ -182,11 +266,13 @@ class RAPFindingInspector(NSObject):
             (PAD, 42, 520, 18), size=10, color=NSColor.secondaryLabelColor()))
         edit = self._button(
             "Tune Rule", (WINDOW_W - 210, 16, 92, 30),
-            lambda: self.manager.edit_rule(self.detail))
+            lambda: self.manager.edit_rule(self.detail),
+            focus_id="header.tune-rule")
         edit.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(edit)
         reviewed = self._button(
-            "Mark Reviewed", (WINDOW_W - 112, 16, 98, 30), self.mark_reviewed)
+            "Mark Reviewed", (WINDOW_W - 112, 16, 98, 30),
+            self.mark_reviewed, focus_id="header.mark-reviewed")
         reviewed.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(reviewed)
 
@@ -240,10 +326,12 @@ class RAPFindingInspector(NSObject):
                     else "Hide Python" if self.show_python
                     else "View Python"
                 ),
-                (PAD, y, 110, 26), self.toggle_source))
+                (PAD, y, 110, 26), self.toggle_source,
+                focus_id="rule.toggle-source"))
         document.addSubview_(self._button(
             "Tune Rule", (PAD + 118, y, 90, 26),
-            lambda: self.manager.edit_rule(self.detail)))
+            lambda: self.manager.edit_rule(self.detail),
+            focus_id="rule.tune"))
         y += 36
         rule_text = source if self.show_python else spec
         rule_heading = "Python source" if self.show_python else "PAW rule specification"
@@ -252,10 +340,11 @@ class RAPFindingInspector(NSObject):
         document.addSubview_(self._label(
             rule_heading, (PAD, y, 220, 18), size=10, bold=True))
         y += 22
-        rule_scroll, _rule_view = self._text_view(
+        rule_scroll, rule_view = self._text_view(
             rule_text, (PAD, y, WINDOW_W - 2 * PAD, 180))
         rule_scroll.setAutoresizingMask_(NSViewWidthSizable)
         document.addSubview_(rule_scroll)
+        self.rule_view = rule_view
         y += 196
 
         timeline = self._readable_timeline()
@@ -263,10 +352,12 @@ class RAPFindingInspector(NSObject):
         document.addSubview_(self._label(
             "Raw event log", (PAD, y, 180, 20), size=12, bold=True))
         document.addSubview_(self._button(
-            "Copy", (WINDOW_W - 190, y - 4, 66, 26), self.copy_raw))
+            "Copy", (WINDOW_W - 190, y - 4, 66, 26),
+            self.copy_raw, focus_id="raw.copy"))
         document.addSubview_(self._button(
             "JSON" if not self.raw_json else "Readable",
-            (WINDOW_W - 116, y - 4, 96, 26), self.toggle_raw))
+            (WINDOW_W - 116, y - 4, 96, 26),
+            self.toggle_raw, focus_id="raw.toggle-format"))
         y += 26
         raw_text = self._raw_log_text()
         raw_scroll, raw_view = self._text_view(
@@ -278,17 +369,23 @@ class RAPFindingInspector(NSObject):
         ledger = self.detail.get("ledger", {})
         if ledger.get("has_earlier"):
             document.addSubview_(self._button(
-                "Load earlier", (PAD, y, 92, 26), self.load_earlier))
+                "Load earlier", (PAD, y, 92, 26),
+                self.load_earlier, focus_id="ledger.load-earlier"))
         document.addSubview_(self._button(
-            "Jump to trigger", (PAD + 100, y, 110, 26), self.jump_to_trigger))
+            "Jump to trigger", (PAD + 100, y, 110, 26),
+            self.jump_to_trigger, focus_id="ledger.jump-trigger"))
         if ledger.get("has_later"):
             document.addSubview_(self._button(
-                "Load later", (PAD + 218, y, 88, 26), self.load_later))
+                "Load later", (PAD + 218, y, 88, 26),
+                self.load_later, focus_id="ledger.load-later"))
         document.addSubview_(self._button(
-            "Open audit log", (WINDOW_W - 282, y, 116, 26), self.open_audit))
+            "Open audit log", (WINDOW_W - 282, y, 116, 26),
+            self.open_audit, focus_id="ledger.open-audit"))
         document.addSubview_(self._button(
-            "Open full ledger", (WINDOW_W - 158, y, 138, 26), self.open_ledger))
+            "Open full ledger", (WINDOW_W - 158, y, 138, 26),
+            self.open_ledger, focus_id="ledger.open-full"))
         document.setFrameSize_((WINDOW_W, max(document_height, y + 50)))
+        self._finish_key_loop(focus_state, scroll_y)
 
     @objc.python_method
     def _section(

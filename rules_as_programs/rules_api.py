@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 import os
 import re
+import threading
 import time
+import tokenize
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -22,26 +27,126 @@ from . import config, scaffold
 from .core.events import ALL_KINDS
 from .core import revisions
 from .core.rule import (
-    LoadedRule, is_rule_id, load_rule_file, load_rules, new_rule_id,
-    rule_paths,
+    LoadedRule, is_rule_id, load_rule_file, load_rule_file_with_error,
+    load_rules, new_rule_id, rule_definition_count, rule_paths,
 )
 from .sdk import RULE_ATTR, RuleDef, SEVERITIES
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows uses the process lock.
+    fcntl = None
+
+
+_RULE_MUTATION_LOCK = threading.RLock()
+_RULE_MUTATION_LOCAL = threading.local()
+
+
+@contextmanager
+def _rule_mutation_lock():
+    """Serialize source validation and replacement across UI/CLI processes."""
+    with _RULE_MUTATION_LOCK:
+        depth = int(getattr(_RULE_MUTATION_LOCAL, "depth", 0))
+        _RULE_MUTATION_LOCAL.depth = depth + 1
+        if depth:
+            try:
+                yield
+            finally:
+                _RULE_MUTATION_LOCAL.depth = depth
+            return
+        lock_file = (config.state_dir() / "rule-mutations.lock").open("a+")
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            _RULE_MUTATION_LOCAL.depth = 0
+
+
+def _serialized_rule_mutation(function):
+    @wraps(function)
+    def serialized(*args, **kwargs):
+        with _rule_mutation_lock():
+            return function(*args, **kwargs)
+
+    return serialized
 
 
 # --- listing / reading -----------------------------------------------------
 
-def _summary(r: LoadedRule, project_root: str | None) -> dict[str, Any]:
+def _source_digest(source: str | bytes) -> str:
+    raw = source if isinstance(source, bytes) else source.encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _decode_python_source(source: bytes) -> str:
+    encoding, _lines = tokenize.detect_encoding(io.BytesIO(source).readline)
+    return source.decode(encoding)
+
+
+def _static_rule_definition_count(source: bytes) -> int | None:
+    try:
+        tree = ast.parse(_decode_python_source(source))
+    except (SyntaxError, UnicodeError):
+        return None
+    count = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            target = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if (
+                isinstance(target, ast.Name) and target.id == "rule"
+            ) or (
+                isinstance(target, ast.Attribute) and target.attr == "rule"
+            ):
+                count += 1
+                break
+    return count
+
+
+def _definition_identity(
+    rule_id: str,
+    scope: str,
+    source_path: str | os.PathLike[str],
+    project_root: str | None,
+    source: str | bytes,
+) -> dict[str, str] | None:
+    if scope not in ("global", "project"):
+        return None
+    return {
+        "rule_id": rule_id,
+        "scope": scope,
+        "project_root": str(project_root or "") if scope == "project" else "",
+        "source_path": str(Path(source_path).expanduser().resolve()),
+        "source_hash": _source_digest(source),
+    }
+
+
+def _summary(
+    r: LoadedRule,
+    project_root: str | None,
+    shared_ids: set[str] | None = None,
+) -> dict[str, Any]:
     mute = mute_info(r.id, project_root)
     assignment = enabled_state(r.id, project_root)
     customized = bool(
         project_root
         and r.scope == "project"
-        and any(item.id == r.id for item in load_rules(None))
+        and (
+            r.id in shared_ids
+            if shared_ids is not None
+            else any(item.id == r.id for item in load_rules(None))
+        )
     )
     if (
         r.scope == "project"
         and not customized
         and assignment.get("project_override") is None
+        and assignment.get("global_default") is not False
     ):
         assignment = {
             **assignment,
@@ -49,10 +154,16 @@ def _summary(r: LoadedRule, project_root: str | None) -> dict[str, Any]:
             "effective_enabled": True,
         }
     try:
-        source = Path(r.source_path).read_text(encoding="utf-8")
+        source_bytes = Path(r.source_path).read_bytes()
     except OSError:
+        source_bytes = b""
+    try:
+        source = _decode_python_source(source_bytes)
+    except (SyntaxError, UnicodeError):
         source = ""
     revision = revisions.working_status(r.id, r.source_path, source)
+    definition = _definition_identity(
+        r.id, r.scope, r.source_path, project_root, source_bytes)
     return {
         "id": r.id,
         "name": r.title,
@@ -73,6 +184,7 @@ def _summary(r: LoadedRule, project_root: str | None) -> dict[str, Any]:
         "mute_until": mute["until"],
         "mute_scope": mute["scope"],
         "paw": bool(r.spec),
+        "definition": definition,
         **revision,
     }
 
@@ -82,37 +194,110 @@ def list_rules(project_root: str | None) -> list[dict[str, Any]]:
     return [_summary(r, project_root) for r in loaded]
 
 
-def list_rule_library(project_roots: list[str]) -> list[dict[str, Any]]:
+def list_rule_library_with_errors(
+    project_roots: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """List source definitions, not one project's effective merged rules."""
     rows: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     builtin_ids = {
         loaded[0].id
         for path in scaffold.builtin_rules()
         if (loaded := load_rule_file(path, "builtin"))
     }
-    for rule in load_rules(None):
-        summary = _summary(rule, None)
-        summary["project_root"] = ""
-        summary["project_name"] = ""
-        summary["is_builtin"] = rule.id in builtin_ids
-        summary["installed"] = True
+    shared_rules: list[LoadedRule] = []
+    for path in rule_paths(config.global_rules_dir()):
+        loaded, error = load_rule_file_with_error(path, "global")
+        shared_rules.extend(loaded)
+        if error:
+            errors.append(summarize_rule_error(
+                error.path, error.scope, error.error,
+                shared_available=False))
+    shared_ids = {rule.id for rule in shared_rules}
+    for rule in shared_rules:
+        summary = _summary(rule, None, shared_ids)
+        summary.update({
+            "project_root": "",
+            "project_name": "",
+            "is_builtin": rule.id in builtin_ids,
+            "installed": True,
+        })
         rows.append(summary)
         seen.add((rule.id, str(Path(rule.source_path).resolve())))
     for project_root in project_roots:
         for path in rule_paths(config.project_rules_dir(project_root)):
-            for rule in load_rule_file(path, "project"):
+            loaded, error = load_rule_file_with_error(path, "project")
+            if error:
+                errors.append(summarize_rule_error(
+                    error.path,
+                    error.scope,
+                    error.error,
+                    project_root,
+                    shared_available=path.parent.name in shared_ids,
+                ))
+            for rule in loaded:
                 key = (rule.id, str(path.resolve()))
                 if key in seen:
                     continue
-                summary = _summary(rule, project_root)
+                summary = _summary(rule, project_root, shared_ids)
                 summary["project_root"] = project_root
                 summary["project_name"] = Path(project_root).name
                 summary["is_builtin"] = rule.id in builtin_ids
                 summary["installed"] = True
                 rows.append(summary)
                 seen.add(key)
+    return rows, errors
+
+
+def list_rule_library(project_roots: list[str]) -> list[dict[str, Any]]:
+    rows, _errors = list_rule_library_with_errors(project_roots)
     return rows
+
+
+def summarize_rule_error(
+    path_value: str,
+    scope: str,
+    error: str,
+    project_root: str | None = None,
+    *,
+    shared_available: bool | None = None,
+) -> dict[str, Any]:
+    path = Path(path_value).expanduser().absolute()
+    try:
+        source = path.read_bytes()
+    except OSError:
+        source = b""
+    rule_id = path.parent.name
+    owner = str(project_root or "") if scope == "project" else ""
+    return {
+        "id": rule_id,
+        "name": rule_id,
+        "title": rule_id,
+        "scope": scope,
+        "source_origin": scope,
+        "source_path": str(path),
+        "project_root": owner,
+        "load_error": error,
+        "invalid": True,
+        "customized_from": (
+            "shared"
+            if scope == "project"
+            and (
+                shared_available
+                if shared_available is not None
+                else bool(_usable_shared_definition(rule_id))
+            )
+            else ""
+        ),
+        "definition": _definition_identity(
+            rule_id, scope, path, owner, source),
+    }
+
+
+def list_rule_library_errors(project_roots: list[str]) -> list[dict[str, Any]]:
+    _rows, errors = list_rule_library_with_errors(project_roots)
+    return errors
 
 
 def _find_rule_file(rule_id: str, project_root: str | None) -> tuple[Path, str] | None:
@@ -160,7 +345,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
                 src, bundled_rule = candidate, loaded[0]
                 break
         if src and bundled_rule:
-            source = src.read_text(encoding="utf-8")
+            source = _decode_python_source(src.read_bytes())
             if not metadata:
                 metadata = {
                     "name": bundled_rule.title,
@@ -181,6 +366,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
                 "enabled": is_enabled(bundled_rule.id, project_root),
                 **enabled_state(bundled_rule.id, project_root),
                 "muted": is_muted(bundled_rule.id, project_root),
+                "definition": None,
                 **revisions.working_status(
                     bundled_rule.id, str(src), source),
                 **metadata,
@@ -205,7 +391,16 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
             "n_examples": len(loaded_rule.examples),
             "paw": bool(loaded_rule.spec),
         }
-    source = path.read_text(encoding="utf-8")
+    source_bytes = path.read_bytes()
+    source = _decode_python_source(source_bytes)
+    customized_from = (
+        "shared"
+        if (
+            scope == "project"
+            and _usable_shared_definition(resolved_id) is not None
+        )
+        else ""
+    )
     return {
         "id": resolved_id,
         "scope": scope,
@@ -214,6 +409,9 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
         "enabled": is_enabled(resolved_id, project_root),
         **enabled_state(resolved_id, project_root),
         "muted": is_muted(resolved_id, project_root),
+        "customized_from": customized_from,
+        "definition": _definition_identity(
+            resolved_id, scope, path, project_root, source_bytes),
         **revisions.working_status(resolved_id, str(path), source),
         **metadata,
     }
@@ -668,6 +866,7 @@ def validate_editor_source(source: str) -> tuple[bool, str]:
     return True, ""
 
 
+@_serialized_rule_mutation
 def save_rule(rule_id: str, source: str, scope: str, project_root: str | None) -> dict[str, Any]:
     previous = _find_rule_file(rule_id, project_root)
     projection = source_projection(source)
@@ -701,6 +900,8 @@ def save_rule(rule_id: str, source: str, scope: str, project_root: str | None) -
     temporary = folder / ".rule.py.tmp"
     temporary.write_text(rendered, encoding="utf-8")
     os.replace(temporary, path)
+    stored_bytes = path.read_bytes()
+    stored_source = _decode_python_source(stored_bytes)
     if previous:
         previous_path, previous_scope = previous
         if previous_scope == scope and previous_path != path:
@@ -716,14 +917,25 @@ def save_rule(rule_id: str, source: str, scope: str, project_root: str | None) -
         "name": name,
         "title": name,
         "scope": scope,
+        "project_root": str(project_root or "") if scope == "project" else "",
         "path": str(path),
-        "source": rendered,
-        "projection": source_projection(rendered),
-        "source_hash": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
-        **revisions.working_status(rid, path, rendered),
+        "source": stored_source,
+        "projection": source_projection(stored_source),
+        "source_hash": _source_digest(stored_bytes),
+        "definition": _definition_identity(
+            rid, scope, path, project_root, stored_bytes),
+        "customized_from": (
+            "shared"
+            if scope == "project"
+            and _usable_shared_definition(rid) is not None
+            else ""
+        ),
+        "is_builtin": rid in set(scaffold.builtin_ids()),
+        **revisions.working_status(rid, path, stored_source),
     }
 
 
+@_serialized_rule_mutation
 def rename_rule(
     rule_id: str,
     name: str,
@@ -796,7 +1008,10 @@ def rename_rule(
         "rule": refreshed,
         **{
             key: refreshed.get(key)
-            for key in ("path", "source", "scope", "projection", "source_hash")
+            for key in (
+                "path", "source", "scope", "projection", "source_hash",
+                "definition", "project_root", "customized_from",
+            )
             if key in refreshed
         },
     }
@@ -912,6 +1127,19 @@ def draft_plain_rule_source(rule_id: str, title: str | None = None) -> str:
         rule_id=rule_id, title=title, func=func)
 
 
+@_serialized_rule_mutation
+def install_builtin(
+    rule_id: str,
+    scope: str,
+    project_root: str | None,
+    *,
+    overwrite: bool = False,
+) -> Path | None:
+    return scaffold.add_builtin(
+        rule_id, scope, project_root, overwrite=overwrite)
+
+
+@_serialized_rule_mutation
 def create_rule(rule_id: str, scope: str, project_root: str | None,
                 title: str | None = None) -> dict[str, Any]:
     requested_name = rule_id if not is_rule_id(rule_id) else ""
@@ -939,36 +1167,254 @@ def create_rule(rule_id: str, scope: str, project_root: str | None,
     return res
 
 
+def _exact_definition_path(
+    rule_id: str,
+    scope: str,
+    project_root: str | None,
+    expected_source_path: str,
+) -> tuple[Path | None, str]:
+    if scope == "global":
+        root = config.global_rules_dir().expanduser().resolve()
+    elif scope == "project":
+        if not project_root:
+            return None, "project_root is required for a project rule"
+        root = config.project_rules_dir(project_root).expanduser().resolve()
+    else:
+        return None, "scope must be 'global' or 'project'"
+    if not expected_source_path:
+        return None, "exact source path is required for deletion"
+    path = Path(expected_source_path).expanduser().resolve()
+    if (
+        path.name != "rule.py"
+        or path.parent.parent != root
+        or path.parent.name != rule_id
+    ):
+        return None, "rule definition path does not match its scope and id"
+    return path, ""
+
+
+def _remove_project_assignment(
+    rule_id: str, project_root: str
+) -> tuple[bool, str]:
+    project_config = _load_project_config(project_root)
+    removed = project_config.get("rules", {}).pop(rule_id, None) is not None
+    ok, error = _save_project_config(project_root, project_config)
+    return removed and ok, "" if ok else error
+
+
+def _remove_scoped_rule_state(
+    path: Path,
+    rule_id: str,
+    *,
+    remove_global: bool,
+    project_roots: list[str],
+) -> str:
+    try:
+        state = _load_scoped(path)
+        if remove_global:
+            state["global"].pop(rule_id, None)
+        for root in project_roots:
+            key = _project_key(root)
+            values = state["projects"].get(key)
+            if isinstance(values, dict):
+                values.pop(rule_id, None)
+                if not values:
+                    state["projects"].pop(key, None)
+        _save_scoped(path, state)
+        return ""
+    except OSError as exc:
+        return str(exc)
+
+
+def _usable_shared_definition(rule_id: str) -> Path | None:
+    path = config.global_rules_dir() / rule_id / "rule.py"
+    if not path.is_file():
+        return None
+    loaded = load_rule_file(path, "global")
+    if len(loaded) != 1 or loaded[0].id != rule_id:
+        return None
+    return path
+
+
+@_serialized_rule_mutation
+def delete_rule_definition(
+    rule_id: str,
+    scope: str,
+    project_root: str | None,
+    expected_source_path: str,
+    expected_source_hash: str,
+    project_roots: list[str] | None = None,
+    *,
+    require_shared_fallback: bool = False,
+) -> dict[str, Any]:
+    path, error = _exact_definition_path(
+        rule_id, scope, project_root, expected_source_path)
+    if path is None:
+        return {"ok": False, "error": error}
+    exact_path = path
+    if not expected_source_hash:
+        return {
+            "ok": False,
+            "error": "exact source path and hash are required for deletion",
+        }
+    if not exact_path.is_file():
+        return {"ok": False, "error": "rule definition no longer exists"}
+    try:
+        source = exact_path.read_bytes()
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    current_hash = _source_digest(source)
+    if current_hash != expected_source_hash:
+        return {
+            "ok": False,
+            "error": "rule source changed; reload and review it before deleting",
+            "current_source_hash": current_hash,
+        }
+    loaded = load_rule_file(exact_path, scope)
+    definition_count = rule_definition_count(exact_path)
+    static_count = _static_rule_definition_count(source)
+    decorator_count = len(re.findall(
+        rb"(?m)^[ \t]*@(?:[A-Za-z_][A-Za-z0-9_]*\.)*"
+        rb"rule(?:[ \t]*\(|[ \t]*$)",
+        source,
+    ))
+    if (
+        len(loaded) > 1
+        or (definition_count is not None and definition_count > 1)
+        or (static_count is not None and static_count > 1)
+        or decorator_count > 1
+    ):
+        return {
+            "ok": False,
+            "error": (
+                "this source file defines multiple rules; split them into "
+                "one rule.py per ID before deleting"
+            ),
+        }
+    if loaded and loaded[0].id != rule_id:
+        return {
+            "ok": False,
+            "error": "rule source ID does not match its definition folder",
+        }
+
+    roots = [
+        str(project_root or ""),
+        *(str(root) for root in (project_roots or [])),
+    ]
+    known_projects = list(dict.fromkeys(root for root in roots if root))
+    fallback_path = _usable_shared_definition(rule_id)
+    has_shared_fallback = scope == "project" and fallback_path is not None
+    if require_shared_fallback and not has_shared_fallback:
+        return {
+            "ok": False,
+            "error": "a valid shared version is not available; project source was kept",
+        }
+    surviving_overrides = [
+        root for root in known_projects
+        if (
+            config.project_rules_dir(root) / rule_id / "rule.py"
+        ).expanduser().absolute().is_file()
+        and not (
+            scope == "project"
+            and _project_key(root) == _project_key(project_root)
+        )
+    ]
+    if require_shared_fallback:
+        fallback_path = _usable_shared_definition(rule_id)
+        if fallback_path is None:
+            return {
+                "ok": False,
+                "error": (
+                    "the shared version changed during revert; "
+                    "project source was kept"
+                ),
+            }
+        has_shared_fallback = True
+
+    try:
+        latest_hash = _source_digest(exact_path.read_bytes())
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    if latest_hash != current_hash:
+        return {
+            "ok": False,
+            "error": "rule source changed during deletion; reload and try again",
+            "current_source_hash": latest_hash,
+        }
+
+    warnings: list[str] = []
+    try:
+        exact_path.unlink()
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        revisions.remove_source(exact_path)
+    except OSError as exc:
+        warnings.append(f"active revision cleanup failed: {exc}")
+    try:
+        exact_path.parent.rmdir()
+    except OSError:
+        pass
+
+    assignments_removed: list[str] = []
+    if scope == "project":
+        root = str(project_root or "")
+        if not has_shared_fallback and root:
+            removed, assignment_error = _remove_project_assignment(
+                rule_id, root)
+            if assignment_error:
+                warnings.append(assignment_error)
+            elif removed:
+                assignments_removed.append(root)
+            mute_error = _remove_scoped_rule_state(
+                config.mutes_path(), rule_id,
+                remove_global=False, project_roots=[root])
+            if mute_error:
+                warnings.append(mute_error)
+
+    fallback = (
+        {
+            "scope": "global",
+            "source_path": str(fallback_path.expanduser().resolve()),
+        }
+        if has_shared_fallback else None
+    )
+    return {
+        "ok": True,
+        "id": rule_id,
+        "scope": scope,
+        "source_path": str(exact_path),
+        "source_hash": current_hash,
+        "fallback": fallback,
+        "assignments_removed": assignments_removed,
+        "surviving_project_overrides": surviving_overrides,
+        "assignment_state_preserved": scope == "global" or has_shared_fallback,
+        "history_retained": True,
+        "warnings": warnings,
+    }
+
+
 def delete_rule(
     rule_id: str,
     project_root: str | None,
     project_roots: list[str] | None = None,
+    *,
+    scope: str = "",
+    expected_source_path: str = "",
+    expected_source_hash: str = "",
 ) -> dict[str, Any]:
-    found = _find_rule_file(rule_id, project_root)
-    if not found:
-        return {"ok": False, "error": "not found"}
-    path, scope = found
-    revisions.remove_source(path)
-    path.unlink(missing_ok=True)
-    try:
-        path.parent.rmdir()
-    except OSError:
-        pass
-    targets = [project_root] if project_root else list(project_roots or [])
-    for root in (value for value in targets if value):
-        project_config = _load_project_config(root)
-        if project_config.get("rules", {}).pop(rule_id, None) is not None:
-            _save_project_config(root, project_config)
-    if not project_root:
-        for state_path in (config.rule_state_path(), config.mutes_path()):
-            state = _load_scoped(state_path)
-            state["global"].pop(rule_id, None)
-            for values in state["projects"].values():
-                values.pop(rule_id, None)
-            _save_scoped(state_path, state)
-    return {"ok": True, "id": rule_id, "scope": scope}
+    """Compatibility name for callers that provide exact definition identity."""
+    return delete_rule_definition(
+        rule_id,
+        scope,
+        project_root,
+        expected_source_path,
+        expected_source_hash,
+        project_roots,
+    )
 
 
+@_serialized_rule_mutation
 def customize_for_project(rule_id: str, project_root: str) -> dict[str, Any]:
     global_info = get_rule(rule_id, None)
     if not global_info:
@@ -980,22 +1426,48 @@ def customize_for_project(rule_id: str, project_root: str) -> dict[str, Any]:
     return result
 
 
-def revert_to_shared(rule_id: str, project_root: str) -> dict[str, Any]:
-    project_path = config.project_rules_dir(project_root) / rule_id / "rule.py"
-    if not project_path.exists():
-        return {"ok": False, "error": "project customization not found"}
-    path = project_path
-    revisions.remove_source(path)
-    path.unlink(missing_ok=True)
-    try:
-        path.parent.rmdir()
-    except OSError:
-        pass
-    info = get_rule(rule_id, None)
-    set_enabled(rule_id, True, project_root, (info or {}).get("name"))
-    return {"ok": True, "id": rule_id, "reverted": str(path)}
+@_serialized_rule_mutation
+def revert_to_shared(
+    rule_id: str,
+    project_root: str,
+    expected_source_path: str = "",
+    expected_source_hash: str = "",
+) -> dict[str, Any]:
+    if not expected_source_path or not expected_source_hash:
+        return {
+            "ok": False,
+            "error": "exact project source path and hash are required",
+        }
+    if _usable_shared_definition(rule_id) is None:
+        return {
+            "ok": False,
+            "error": "a valid shared version is not available; project source was kept",
+        }
+    result = delete_rule_definition(
+        rule_id,
+        "project",
+        project_root,
+        expected_source_path,
+        expected_source_hash,
+        project_roots=[project_root],
+        require_shared_fallback=True,
+    )
+    if not result.get("ok"):
+        return result
+    if not result.get("fallback"):
+        return {
+            **result,
+            "ok": False,
+            "error": "shared rule changed during revert",
+        }
+    return {
+        **result,
+        "reverted": result["source_path"],
+        "assignment_preserved": True,
+    }
 
 
+@_serialized_rule_mutation
 def promote_to_shared(rule_id: str, project_root: str) -> dict[str, Any]:
     project_info = get_rule(rule_id, project_root)
     if not project_info or project_info.get("scope") != "project":
@@ -1074,10 +1546,10 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, data: dict[str, Any]) -> None:
-    try:
-        path.write_text(json.dumps(data, indent=2))
-    except OSError:
-        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 # --- scoped state -----------------------------------------------------------
@@ -1123,7 +1595,8 @@ def _load_project_config(project_root: str) -> dict[str, Any]:
             value = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(value, dict):
                 value.setdefault("version", 1)
-                value.setdefault("rules", {})
+                if not isinstance(value.get("rules"), dict):
+                    value["rules"] = {}
                 return value
         except (OSError, json.JSONDecodeError):
             pass
@@ -1178,6 +1651,7 @@ def is_enabled(rule_id: str, project_root: str | None = None) -> bool:
     return bool(enabled_state(rule_id, project_root)["effective_enabled"])
 
 
+@_serialized_rule_mutation
 def set_enabled(
     rule_id: str, enabled: bool, project_root: str | None = None,
     name: str | None = None,
@@ -1205,11 +1679,18 @@ def set_enabled(
                 "ok": False, "error": error, "rule_id": assignment_id,
                 "project_root": key, "enabled": bool(enabled),
             }
-    elif enabled:
-        state["global"].pop(rule_id, None)
     else:
-        state["global"][rule_id] = False
-    _save_scoped(config.rule_state_path(), state)
+        if enabled:
+            state["global"].pop(rule_id, None)
+        else:
+            state["global"][rule_id] = False
+        try:
+            _save_scoped(config.rule_state_path(), state)
+        except OSError as exc:
+            return {
+                "ok": False, "error": str(exc), "rule_id": assignment_id,
+                "project_root": "", "enabled": bool(enabled),
+            }
     return {
         "ok": True,
         "rule_id": assignment_id,
@@ -1219,6 +1700,7 @@ def set_enabled(
     }
 
 
+@_serialized_rule_mutation
 def reset_project_assignments(project_root: str) -> dict[str, Any]:
     value = _load_project_config(project_root)
     value["rules"] = {}
@@ -1226,6 +1708,7 @@ def reset_project_assignments(project_root: str) -> dict[str, Any]:
     return {"ok": ok, "error": error, "project_root": project_root}
 
 
+@_serialized_rule_mutation
 def set_project_assignments(
     project_root: str, assignments: dict[str, bool]
 ) -> dict[str, Any]:
@@ -1263,6 +1746,8 @@ def mute_info(rule_id: str, project_root: str | None = None) -> dict[str, Any]:
     candidates: list[tuple[str, dict[str, Any], str]] = []
     if key:
         project = state["projects"].get(key, {})
+        if not isinstance(project, dict):
+            project = {}
         candidates.extend([
             ("project", project, rule_id),
             ("project", project, "*"),
@@ -1287,14 +1772,27 @@ def is_muted(rule_id: str, project_root: str | None = None) -> bool:
     return bool(mute_info(rule_id, project_root)["muted"])
 
 
+@_serialized_rule_mutation
 def set_mute(
     rule_id: str, until: float | None, project_root: str | None = None
 ) -> dict[str, Any]:
     state = load_mutes()
     key = _project_key(project_root)
-    bucket = state["projects"].setdefault(key, {}) if key else state["global"]
+    if key:
+        bucket = state["projects"].get(key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            state["projects"][key] = bucket
+    else:
+        bucket = state["global"]
     bucket[rule_id] = until
-    _save_scoped(config.mutes_path(), state)
+    try:
+        _save_scoped(config.mutes_path(), state)
+    except OSError as exc:
+        return {
+            "ok": False, "error": str(exc), "rule_id": rule_id,
+            "project_root": project_root or "", "until": until,
+        }
     return {
         "ok": True,
         "rule_id": rule_id,
@@ -1303,13 +1801,17 @@ def set_mute(
     }
 
 
+@_serialized_rule_mutation
 def clear_mute(
     rule_id: str, project_root: str | None = None
 ) -> dict[str, Any]:
     state = load_mutes()
     key = _project_key(project_root)
     if key:
-        project = state["projects"].setdefault(key, {})
+        project = state["projects"].get(key)
+        if not isinstance(project, dict):
+            project = {}
+            state["projects"][key] = project
         project.pop(rule_id, None)
         # If a global mute would still apply, keep an explicit local override.
         global_mute = mute_info(rule_id, None)["muted"]
@@ -1319,7 +1821,13 @@ def clear_mute(
             state["projects"].pop(key, None)
     else:
         state["global"].pop(rule_id, None)
-    _save_scoped(config.mutes_path(), state)
+    try:
+        _save_scoped(config.mutes_path(), state)
+    except OSError as exc:
+        return {
+            "ok": False, "error": str(exc), "rule_id": rule_id,
+            "project_root": project_root or "",
+        }
     return {
         "ok": True,
         "rule_id": rule_id,
@@ -1332,10 +1840,13 @@ def monitoring_paused() -> bool:
 
 
 def set_monitoring_paused(paused: bool) -> dict[str, Any]:
-    _save(config.monitoring_state_path(), {
-        "paused": bool(paused),
-        "updated_at": time.time(),
-    })
+    try:
+        _save(config.monitoring_state_path(), {
+            "paused": bool(paused),
+            "updated_at": time.time(),
+        })
+    except OSError as exc:
+        return {"ok": False, "error": str(exc), "paused": bool(paused)}
     return {"ok": True, "paused": bool(paused)}
 
 
@@ -1351,5 +1862,11 @@ def set_project_enabled(project_root: str, enabled: bool) -> dict[str, Any]:
         state.pop(project_root, None)
     else:
         state[project_root] = False
-    _save(config.project_monitoring_path(), state)
+    try:
+        _save(config.project_monitoring_path(), state)
+    except OSError as exc:
+        return {
+            "ok": False, "error": str(exc),
+            "project_root": project_root, "enabled": enabled,
+        }
     return {"ok": True, "project_root": project_root, "enabled": enabled}

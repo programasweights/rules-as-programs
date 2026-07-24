@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from AppKit import (
-    NSBezelStyleInline,
-    NSBezelStyleRounded,
     NSBox,
     NSBoxSeparator,
     NSButton,
@@ -30,6 +28,7 @@ from AppKit import (
     NSProgressIndicator,
     NSProgressIndicatorStyleSpinning,
     NSSearchField,
+    NSSegmentSwitchTrackingSelectOne,
     NSScrollView,
     NSSegmentedControl,
     NSSwitchButton,
@@ -40,6 +39,7 @@ from AppKit import (
 )
 from Foundation import NSMakeRect, NSObject
 
+from .macos_controls import RAPInteractiveRow, ButtonRole, style_button
 from .model import UISnapshot
 from .layout import (
     FOOTER_HEIGHT,
@@ -153,13 +153,30 @@ class PopoverRenderer:
         *,
         bordered: bool = True,
         accessibility: str | None = None,
+        tooltip: str | None = None,
+        role: ButtonRole | None = None,
     ) -> NSButton:
         button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
         button.setTitle_(title)
-        button.setBezelStyle_(NSBezelStyleRounded if bordered else NSBezelStyleInline)
-        button.setBordered_(bordered)
-        if accessibility:
-            button.setAccessibilityLabel_(accessibility)
+        style_button(
+            button,
+            role=role or ("secondary" if bordered else "flat"),
+            accessibility=accessibility,
+            tooltip=tooltip,
+        )
+        return self._wire(button, callback)
+
+    def _row_button(
+        self,
+        frame: tuple[float, float, float, float],
+        callback: Callable[[Any], None],
+        *,
+        accessibility: str,
+        tooltip: str | None = None,
+    ) -> RAPInteractiveRow:
+        button = RAPInteractiveRow.alloc().initWithFrame_(NSMakeRect(*frame))
+        button.setAccessibilityLabel_(accessibility)
+        button.setToolTip_(tooltip or accessibility)
         return self._wire(button, callback)
 
     @staticmethod
@@ -184,14 +201,14 @@ class PopoverRenderer:
 
     def _measure_content(self, snapshot: UISnapshot, route: str) -> float:
         if getattr(self.controller, "confirmation", None):
-            return 300
+            return 360
         if route == "finding":
             return 460
         if route == "rules":
             data = getattr(self.controller, "rules_data", {}) or {}
             rules = data.get("rules") or []
             errors = data.get("errors") or []
-            return 100 + max(80, len(errors) * 62 + len(rules) * 76)
+            return 100 + max(80, (len(errors) + len(rules)) * 76)
         if route == "projects":
             return max(90, len(snapshot.projects) * 86 + 12)
         mode = getattr(self.controller, "inbox_mode", "open")
@@ -256,19 +273,29 @@ class PopoverRenderer:
         self._separator(root, 50, 0, POPOVER_WIDTH)
         root.addSubview_(self._label(
             confirmation.get("title", "Stop monitoring?"),
-            (PAD + 18, 150, POPOVER_WIDTH - 2 * PAD - 36, 28),
-            size=15, bold=True))
+            (PAD + 18, 72, POPOVER_WIDTH - 2 * PAD - 36, 44),
+            size=15, bold=True, lines=2))
+        button_y = self.layout.height - 48
         root.addSubview_(self._label(
             confirmation.get("message", ""),
-            (PAD + 18, 190, POPOVER_WIDTH - 2 * PAD - 36, 88),
-            size=11, lines=5, color=NSColor.secondaryLabelColor()))
+            (
+                PAD + 18,
+                122,
+                POPOVER_WIDTH - 2 * PAD - 36,
+                max(120, button_y - 138),
+            ),
+            size=11, lines=14, color=NSColor.secondaryLabelColor()))
         root.addSubview_(self._button(
-            "Cancel", (222, 305, 88, 32),
+            "Cancel", (222, button_y, 88, 32),
             lambda _sender: self.controller.cancel_confirmation()))
         root.addSubview_(self._button(
             confirmation.get("confirm_title", "Confirm"),
-            (318, 305, 96, 32),
-            lambda _sender: self.controller.confirm_change()))
+            (318, button_y, 96, 32),
+            lambda _sender: self.controller.confirm_change(),
+            role=(
+                "destructive"
+                if confirmation.get("destructive") else "primary"
+            )))
 
     # --- shared chrome --------------------------------------------------
     def _health_copy(self, snapshot: UISnapshot) -> tuple[str, Any]:
@@ -331,10 +358,12 @@ class PopoverRenderer:
                 "‹ Findings", (PAD, controls_y - 1, 88, 28),
                 lambda _sender: self.controller.select_tab("inbox"),
                 bordered=False))
+            library = getattr(
+                self.controller, "rules_context", "library") == "library"
             title = (
                 (
                     f"Rules for {_project_name(getattr(self.controller, 'selected_project', ''))}"
-                    if getattr(self.controller, "selected_project", "")
+                    if not library
                     else "Rule Library"
                 )
                 if route == "rules" else "Projects"
@@ -347,16 +376,26 @@ class PopoverRenderer:
     def _render_footer(self, root: NSView, snapshot: UISnapshot) -> None:
         y = self.layout.height - self.layout.footer_height
         self._separator(root, y, 0, POPOVER_WIDTH)
-        root.addSubview_(self._button(
-            "Rules", (PAD, y + 7, 64, 27),
-            lambda _sender: self.controller.open_rule_library(),
-            bordered=False,
-        ))
-        root.addSubview_(self._button(
-            "Projects", (84, y + 7, 70, 27),
-            lambda _sender: self.controller.select_tab("projects"),
-            bordered=False,
-        ))
+        routes = ("inbox", "rules", "projects")
+        navigation = NSSegmentedControl.alloc().initWithFrame_(
+            NSMakeRect(PAD, y + 7, 250, 27))
+        navigation.setSegmentCount_(len(routes))
+        navigation.setTrackingMode_(NSSegmentSwitchTrackingSelectOne)
+        for index, title in enumerate(("Findings", "Rules", "Projects")):
+            navigation.setLabel_forSegment_(title, index)
+        current = getattr(self.controller, "route", "inbox")
+        navigation.setSelectedSegment_(
+            routes.index(current) if current in routes else 0)
+
+        def select_route(sender) -> None:
+            selected = int(sender.selectedSegment())
+            if selected == 1:
+                self.controller.open_rule_library()
+            else:
+                self.controller.select_tab(routes[selected])
+
+        self._wire(navigation, select_route)
+        root.addSubview_(navigation)
         root.addSubview_(self._button(
             "More…", (346, y + 7, 68, 27),
             lambda sender: self.controller.show_app_menu(sender),
@@ -585,10 +624,9 @@ class PopoverRenderer:
             parent.addSubview_(self._label(
                 f"×{occurrences}", (274, y + 9, 30, 18), size=10,
                 color=NSColor.secondaryLabelColor()))
-        parent.addSubview_(self._button(
-            "", (74, y + 1, 274, 36),
+        parent.addSubview_(self._row_button(
+            (8, y + 2, 340, 35),
             lambda _sender, value=group: self.controller.open_finding(value),
-            bordered=False,
             accessibility=f"Open finding: {title}",
         ))
         if mode == "open":
@@ -597,12 +635,14 @@ class PopoverRenderer:
                 lambda _sender, value=group: self.controller.done_group(value),
                 bordered=False,
                 accessibility=f"Mark {title} reviewed",
+                role="icon",
             ))
         parent.addSubview_(self._button(
             "•••", (390, y + 6, 32, 28),
             lambda sender, value=group: self.controller.show_finding_menu(sender, value),
             bordered=False,
             accessibility=f"More actions for {title}",
+            role="icon",
         ))
         self._separator(parent, y + 39, 82, POPOVER_WIDTH - 96)
 
@@ -728,7 +768,11 @@ class PopoverRenderer:
             - self.layout.footer_height
         )
         projects = snapshot.projects
-        selected = getattr(self.controller, "selected_project", "")
+        library = getattr(
+            self.controller, "rules_context", "library") == "library"
+        selected = (
+            "" if library
+            else getattr(self.controller, "selected_project", ""))
         choices = [{"path": "", "name": "All Rules"}, *projects]
         popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
             NSMakeRect(PAD, content_top + 6, 230, 26), False)
@@ -747,12 +791,12 @@ class PopoverRenderer:
             "+ Add Rule", (326, content_top + 5, 88, 28),
             lambda sender: (
                 self.controller.show_add_rule_menu(sender)
-                if selected else self.controller.begin_add_rule("", sender)
+                if not library else self.controller.begin_add_rule("", sender)
             )))
         root.addSubview_(self._label(
             (
                 "Choose which rules run in this project."
-                if selected else "All rule definitions."
+                if not library else "All rule definitions."
             ),
             (PAD, content_top + 37, 300, 18), size=10,
             color=NSColor.secondaryLabelColor()))
@@ -763,7 +807,7 @@ class PopoverRenderer:
         self._wire(search, lambda sender: self.controller.filter_rules(
             str(sender.stringValue())))
         root.addSubview_(search)
-        if selected:
+        if not library:
             root.addSubview_(self._button(
                 "More…", (344, content_top + 58, 70, 27),
                 lambda sender: self.controller.show_rule_list_menu(sender),
@@ -784,32 +828,38 @@ class PopoverRenderer:
         errors = data.get("errors") or []
         if not rules and not errors:
             self._render_message_state(
-                root, "No rules in this project",
-                "Add a built-in rule, convert existing Cursor rules, or create Python.",
-                "+ Add rule", lambda: self.controller.show_add_rule_menu(None))
+                root,
+                "No rule definitions" if library else "No rules in this project",
+                (
+                    "Create a rule in a project to add it to this library."
+                    if library
+                    else "Add a built-in rule, convert Cursor rules, or create Python."
+                ),
+                "+ Add rule",
+                lambda: (
+                    self.controller.begin_add_rule("", None)
+                    if library
+                    else self.controller.show_add_rule_menu(None)
+                ))
             return
-        total_height = 12 + len(errors) * 62 + len(rules) * 76
+        total_height = 12 + (len(errors) + len(rules)) * 76
         scroll, document = self._scroll(
             (0, content_top + 90, self.layout.width,
              max(40, content_height - 90)), total_height)
         root.addSubview_(scroll)
         y = 10
         for error in errors:
-            document.addSubview_(self._label(
-                "RULE IMPORT FAILED", (PAD, y, 170, 17),
-                size=9, bold=True, color=NSColor.systemRedColor()))
-            document.addSubview_(self._label(
-                f"{Path(error.get('path', '')).name}: {error.get('error', '')}",
-                (PAD, y + 20, 390, 34), size=10, lines=2,
-                color=NSColor.secondaryLabelColor()))
-            y += 62
+            self._render_rule_error_row(document, y, error)
+            y += 76
         for rule in rules:
             self._render_rule_row(document, y, rule)
             y += 76
 
     def _render_rule_row(self, parent: NSView, y: float, rule: dict[str, Any]) -> None:
-        library = not bool(getattr(self.controller, "selected_project", ""))
+        library = getattr(
+            self.controller, "rules_context", "library") == "library"
         text_x = PAD if library else 116
+        text_width = 266 if library else 166
         if not library:
             switch = NSButton.alloc().initWithFrame_(
                 NSMakeRect(PAD, y + 12, 96, 24))
@@ -829,7 +879,7 @@ class PopoverRenderer:
             parent.addSubview_(switch)
         parent.addSubview_(self._label(
             rule.get("name") or rule.get("title") or rule.get("id", "Rule"),
-            (text_x, y + 5, 300 if library else 198, 20),
+            (text_x, y + 5, text_width, 20),
             size=12, bold=True))
         origin = {
             "global": "Shared source",
@@ -853,18 +903,47 @@ class PopoverRenderer:
             states.append("check failed")
         parent.addSubview_(self._label(
             " · ".join(states),
-            (text_x, y + 28, 300 if library else 198, 36), size=9.5,
+            (text_x, y + 28, text_width, 36), size=9.5,
             lines=2, color=NSColor.secondaryLabelColor()))
         parent.addSubview_(self._button(
-            "Edit", (324, y + 8, 54, 27),
+            "Edit", (286, y + 8, 54, 27),
             lambda _sender, value=rule: self.controller.edit_rule(value),
             bordered=False))
         parent.addSubview_(self._button(
-            "•••", (386, y + 8, 30, 27),
+            "Actions…", (344, y + 8, 76, 27),
             lambda sender, value=rule: self.controller.show_rule_menu(sender, value),
-            bordered=False))
+            bordered=False,
+            accessibility=(
+                "Actions for "
+                f"{rule.get('name') or rule.get('title') or rule.get('id', 'rule')}"
+            )))
         self._separator(
             parent, y + 74, text_x, POPOVER_WIDTH - text_x - PAD)
+
+    def _render_rule_error_row(
+        self, parent: NSView, y: float, error: dict[str, Any]
+    ) -> None:
+        name = error.get("name") or error.get("id") or "Unknown rule"
+        parent.addSubview_(self._label(
+            "RULE COULD NOT LOAD", (PAD, y + 4, 170, 17),
+            size=9, bold=True, color=NSColor.systemRedColor()))
+        parent.addSubview_(self._label(
+            name, (PAD, y + 22, 250, 18), size=11.5, bold=True))
+        parent.addSubview_(self._label(
+            error.get("load_error") or error.get("error") or "Unknown import error",
+            (PAD, y + 42, 270, 28), size=9.5, lines=2,
+            color=NSColor.secondaryLabelColor()))
+        parent.addSubview_(self._button(
+            "Open", (286, y + 8, 54, 27),
+            lambda _sender, value=error: self.controller.open_rule_source(value),
+            bordered=False))
+        parent.addSubview_(self._button(
+            "Actions…", (344, y + 8, 76, 27),
+            lambda sender, value=error: self.controller.show_rule_menu(
+                sender, value),
+            bordered=False,
+            accessibility=f"Actions for broken rule {name}"))
+        self._separator(parent, y + 74, PAD, POPOVER_WIDTH - 2 * PAD)
 
     # --- Projects -------------------------------------------------------
     def _render_projects(self, root: NSView, snapshot: UISnapshot) -> None:
@@ -892,6 +971,10 @@ class PopoverRenderer:
             switch.setState_(
                 NSControlStateValueOn if project.get("monitoring")
                 else NSControlStateValueOff)
+            switch.setAccessibilityLabel_(
+                "Monitor "
+                f"{project.get('name') or _project_name(project.get('path', ''))}"
+            )
             self._wire(switch, lambda sender, value=project: self.controller.toggle_project(
                 value, sender.state() == NSControlStateValueOn))
             document.addSubview_(switch)
@@ -914,26 +997,30 @@ class PopoverRenderer:
                 else NSColor.secondaryLabelColor()
             )
             document.addSubview_(self._label(
-                summary, (62, y + 29, 224, 42), size=9.5, lines=3,
+                summary, (62, y + 29, 172, 42), size=9.5, lines=3,
                 color=status_color))
             if project.get("open_count"):
                 document.addSubview_(self._label(
                     str(project["open_count"]), (368, y + 9, 24, 18),
                     size=11, bold=True))
             document.addSubview_(self._button(
-                "+ Rule", (292, y + 49, 58, 25),
+                "+ Rule", (244, y + 49, 58, 25),
                 lambda sender, value=project: self.controller.begin_add_rule(
                     value.get("path", ""), sender),
                 bordered=False))
             document.addSubview_(self._button(
-                "Rules", (350, y + 49, 48, 25),
+                "Rules", (306, y + 49, 48, 25),
                 lambda _sender, value=project: self.controller.open_manage_rules(
                     value.get("path", "")),
                 bordered=False))
             document.addSubview_(self._button(
-                "•••", (398, y + 10, 26, 26),
+                "Actions…", (356, y + 49, 68, 25),
                 lambda sender, value=project: self.controller.show_project_menu(sender, value),
-                bordered=False))
+                bordered=False,
+                accessibility=(
+                    "Actions for "
+                    f"{project.get('name') or _project_name(project.get('path', ''))}"
+                )))
             self._separator(document, y + 84, 62, POPOVER_WIDTH - 76)
             y += 86
 

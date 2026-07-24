@@ -114,9 +114,13 @@ plus any you converted.
   Runs when, Reads, and optional severity-labelled cases. **Save
   Draft** does not change runtime behavior; **Check & Enable/Activate** switches
   the last-good active source only after success. Advanced Python remains
-  available for arbitrary customization.
+  available for arbitrary customization. Standard `Command-A` and `Control-A`
+  select all text in the active field.
 - **Rules for Project** is a shareable checklist stored in
-  `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay local.
+  `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay
+  local. Every rule row has a labelled **Actions…** menu, and the Rule Editor
+  exposes **Delete Rule…**, **Remove Installed Rule…**, or **Use Shared
+  Version…** as appropriate. Removal keeps finding and audit history.
 - Rules live at `.cursor/rules-as-programs/rules/<id>/rule.py`; per-project
   violation logs are at `.cursor/rules-as-programs/log/audit.jsonl`.
 

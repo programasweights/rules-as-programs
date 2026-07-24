@@ -679,10 +679,15 @@ class Daemon:
                 known = sorted(self.known_projects)
             return {"ok": True, "known_projects": known}
         if rtype == "rule_library":
-            project_paths = [
+            discovered = [
                 item["path"] for item in cursor_projects.discover_projects(limit=100)
             ]
-            rules = rules_api.list_rule_library(project_paths)
+            with self._state_lock:
+                known = list(self.known_projects)
+            project_paths = list(dict.fromkeys([*known, *discovered]))
+            rules, errors = rules_api.list_rule_library_with_errors(
+                project_paths)
+            builtin_ids = set(scaffold.builtin_ids())
             for rule in rules:
                 if rule.get("source_origin") == "project":
                     root = rule.get("project_root", "")
@@ -694,10 +699,21 @@ class Daemon:
                         1 for root in project_paths
                         if rules_api.is_enabled(rule["id"], root)
                     )
+            for error in errors:
+                error["is_builtin"] = error.get("id") in builtin_ids
+                if error.get("scope") == "project":
+                    root = error.get("project_root", "")
+                    error["usage_count"] = (
+                        1 if root and rules_api.is_enabled(
+                            error["id"], root) else 0)
+                else:
+                    error["usage_count"] = sum(
+                        1 for root in project_paths
+                        if rules_api.is_enabled(error["id"], root))
             return {
                 "ok": True,
                 "rules": rules,
-                "errors": [],
+                "errors": errors,
                 "builtins": scaffold.builtin_ids(),
             }
         if rtype == "rules":
@@ -712,7 +728,9 @@ class Daemon:
                     rid: dict(value)
                     for rid, value in self._warm_state.get(project_root, {}).items()
                 }
+            builtin_ids = set(scaffold.builtin_ids())
             for rule in rules:
+                rule["is_builtin"] = rule["id"] in builtin_ids
                 state = warm.get(rule["id"], {})
                 rule["warm_status"] = state.get(
                     "status", "disabled" if not rule.get("enabled") else "idle")
@@ -726,13 +744,30 @@ class Daemon:
                         1 for path in project_paths
                         if rules_api.is_enabled(rule["id"], path)
                     )
+            error_rows = []
+            for error in errors:
+                summary = rules_api.summarize_rule_error(
+                    error.path,
+                    error.scope,
+                    error.error,
+                    project_root if error.scope == "project" else None,
+                )
+                summary["is_builtin"] = summary["id"] in builtin_ids
+                summary["usage_count"] = (
+                    1
+                    if summary.get("scope") == "project"
+                    and rules_api.is_enabled(summary["id"], project_root)
+                    else sum(
+                        1 for path in project_paths
+                        if rules_api.is_enabled(summary["id"], path))
+                    if summary.get("scope") == "global"
+                    else 0
+                )
+                error_rows.append(summary)
             return {
                 "ok": True,
                 "rules": rules,
-                "errors": [
-                    {"path": error.path, "scope": error.scope, "error": error.error}
-                    for error in errors
-                ],
+                "errors": error_rows,
                 "builtins": scaffold.builtin_ids(),
             }
         if rtype == "rule_get":
@@ -741,6 +776,7 @@ class Daemon:
             if info:
                 info["projection"] = rules_api.source_projection(
                     info.get("source", ""))
+                info["is_builtin"] = info["id"] in set(scaffold.builtin_ids())
             return {"ok": bool(info), "rule": info,
                     **({} if info else {"error": "rule not found"})}
         if rtype == "validate_rule":
@@ -852,7 +888,7 @@ class Daemon:
                     "conflict": True,
                     "path": str(target),
                 }
-            installed = scaffold.add_builtin(
+            installed = rules_api.install_builtin(
                 rule_id, scope, project_root, overwrite=replace)
             if not installed:
                 return {"ok": False, "error": "Built-in rule could not be installed."}
@@ -865,11 +901,21 @@ class Daemon:
             self.rules_cache.invalidate()
             return {"ok": True, "notes": notes}
         if rtype == "delete_rule":
-            project_roots = [
+            with self._state_lock:
+                known = list(self.known_projects)
+            discovered = [
                 item["path"] for item in cursor_projects.discover_projects(limit=100)
             ]
-            result = rules_api.delete_rule(
-                req["rule_id"], req.get("project_root") or None,
+            project_roots = list(dict.fromkeys([*known, *discovered]))
+            definition = req.get("definition") or {}
+            if definition.get("rule_id") not in (None, req["rule_id"]):
+                return {"ok": False, "error": "rule definition identity mismatch"}
+            result = rules_api.delete_rule_definition(
+                req["rule_id"],
+                definition.get("scope", ""),
+                definition.get("project_root") or None,
+                definition.get("source_path", ""),
+                definition.get("source_hash", ""),
                 project_roots=project_roots)
             if result.get("ok"):
                 self.rules_cache.invalidate()
@@ -889,8 +935,14 @@ class Daemon:
                 self.rules_cache.invalidate()
             return result
         if rtype == "revert_to_shared":
+            definition = req.get("definition") or {}
+            if definition.get("rule_id") not in (None, req["rule_id"]):
+                return {"ok": False, "error": "rule definition identity mismatch"}
             result = rules_api.revert_to_shared(
-                req["rule_id"], req["project_root"])
+                req["rule_id"],
+                req["project_root"],
+                definition.get("source_path", ""),
+                definition.get("source_hash", ""))
             if result.get("ok"):
                 self.rules_cache.invalidate()
             return result

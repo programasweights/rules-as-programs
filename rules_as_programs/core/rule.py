@@ -111,6 +111,22 @@ def load_rule_file(path: Path, scope: str) -> list[LoadedRule]:
     return rules
 
 
+def load_rule_file_with_error(
+    path: Path, scope: str
+) -> tuple[list[LoadedRule], RuleLoadError | None]:
+    """Load one source once while retaining an actionable import error."""
+    return _load_rule_file_result(path, scope)
+
+
+def rule_definition_count(path: Path) -> int | None:
+    """Count decorated RuleDefs even when one has invalid metadata."""
+    try:
+        module = _import_file(path)
+    except Exception:
+        return None
+    return len(rules_in_module(module)) if module is not None else None
+
+
 def _load_rule_file_result(
     path: Path, scope: str
 ) -> tuple[list[LoadedRule], RuleLoadError | None]:

@@ -10,12 +10,14 @@ from AppKit import (
     NSAlert,
     NSAlertFirstButtonReturn,
     NSAlertSecondButtonReturn,
+    NSAlertStyleCritical,
     NSApplication,
     NSBackingStoreBuffered,
     NSButton,
     NSColor,
     NSControlStateValueOff,
     NSControlStateValueOn,
+    NSEventModifierFlagCommand,
     NSFont,
     NSMenu,
     NSMenuItem,
@@ -30,17 +32,22 @@ from AppKit import (
     NSViewMinXMargin,
     NSViewMinYMargin,
     NSViewWidthSizable,
-    NSWindow,
     NSWindowStyleMaskClosable,
     NSWindowStyleMaskMiniaturizable,
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
     NSWorkspace,
 )
-from Foundation import NSMakeRect, NSObject
+from Foundation import NSMakeRange, NSMakeRect, NSObject
 from PyObjCTools import AppHelper
 
 from .. import rules_api, scaffold
+from .macos_controls import (
+    ButtonRole,
+    RAPCommandWindow,
+    appkit_text_length,
+    style_button,
+)
 from .model import UIModel
 
 WINDOW_W = 840
@@ -100,6 +107,7 @@ class RAPRuleEditorDocument(NSObject):
         self.spec_editor = None
         self.results = None
         self.status_label = None
+        self.lifecycle_button = None
         self._callbacks: dict[int, Callable[[Any], None]] = {}
         self._target = RAPRuleEditorTarget.alloc().init()
         self._target._callbacks = self._callbacks
@@ -111,6 +119,8 @@ class RAPRuleEditorDocument(NSObject):
         self._busy = False
         self._close_after_save = False
         self._rename_confirmed = False
+        self._lifecycle_confirmation_state: dict[str, int] | None = None
+        self._external_control_state: list[tuple[Any, str, bool]] = []
         self.show_full = False
         self.full_source = ""
         self.function_source = ""
@@ -132,6 +142,8 @@ class RAPRuleEditorDocument(NSObject):
         self.inputs_inferred = False
         self.has_probes = False
         self._advanced_menus: list[NSMenu] = []
+        self._key_views: list[Any] = []
+        self._has_rendered = False
         self.name_field = None
         self.description_editor = None
         self.cases_editor = None
@@ -199,11 +211,12 @@ class RAPRuleEditorDocument(NSObject):
             | NSWindowStyleMaskResizable
             | NSWindowStyleMaskMiniaturizable
         )
-        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        self.window = RAPCommandWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, WINDOW_W, WINDOW_H), mask,
             NSBackingStoreBuffered, False)
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
+        self.window.setAutorecalculatesKeyViewLoop_(True)
         self.window.setMinSize_((840, 560))
         self.window.setTitle_(f"Rule Editor — {self.name}")
 
@@ -215,12 +228,19 @@ class RAPRuleEditorDocument(NSObject):
         control.setTag_(tag)
         control.setTarget_(self._target)
         control.setAction_("invoke:")
+        if hasattr(control, "setNextKeyView_"):
+            self._key_views.append(control)
         return control
 
     @objc.python_method
-    def _button(self, title, frame, callback):
+    def _button(
+        self, title, frame, callback, *, role: ButtonRole = "secondary",
+        accessibility: str | None = None,
+    ):
         button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
         button.setTitle_(title)
+        style_button(
+            button, role=role, accessibility=accessibility)
         return self._wire(button, callback)
 
     @staticmethod
@@ -261,6 +281,7 @@ class RAPRuleEditorDocument(NSObject):
         editor.setDelegate_(self._text_delegate)
         editor.setString_(text)
         scroll.setDocumentView_(editor)
+        self._key_views.append(editor)
         return scroll, editor
 
     @objc.python_method
@@ -337,10 +358,287 @@ class RAPRuleEditorDocument(NSObject):
         return ok, source, error
 
     @objc.python_method
+    def _control_focus_key(self, view) -> str:
+        tag = int(view.tag()) if hasattr(view, "tag") else -1
+        return f"{view.__class__.__name__}:{tag}"
+
+    @objc.python_method
+    def _capture_focus_state(self) -> tuple[str, int, int] | None:
+        if not self.window:
+            return None
+        responder = self.window.firstResponder()
+        if responder is None:
+            return None
+        name_editor = self.name_field.currentEditor() if self.name_field else None
+        if name_editor is not None and responder == name_editor:
+            selected = responder.selectedRange()
+            return ("name", int(selected.location), int(selected.length))
+        candidates = (
+            ("description", self.description_editor),
+            ("cases", self.cases_editor),
+            ("source", self.editor if self.show_full else None),
+            ("results", self.results),
+        )
+        for semantic, view in candidates:
+            if view is not None and responder == view:
+                selected = responder.selectedRange()
+                return (semantic, int(selected.location), int(selected.length))
+        for view in self._key_views:
+            if responder == view:
+                return (f"control:{self._control_focus_key(view)}", 0, 0)
+        return None
+
+    @objc.python_method
+    def _restore_focus_state(
+        self, state: tuple[str, int, int] | None
+    ) -> None:
+        if not self.window or not self.name_field:
+            return
+        targets = {
+            "description": self.description_editor,
+            "cases": self.cases_editor,
+            "source": self.editor if self.show_full else None,
+            "results": self.results,
+        }
+        if state is None:
+            self.window.setInitialFirstResponder_(self.name_field)
+            self.window.makeFirstResponder_(self.name_field)
+            if not self._has_rendered and self.rule.get("new_draft"):
+                self.name_field.selectText_(None)
+            return
+        semantic, location, length = state
+        if semantic.startswith("control:"):
+            focus_key = semantic.removeprefix("control:")
+            for view in self._key_views:
+                if self._control_focus_key(view) == focus_key:
+                    self.window.makeFirstResponder_(view)
+                    return
+            semantic = "description"
+        if semantic == "name":
+            self.window.makeFirstResponder_(self.name_field)
+            target = self.name_field.currentEditor()
+        else:
+            target = targets.get(semantic)
+            if target is not None:
+                self.window.makeFirstResponder_(target)
+        if target is None:
+            target = self.description_editor or self.editor or self.name_field
+            self.window.makeFirstResponder_(target)
+        if not hasattr(target, "setSelectedRange_"):
+            return
+        text_length = appkit_text_length(target.string())
+        start = min(max(0, location), text_length)
+        size = min(max(0, length), text_length - start)
+        selected = NSMakeRange(start, size)
+        target.setSelectedRange_(selected)
+        if hasattr(target, "scrollRangeToVisible_"):
+            target.scrollRangeToVisible_(selected)
+
+    @objc.python_method
+    def _finish_key_loop(
+        self, focus_state: tuple[str, int, int] | None
+    ) -> None:
+        if not self.window:
+            return
+        self.window.recalculateKeyViewLoop()
+        key_views = [
+            view for view in self._key_views
+            if view is not None
+            and (not hasattr(view, "isEnabled") or view.isEnabled())
+        ]
+        for current, following in zip(
+            key_views, key_views[1:] + key_views[:1]
+        ):
+            current.setNextKeyView_(following)
+        self._restore_focus_state(focus_state)
+
+    @objc.python_method
+    def _lifecycle_action_title(self) -> str:
+        if self.rule.get("new_draft"):
+            return "Discard Draft"
+        if (
+            self.rule.get("scope") == "project"
+            and self.rule.get("customized_from")
+        ):
+            return "Use Shared Version…"
+        if self.rule.get("is_builtin"):
+            return "Remove Installed Rule…"
+        if self.rule.get("scope") == "global":
+            return "Delete Shared Rule…"
+        return "Delete Rule…"
+
+    @objc.python_method
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        if self.lifecycle_button is not None:
+            self.lifecycle_button.setEnabled_(not busy)
+
+    @objc.python_method
+    def set_external_lifecycle_pending(self, pending: bool) -> None:
+        if pending:
+            if self._external_control_state:
+                return
+            state: list[tuple[Any, str, bool]] = []
+            for view in dict.fromkeys(self._key_views):
+                if hasattr(view, "isEditable") and hasattr(view, "setEditable_"):
+                    state.append((view, "editable", bool(view.isEditable())))
+                    view.setEditable_(False)
+                elif hasattr(view, "isEnabled") and hasattr(view, "setEnabled_"):
+                    state.append((view, "enabled", bool(view.isEnabled())))
+                    view.setEnabled_(False)
+            self._external_control_state = state
+            self.window.makeFirstResponder_(None)
+            self._set_busy(True)
+            return
+        state, self._external_control_state = self._external_control_state, []
+        for view, kind, value in state:
+            if kind == "editable":
+                view.setEditable_(value)
+            else:
+                view.setEnabled_(value)
+        self._set_busy(False)
+
+    @objc.python_method
+    def confirm_lifecycle_action(self) -> None:
+        if self._busy:
+            self._set_result("Wait for the current save or check to finish.")
+            return
+        if self.rule.get("new_draft") and not self._dirty:
+            self.window.close()
+            return
+        definition = self.rule.get("definition") or {}
+        if not self.rule.get("new_draft") and not definition:
+            self._set_result("Reload this rule before removing it.")
+            return
+        reverting = bool(
+            self.rule.get("scope") == "project"
+            and self.rule.get("customized_from")
+        )
+        if self.rule.get("new_draft"):
+            title = f"Discard draft “{self.name}”?"
+            message = "This draft has not been saved, so no rule file will be deleted."
+            confirm_title = "Discard Draft"
+        elif reverting:
+            title = f"Use the shared version of “{self.name}”?"
+            message = (
+                "This removes only the project customization and preserves this "
+                "project's Run/Don't Run assignment."
+            )
+            confirm_title = "Use Shared Version"
+        else:
+            title = f"{self._lifecycle_action_title().rstrip('…')} “{self.name}”?"
+            message = (
+                "This removes exactly this definition. Existing finding and "
+                "audit history will be kept."
+            )
+            confirm_title = (
+                "Remove Rule" if self.rule.get("is_builtin") else "Delete Rule")
+        source_path = definition.get("source_path", "")
+        if source_path:
+            message += f"\n\nSource: {source_path}"
+        if self.manager and definition:
+            state = self.manager.definition_state(definition)
+            if state["busy"]:
+                self._set_result(
+                    "Another editor is saving this definition. Wait for it to finish.")
+                return
+            if state["dirty"]:
+                message += (
+                    f"\n\n{state['dirty']} open editor(s) have unsaved changes. "
+                    "Those changes will be discarded."
+                )
+            self._lifecycle_confirmation_state = dict(state)
+        else:
+            self._lifecycle_confirmation_state = None
+        alert = NSAlert.alloc().init()
+        alert.setAlertStyle_(NSAlertStyleCritical)
+        alert.setMessageText_(title)
+        alert.setInformativeText_(message)
+        confirm = alert.addButtonWithTitle_(confirm_title)
+        if hasattr(confirm, "setContentTintColor_"):
+            confirm.setContentTintColor_(NSColor.systemRedColor())
+        alert.addButtonWithTitle_("Cancel")
+
+        def completed(response):
+            if response == NSAlertFirstButtonReturn:
+                self._perform_lifecycle_action()
+            else:
+                self._lifecycle_confirmation_state = None
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def _perform_lifecycle_action(self) -> None:
+        if self._busy:
+            self._set_result("Wait for the current save or check to finish.")
+            return
+        if self.rule.get("new_draft"):
+            self._dirty = False
+            self.window.setDocumentEdited_(False)
+            self.window.close()
+            return
+        definition = dict(self.rule.get("definition") or {})
+        if (
+            self.manager
+            and definition
+            and self._lifecycle_confirmation_state is not None
+            and self.manager.definition_state(definition)
+            != self._lifecycle_confirmation_state
+        ):
+            self._lifecycle_confirmation_state = None
+            self._set_result(
+                "Open editors changed after confirmation. Review and try again.")
+            return
+        self._lifecycle_confirmation_state = None
+        reverting = bool(
+            self.rule.get("scope") == "project"
+            and self.rule.get("customized_from")
+        )
+        request = {
+            "type": "revert_to_shared" if reverting else "delete_rule",
+            "rule_id": self.rule_id,
+            "definition": definition,
+        }
+        if reverting:
+            request["project_root"] = (
+                definition.get("project_root") or self.project_root)
+        if self.manager:
+            self.manager.set_definition_pending(definition, True)
+        else:
+            self._set_busy(True)
+        self.status_label.setStringValue_(
+            "Using shared version…" if reverting else "Removing rule…")
+
+        def complete(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    if self.manager:
+                        self.manager.set_definition_pending(definition, False)
+                    else:
+                        self._set_busy(False)
+                    self._set_result(
+                        result.get("error", "The rule could not be removed."))
+                    self.status_label.setStringValue_("Remove failed")
+                    return
+                self._dirty = False
+                self.window.setDocumentEdited_(False)
+                if self.manager:
+                    self.manager.lifecycle_completed(self, result)
+                else:
+                    self._set_busy(False)
+                self.window.close()
+            _on_main(apply)
+
+        self.model.perform(request, complete)
+
+    @objc.python_method
     def _render(self) -> None:
+        focus_state = self._capture_focus_state()
         self._capture()
         self._callbacks.clear()
         self._next_tag = 1
+        self._key_views = []
         content = self.window.contentView()
         for view in list(content.subviews()):
             view.removeFromSuperview()
@@ -358,6 +656,7 @@ class RAPRuleEditorDocument(NSObject):
         name_field.setAutoresizingMask_(NSViewMinYMargin | NSViewWidthSizable)
         content.addSubview_(name_field)
         self.name_field = name_field
+        self._key_views.append(name_field)
         scope = self.rule.get("scope", "project")
         if self.rule.get("new_draft"):
             draft = "Draft"
@@ -377,7 +676,10 @@ class RAPRuleEditorDocument(NSObject):
         enabled = NSButton.alloc().initWithFrame_(
             NSMakeRect(width - 170, height - 52, 152, 26))
         enabled.setButtonType_(NSSwitchButton)
-        enabled.setTitle_("Runs in this project")
+        enabled.setTitle_(
+            "Runs by default"
+            if scope == "global" and not self.project_root
+            else "Runs in this project")
         enabled.setState_(
             NSControlStateValueOn if self.rule.get("enabled") else NSControlStateValueOff)
         enabled.setEnabled_(
@@ -525,10 +827,19 @@ class RAPRuleEditorDocument(NSObject):
         results_scroll.setDocumentView_(results)
         content.addSubview_(results_scroll)
         self.results = results
+        self._key_views.append(results)
 
+        lifecycle = self._button(
+            self._lifecycle_action_title(), (18, 12, 148, 30),
+            lambda _sender: self.confirm_lifecycle_action(),
+            role="destructive",
+            accessibility=self._lifecycle_action_title().rstrip("…"))
+        lifecycle.setEnabled_(not self._busy)
+        self.lifecycle_button = lifecycle
+        content.addSubview_(lifecycle)
         self.status_label = self._label(
             "Unsaved" if self._dirty else "Ready",
-            (18, 18, width - 370, 20), 10, False,
+            (174, 18, width - 526, 20), 10, False,
             NSColor.secondaryLabelColor())
         content.addSubview_(self.status_label)
         more = self._button(
@@ -542,18 +853,26 @@ class RAPRuleEditorDocument(NSObject):
         check = self._button(
             activate_title, (width - 274, 12, 124, 30),
             lambda _sender: self.save(activate=True))
+        check.setKeyEquivalent_("\r")
+        check.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
         check.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(check)
         save = self._button(
             "Save Draft", (width - 142, 12, 74, 30),
             lambda _sender: self.save())
+        save.setKeyEquivalent_("s")
+        save.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
         save.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(save)
         close = self._button(
             "Close", (width - 62, 12, 54, 30),
             lambda _sender: self.window.performClose_(None))
+        close.setKeyEquivalent_("w")
+        close.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
         close.setAutoresizingMask_(NSViewMinXMargin)
         content.addSubview_(close)
+        self._finish_key_loop(focus_state)
+        self._has_rendered = True
 
     @objc.python_method
     def editor_changed(self) -> None:
@@ -678,12 +997,12 @@ class RAPRuleEditorDocument(NSObject):
             alert.beginSheetModalForWindow_completionHandler_(
                 self.window, completed)
             return
-        self._busy = True
+        self._set_busy(True)
         self.status_label.setStringValue_("Saving…")
 
         def complete(result):
             def apply():
-                self._busy = False
+                self._set_busy(False)
                 if not result.get("ok"):
                     self._rename_confirmed = False
                     self._close_after_save = False
@@ -738,10 +1057,12 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _activate(self) -> None:
+        self._set_busy(True)
         self._set_result("Checking and preparing rule…")
 
         def complete(result):
             def apply():
+                self._set_busy(False)
                 if result.get("ok"):
                     self.rule["enabled"] = bool(result.get("enabled", True))
                     active = result.get("active", {})
@@ -787,19 +1108,19 @@ class RAPRuleEditorDocument(NSObject):
         if not ok:
             self._set_result(error)
             return
-        self._busy = True
+        self._set_busy(True)
         self._set_result("Validating source…")
 
         def validated(result):
             if not result.get("ok"):
                 _on_main(lambda: (
-                    setattr(self, "_busy", False),
+                    self._set_busy(False),
                     self._set_result(result.get("error", "Rule is invalid."))))
                 return
 
             def tested(test_result):
                 def apply():
-                    self._busy = False
+                    self._set_busy(False)
                     if not test_result.get("ok"):
                         self._set_result(test_result.get("error", "Check failed."))
                     elif not test_result.get("total"):
@@ -902,6 +1223,9 @@ class RAPRuleEditorDocument(NSObject):
         self.window.center()
 
     def windowShouldClose_(self, _sender):
+        if self._busy:
+            self._set_result("Wait for the current save or check to finish.")
+            return False
         if not self._dirty:
             return True
         alert = NSAlert.alloc().init()
@@ -927,9 +1251,15 @@ class RAPRuleEditorDocument(NSObject):
 
 
 class RuleEditorManager:
-    def __init__(self, model: UIModel) -> None:
+    def __init__(
+        self,
+        model: UIModel,
+        on_changed: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.model = model
+        self.on_changed = on_changed
         self.documents: dict[tuple[str, str], RAPRuleEditorDocument] = {}
+        self._pending_sources: set[str] = set()
 
     def open(self, rule: dict[str, Any], project_root: str) -> None:
         key = (project_root or "", str(rule.get("id", "rule")))
@@ -938,6 +1268,10 @@ class RuleEditorManager:
             document = RAPRuleEditorDocument.alloc().init()
             document.configure(self, self.model, rule, project_root)
             self.documents[key] = document
+        source_path = str(
+            (document.rule.get("definition") or {}).get("source_path", ""))
+        if source_path in self._pending_sources:
+            document.set_external_lifecycle_pending(True)
         document.show()
 
     def closed(self, document: RAPRuleEditorDocument) -> None:
@@ -950,3 +1284,52 @@ class RuleEditorManager:
     ) -> None:
         self.documents.pop((document.project_root, old_id), None)
         self.documents[(document.project_root, new_id)] = document
+
+    def lifecycle_completed(
+        self, document: RAPRuleEditorDocument, result: dict[str, Any]
+    ) -> None:
+        self.definition_removed(document.rule.get("definition") or {})
+        if self.on_changed:
+            self.on_changed(result)
+
+    def definition_state(self, definition: dict[str, Any]) -> dict[str, int]:
+        source_path = str(definition.get("source_path", ""))
+        matching = [
+            document for document in self.documents.values()
+            if str((document.rule.get("definition") or {}).get(
+                "source_path", "")) == source_path
+        ]
+        return {
+            "open": len(matching),
+            "dirty": sum(bool(document._dirty) for document in matching),
+            "busy": sum(bool(document._busy) for document in matching),
+        }
+
+    def set_definition_pending(
+        self, definition: dict[str, Any], pending: bool
+    ) -> None:
+        source_path = str(definition.get("source_path", ""))
+        if not source_path:
+            return
+        if pending:
+            self._pending_sources.add(source_path)
+        else:
+            self._pending_sources.discard(source_path)
+        for document in list(self.documents.values()):
+            current = document.rule.get("definition") or {}
+            if str(current.get("source_path", "")) == source_path:
+                document.set_external_lifecycle_pending(pending)
+
+    def definition_removed(self, definition: dict[str, Any]) -> None:
+        source_path = str(definition.get("source_path", ""))
+        if not source_path:
+            return
+        self._pending_sources.discard(source_path)
+        for document in list(self.documents.values()):
+            current = document.rule.get("definition") or {}
+            if str(current.get("source_path", "")) != source_path:
+                continue
+            document.set_external_lifecycle_pending(False)
+            document._dirty = False
+            document.window.setDocumentEdited_(False)
+            document.window.close()

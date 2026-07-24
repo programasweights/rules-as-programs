@@ -23,7 +23,12 @@ from AppKit import (
     NSForegroundColorAttributeName,
     NSImage,
     NSImageLeft,
+    NSMenu,
+    NSMenuItem,
     NSMinYEdge,
+    NSEventModifierFlagCommand,
+    NSEventModifierFlagControl,
+    NSEventModifierFlagShift,
     NSPasteboard,
     NSPasteboardTypeString,
     NSPopover,
@@ -167,6 +172,7 @@ class MacOSController(NSObject):
         self.detail_error = ""
         self.show_raw_trace = False
         self.home_project = ""
+        self.rules_context = "library"
         self.selected_project = ""
         self.rules_data: dict[str, Any] = {}
         self.rules_loading = False
@@ -193,6 +199,7 @@ class MacOSController(NSObject):
     def applicationDidFinishLaunching_(self, _notification):
         app = NSApplication.sharedApplication()
         app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        self._build_main_menu()
         self._build_status_item()
         self._build_popover()
         self._render()
@@ -205,9 +212,56 @@ class MacOSController(NSObject):
         self.model.stop()
 
     @objc.python_method
+    def _build_main_menu(self) -> None:
+        """Install responder-chain editing commands for this nib-less app."""
+        main = NSMenu.alloc().initWithTitle_("Rules as Programs")
+
+        app_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Rules as Programs", None, "")
+        app_menu = NSMenu.alloc().initWithTitle_("Rules as Programs")
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Quit Rules as Programs", "terminate:", "q")
+        quit_item.setTarget_(None)
+        quit_item.setKeyEquivalentModifierMask_(NSEventModifierFlagCommand)
+        app_menu.addItem_(quit_item)
+        app_item.setSubmenu_(app_menu)
+        main.addItem_(app_item)
+
+        edit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Edit", None, "")
+        edit_menu = NSMenu.alloc().initWithTitle_("Edit")
+
+        def add(
+            title: str, action: str, key: str, modifiers: int
+        ) -> None:
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, action, key)
+            # A nil target is intentional: AppKit forwards the selector to the
+            # active field editor or text view through the responder chain.
+            item.setTarget_(None)
+            item.setKeyEquivalentModifierMask_(modifiers)
+            edit_menu.addItem_(item)
+
+        add("Undo", "undo:", "z", NSEventModifierFlagCommand)
+        add(
+            "Redo", "redo:", "z",
+            NSEventModifierFlagCommand | NSEventModifierFlagShift)
+        edit_menu.addItem_(NSMenuItem.separatorItem())
+        add("Cut", "cut:", "x", NSEventModifierFlagCommand)
+        add("Copy", "copy:", "c", NSEventModifierFlagCommand)
+        add("Paste", "paste:", "v", NSEventModifierFlagCommand)
+        add("Select All", "selectAll:", "a", NSEventModifierFlagCommand)
+        add("Select All (Control-A)", "selectAll:", "a", NSEventModifierFlagControl)
+
+        edit_item.setSubmenu_(edit_menu)
+        main.addItem_(edit_item)
+        NSApplication.sharedApplication().setMainMenu_(main)
+
+    @objc.python_method
     def _build_status_item(self) -> None:
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
             NSVariableStatusItemLength)
+        self.status_item.setHighlightMode_(True)
         button = self.status_item.button()
         image = _paw_template_image()
         if image:
@@ -227,6 +281,7 @@ class MacOSController(NSObject):
         self.popover = NSPopover.alloc().init()
         self.popover.setBehavior_(NSPopoverBehaviorTransient)
         self.popover.setAnimates_(True)
+        self.popover.setDelegate_(self)
         self.popover.setContentSize_(NSMakeSize(POPOVER_WIDTH, POPOVER_HEIGHT))
         self.popover.setContentViewController_(self.content_controller)
 
@@ -239,9 +294,18 @@ class MacOSController(NSObject):
         button = self.status_item.button()
         self.popover.showRelativeToRect_ofView_preferredEdge_(
             button.bounds(), button, NSMinYEdge)
+        button.setHighlighted_(True)
         window = self.popover.contentViewController().view().window()
         if window:
             window.makeKeyWindow()
+
+    def popoverWillShow_(self, _notification):
+        if self.status_item:
+            self.status_item.button().setHighlighted_(True)
+
+    def popoverDidClose_(self, _notification):
+        if self.status_item:
+            self.status_item.button().setHighlighted_(False)
 
     @objc.python_method
     def quit(self) -> None:
@@ -311,13 +375,14 @@ class MacOSController(NSObject):
     @objc.python_method
     def request_confirmation(
         self, title: str, message: str, confirm_title: str,
-        callback: Callable[[], None],
+        callback: Callable[[], None], *, destructive: bool = False,
     ) -> None:
         self.confirmation = {
             "title": title,
             "message": message,
             "confirm_title": confirm_title,
             "callback": callback,
+            "destructive": destructive,
         }
         self._render()
 
@@ -351,6 +416,7 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def open_manage_rules(self, project_root: str) -> None:
+        self.rules_context = "project"
         self.selected_project = project_root
         self.route = "rules"
         self._load_rules()
@@ -374,7 +440,7 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def open_rule_library(self) -> None:
-        self.selected_project = ""
+        self.rules_context = "library"
         self.route = "rules"
         self._load_rules()
         self._render()
@@ -607,7 +673,9 @@ class MacOSController(NSObject):
     # --- rules ----------------------------------------------------------
     @objc.python_method
     def select_project(self, project_root: str) -> None:
-        self.selected_project = project_root
+        self.rules_context = "project" if project_root else "library"
+        if project_root:
+            self.selected_project = project_root
         self._load_rules()
 
     @objc.python_method
@@ -615,14 +683,20 @@ class MacOSController(NSObject):
         self.rules_loading = True
         self._rules_request_token += 1
         token = self._rules_request_token
-        requested_project = self.selected_project
+        requested_context = self.rules_context
+        requested_project = (
+            self.selected_project if requested_context == "project" else "")
         self._render()
 
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
                 if (
                     token != self._rules_request_token
-                    or requested_project != self.selected_project
+                    or requested_context != self.rules_context
+                    or (
+                        requested_context == "project"
+                        and requested_project != self.selected_project
+                    )
                 ):
                     return
                 self.rules_loading = False
@@ -635,7 +709,7 @@ class MacOSController(NSObject):
 
         request = (
             {"type": "rule_library"}
-            if not requested_project
+            if requested_context == "library"
             else {"type": "rules", "project_root": requested_project}
         )
         self.model.perform(request, complete)
@@ -684,10 +758,11 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def _unmute_rule(self, rule: dict[str, Any]) -> None:
+        project_root = self._rule_project_root(rule)
         self.model.perform({
             "type": "unmute",
             "rule_id": rule.get("id"),
-            "project_root": self.selected_project,
+            "project_root": project_root,
         }, lambda result: _on_main(lambda: (
             self._load_rules() if result.get("ok")
             else self._set_banner(
@@ -695,95 +770,198 @@ class MacOSController(NSObject):
         )))
 
     @objc.python_method
+    def _rule_project_root(self, rule: dict[str, Any]) -> str:
+        definition = rule.get("definition") or {}
+        if definition.get("project_root"):
+            return str(definition["project_root"])
+        if "project_root" in rule:
+            return str(rule.get("project_root") or "")
+        return self.selected_project if self.rules_context == "project" else ""
+
+    @objc.python_method
+    def _delete_action_title(self, rule: dict[str, Any]) -> str:
+        if rule.get("is_builtin"):
+            return "Remove installed built-in copy…"
+        definition = rule.get("definition") or {}
+        if definition.get("scope") == "project":
+            return "Delete project rule…"
+        return "Delete shared rule…"
+
+    @objc.python_method
+    def open_rule_source(self, rule: dict[str, Any]) -> None:
+        _open_path(str(rule.get("source_path", "")))
+
+    @objc.python_method
     def show_rule_menu(self, sender, rule: dict[str, Any]) -> None:
-        items = [
-            (
-                "Edit global rule…" if rule.get("scope") == "global"
-                else "Edit in Rule Editor…",
-                lambda: self.edit_rule(rule),
-                True,
-            ),
-            ("Test rule", lambda: self._test_rule_quick(rule), True),
-            (
-                "Show future findings",
-                lambda: self._unmute_rule(rule),
-                bool(rule.get("muted")),
-            ),
-            ("Open Python file", lambda: _open_path(rule.get("source_path", "")), True),
-            ("Copy Python path", lambda: _copy_text(rule.get("source_path", "")), True),
-        ]
-        if rule.get("scope") == "global" and self.selected_project:
+        invalid = bool(rule.get("invalid"))
+        items: list[tuple[str, Callable[[], None], bool]] = []
+        if not invalid:
+            items.extend([
+                (
+                    "Edit shared rule…" if rule.get("scope") == "global"
+                    else "Edit in Rule Editor…",
+                    lambda: self.edit_rule(rule),
+                    True,
+                ),
+                ("Test rule", lambda: self._test_rule_quick(rule), True),
+                (
+                    "Show future findings",
+                    lambda: self._unmute_rule(rule),
+                    bool(rule.get("muted")),
+                ),
+            ])
+        items.extend([
+            ("Open Python file",
+             lambda: _open_path(rule.get("source_path", "")), True),
+            ("Copy Python path",
+             lambda: _copy_text(rule.get("source_path", "")), True),
+        ])
+        project_context = self.rules_context == "project"
+        if (
+            not invalid
+            and rule.get("scope") == "global"
+            and project_context
+            and self.selected_project
+        ):
             items.insert(
                 1,
                 ("Customize for this project…",
                  lambda: self._create_project_override(rule), True),
             )
-        elif rule.get("scope") == "project" and rule.get("customized_from"):
-            items.insert(
-                1,
-                ("Revert to Shared",
-                 lambda: self._revert_to_shared(rule), True),
-            )
-        elif rule.get("scope") == "project":
+        elif (
+            not invalid
+            and rule.get("scope") == "project"
+            and not rule.get("customized_from")
+        ):
             items.insert(
                 1,
                 ("Share across projects…",
                  lambda: self._promote_to_shared(rule), True),
             )
-        library = not bool(self.selected_project)
-        if library:
-            items.append(("-", lambda: None, True))
-            if rule.get("is_builtin"):
-                items.append((
-                    "Remove built-in rule…",
-                    lambda: self._confirm_delete_rule(rule),
-                    True,
-                ))
-                items.append((
-                    "Stop running everywhere",
-                    lambda: self._stop_rule_everywhere(rule),
-                    True,
-                ))
-            elif rule.get("scope") == "project":
-                items.append((
-                    "Delete project rule…",
-                    lambda: self._confirm_delete_rule(rule),
-                    True,
-                ))
-            else:
-                items.append((
-                    "Delete shared rule…",
-                    lambda: self._confirm_delete_rule(rule),
-                    True,
-                ))
+        items.append(("-", lambda: None, True))
+        if rule.get("scope") == "project" and rule.get("customized_from"):
+            items.append((
+                "Use shared version…",
+                lambda: self._confirm_revert_to_shared(rule),
+                bool(rule.get("definition")),
+            ))
+        else:
+            items.append((
+                self._delete_action_title(rule),
+                lambda: self._confirm_delete_rule(rule),
+                bool(rule.get("definition")),
+            ))
+        if rule.get("is_builtin") and not invalid:
+            items.append((
+                "Stop running everywhere",
+                lambda: self._stop_rule_everywhere(rule),
+                True,
+            ))
         self.renderer.popup_menu(sender, items)
 
     @objc.python_method
     def _confirm_delete_rule(self, rule: dict[str, Any]) -> None:
+        definition = rule.get("definition") or {}
+        if not definition:
+            self._set_banner("Reload this rule before deleting it.")
+            return
         name = rule.get("name") or rule.get("title") or "rule"
         usage = int(rule.get("usage_count", 0) or 0)
-        project_root = rule.get("project_root", "")
-        scope_copy = (
-            f"This project rule belongs to {Path(project_root).name}."
-            if project_root else f"It currently runs in {usage} project(s)."
-        )
+        project_root = definition.get("project_root", "")
+        source_path = definition.get("source_path", "")
+        if definition.get("scope") == "project":
+            effect = (
+                f"This deletes only the definition owned by "
+                f"{Path(project_root).name or project_root}. It will no longer "
+                "run in that project."
+            )
+        else:
+            effect = (
+                f"This deletes the shared definition currently used by "
+                f"{usage} project(s). Project-owned overrides remain, and "
+                "assignment/hidden-finding choices are retained for this ID."
+            )
+        if rule.get("is_builtin"):
+            effect = (
+                "This removes the installed copy; the bundled template can be "
+                "installed again. " + effect
+            )
+        editor_state = None
+        if self._studio and hasattr(self._studio, "definition_state"):
+            editor_state = self._studio.definition_state(definition)
+            if editor_state["busy"]:
+                self._set_banner(
+                    "Wait for the open Rule Editor to finish saving or checking.")
+                return
+            if editor_state["dirty"]:
+                effect += (
+                    f" {editor_state['dirty']} open editor(s) have unsaved "
+                    "changes; those changes will be discarded."
+                )
+        action = (
+            "Remove rule" if rule.get("is_builtin") else "Delete rule")
         self.request_confirmation(
-            f"Delete “{name}”?",
-            scope_copy + " Existing finding and audit history will be kept.",
-            "Delete rule",
-            lambda: self._delete_rule(rule),
+            f"{action} “{name}”?",
+            effect + f"\n\nSource: {source_path}\n"
+            "Existing finding and audit history will be kept.",
+            action,
+            lambda state=editor_state: self._delete_rule(rule, state),
+            destructive=True,
         )
 
     @objc.python_method
-    def _delete_rule(self, rule: dict[str, Any]) -> None:
+    def _delete_rule(
+        self,
+        rule: dict[str, Any],
+        expected_editor_state: dict[str, int] | None = None,
+    ) -> None:
+        definition = dict(rule.get("definition") or {})
+        if (
+            expected_editor_state is not None
+            and self._studio
+            and self._studio.definition_state(definition)
+            != expected_editor_state
+        ):
+            self._set_banner(
+                "Open editors changed after confirmation. Review and try again.")
+            return
+        if self._studio and hasattr(
+            self._studio, "set_definition_pending"
+        ):
+            self._studio.set_definition_pending(definition, True)
+
+        def complete(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    if self._studio and hasattr(
+                        self._studio, "set_definition_pending"
+                    ):
+                        self._studio.set_definition_pending(definition, False)
+                    self._set_banner(
+                        result.get("error", "Could not delete rule."))
+                    return
+                if self._studio and hasattr(
+                    self._studio, "definition_removed"
+                ):
+                    self._studio.definition_removed(definition)
+                warnings = [str(item) for item in result.get("warnings", [])]
+                self._set_banner(
+                    "Rule definition removed. Existing history was kept."
+                    + (
+                        " Cleanup warning: " + "; ".join(warnings)
+                        if warnings else ""
+                    ))
+                if self.route == "rules":
+                    self._load_rules()
+                else:
+                    self.model.refresh()
+            _on_main(apply)
+
         self.model.perform({
             "type": "delete_rule",
             "rule_id": rule.get("id"),
-            "project_root": rule.get("project_root", ""),
-        }, lambda result: _on_main(lambda: (
-            self._load_rules() if result.get("ok")
-            else self._set_banner(result.get("error", "Could not delete rule."))
-        )))
+            "definition": definition,
+        }, complete)
 
     @objc.python_method
     def _stop_rule_everywhere(self, rule: dict[str, Any]) -> None:
@@ -832,22 +1010,97 @@ class MacOSController(NSObject):
         }, loaded)
 
     @objc.python_method
-    def _revert_to_shared(self, rule: dict[str, Any]) -> None:
+    def _confirm_revert_to_shared(self, rule: dict[str, Any]) -> None:
+        definition = rule.get("definition") or {}
+        if not definition:
+            self._set_banner("Reload this rule before changing its source.")
+            return
+        name = rule.get("name") or rule.get("title") or "rule"
+        source_path = definition.get("source_path", "")
+        editor_warning = ""
+        editor_state = None
+        if self._studio and hasattr(self._studio, "definition_state"):
+            editor_state = self._studio.definition_state(definition)
+            if editor_state["busy"]:
+                self._set_banner(
+                    "Wait for the open Rule Editor to finish saving or checking.")
+                return
+            if editor_state["dirty"]:
+                editor_warning = (
+                    f" {editor_state['dirty']} open editor(s) have unsaved "
+                    "changes; those changes will be discarded."
+                )
+        self.request_confirmation(
+            f"Use the shared version of “{name}”?",
+            "This removes only this project's customized source and keeps its "
+            "current Run/Don't Run assignment. Existing finding and audit "
+            f"history remains available.{editor_warning}"
+            f"\n\nProject source: {source_path}",
+            "Use Shared Version",
+            lambda state=editor_state: self._revert_to_shared(rule, state),
+            destructive=True,
+        )
+
+    @objc.python_method
+    def _revert_to_shared(
+        self,
+        rule: dict[str, Any],
+        expected_editor_state: dict[str, int] | None = None,
+    ) -> None:
+        definition = dict(rule.get("definition") or {})
+        if (
+            expected_editor_state is not None
+            and self._studio
+            and self._studio.definition_state(definition)
+            != expected_editor_state
+        ):
+            self._set_banner(
+                "Open editors changed after confirmation. Review and try again.")
+            return
+        if self._studio and hasattr(
+            self._studio, "set_definition_pending"
+        ):
+            self._studio.set_definition_pending(definition, True)
+
+        def complete(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    if self._studio and hasattr(
+                        self._studio, "set_definition_pending"
+                    ):
+                        self._studio.set_definition_pending(definition, False)
+                    self._set_banner(
+                        result.get("error", "Could not use shared version."))
+                    return
+                if self._studio and hasattr(
+                    self._studio, "definition_removed"
+                ):
+                    self._studio.definition_removed(definition)
+                warnings = [str(item) for item in result.get("warnings", [])]
+                self._set_banner(
+                    "Project customization removed; assignment was preserved."
+                    + (
+                        " Cleanup warning: " + "; ".join(warnings)
+                        if warnings else ""
+                    ))
+                self._load_rules()
+            _on_main(apply)
+
         self.model.perform({
             "type": "revert_to_shared",
             "rule_id": rule.get("id"),
-            "project_root": self.selected_project,
-        }, lambda result: _on_main(lambda: (
-            self._load_rules() if result.get("ok")
-            else self._set_banner(result.get("error", "Could not revert rule."))
-        )))
+            "project_root": (
+                definition.get("project_root") or self.selected_project),
+            "definition": definition,
+        }, complete)
 
     @objc.python_method
     def _promote_to_shared(self, rule: dict[str, Any]) -> None:
+        project_root = self._rule_project_root(rule)
         self.model.perform({
             "type": "promote_to_shared",
             "rule_id": rule.get("id"),
-            "project_root": self.selected_project,
+            "project_root": project_root,
         }, lambda result: _on_main(lambda: (
             self._load_rules() if result.get("ok")
             else self._set_banner(result.get("error", "Could not share rule."))
@@ -856,6 +1109,7 @@ class MacOSController(NSObject):
     @objc.python_method
     def _test_rule_quick(self, rule: dict[str, Any]) -> None:
         rule_name = rule.get("name") or rule.get("title") or "rule"
+        project_root = self._rule_project_root(rule)
         self._set_banner(f"Testing {rule_name}…")
 
         def complete(result: dict[str, Any]) -> None:
@@ -873,13 +1127,13 @@ class MacOSController(NSObject):
         self.model.perform({
             "type": "test",
             "rule_id": rule.get("id"),
-            "project_root": self.selected_project,
+            "project_root": project_root,
         }, complete, timeout=180)
 
     @objc.python_method
     def edit_rule(self, rule: dict[str, Any]) -> None:
         rule_id = rule.get("id") or rule.get("rule_id")
-        project_root = rule.get("project_root") or self.selected_project
+        project_root = self._rule_project_root(rule)
         finding_context = rule.get("_finding_context")
         if not rule_id:
             return
@@ -889,7 +1143,7 @@ class MacOSController(NSObject):
                 if not result.get("ok"):
                     self._set_banner(result.get("error", "Rule could not be opened."))
                     return
-                info = dict(result["rule"])
+                info = {**rule, **dict(result["rule"])}
                 if finding_context:
                     info["_finding_context"] = finding_context
                 self._open_rule_document(info, project_root)
@@ -911,8 +1165,19 @@ class MacOSController(NSObject):
             rule["scope"] = "project"
             rule["path"] = ""
         if self._studio is None:
-            self._studio = RuleEditorManager(self.model)
+            self._studio = RuleEditorManager(
+                self.model, self._rule_document_changed)
         self._studio.open(rule, project_root)
+
+    @objc.python_method
+    def _rule_document_changed(self, result: dict[str, Any]) -> None:
+        warnings = [str(item) for item in result.get("warnings", [])]
+        if warnings:
+            self._set_banner("Cleanup warning: " + "; ".join(warnings))
+        if self.route == "rules":
+            self._load_rules()
+        else:
+            self.model.refresh()
 
     @objc.python_method
     def show_add_rule_menu(self, sender) -> None:
@@ -935,7 +1200,8 @@ class MacOSController(NSObject):
     def _new_rule(
         self, project_root: str | None = None, template: str = "paw"
     ) -> None:
-        project_root = project_root or self.selected_project
+        project_root = project_root or (
+            self.selected_project if self.rules_context == "project" else "")
         if not project_root:
             self._set_banner("Choose a project before creating a rule.")
             return
@@ -1017,10 +1283,7 @@ class MacOSController(NSObject):
     def show_project_menu(self, sender, project: dict[str, Any]) -> None:
         path = project.get("path", "")
         self.renderer.popup_menu(sender, [
-            ("Manage rules", lambda: (
-                setattr(self, "selected_project", path),
-                self.select_tab("rules"),
-            ), True),
+            ("Manage rules", lambda: self.open_manage_rules(path), True),
             ("Warm rules now", lambda: self.model.perform(
                 {"type": "warm", "project_root": path},
                 lambda _result: self.model.refresh()), True),

@@ -92,6 +92,12 @@ Click it to open the native macOS popover:
 - **Rules for Project** is a labelled checklist of Project, Shared, and Built-in
   rules. Selections are stored in `.cursor/rules-as-programs/config.json` so
   they follow the repository; personal hidden-finding choices stay local.
+- Interactive rows and flat actions visibly highlight on hover/press. The
+  footer keeps the current Findings / Rules / Projects destination selected,
+  and rule/project overflow controls are labelled **Actions…**.
+- The Rule Editor supports native Undo/Cut/Copy/Paste and Select All
+  (`Command-A`, plus `Control-A`), preserves selection when its layout changes,
+  and exposes the appropriate remove action directly in the window.
 
 Action names are deliberately precise:
 
@@ -99,8 +105,16 @@ Action names are deliberately precise:
 - **Hide future findings in this project** suppresses future surfacing only in
   that repo; the rule still evaluates and logs, while the current finding stays
   open until reviewed.
-- **Disable rule** or **Pause monitoring** stops evaluation and requires
-  confirmation.
+- **Runs here** changes only the project assignment and is reversible.
+- **Use shared version** removes a project customization while preserving that
+  project assignment.
+- **Delete project rule**, **Delete shared rule**, and **Remove installed
+  built-in copy** remove exactly the named source definition after showing its
+  path and impact. Finding/audit history is retained; shared-rule assignment
+  and hidden-finding choices remain dormant under the immutable ID so surviving
+  project overrides and a later reinstall keep the same behavior.
+- **Pause monitoring** stops all evaluation for its project or globally and
+  requires confirmation.
 
 **Save Draft** updates working source without changing runtime behavior.
 **Check & Enable/Activate** validates and prepares the rule, then atomically

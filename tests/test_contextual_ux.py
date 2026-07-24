@@ -289,17 +289,32 @@ def test_promote_customize_and_revert_shared_rule(monkeypatch, tmp_path):
     assert customized["ok"]
     assert (project / ".cursor" / "rules-as-programs" / "rules"
             / rule_id / "rule.py").exists()
-    reverted = rules_api.revert_to_shared(rule_id, str(project))
+    project_info = rules_api.get_rule(rule_id, str(project))
+    reverted = rules_api.revert_to_shared(
+        rule_id,
+        str(project),
+        project_info["definition"]["source_path"],
+        project_info["definition"]["source_hash"],
+    )
     assert reverted["ok"]
+    assert reverted["assignment_preserved"]
+    assert rules_api.is_enabled(rule_id, str(project))
     assert not (project / ".cursor" / "rules-as-programs" / "rules"
                 / rule_id / "rule.py").exists()
-    deleted = rules_api.delete_rule(
-        rule_id, None, project_roots=[str(project)])
+    shared_info = rules_api.get_rule(rule_id, None)
+    deleted = rules_api.delete_rule_definition(
+        rule_id,
+        "global",
+        None,
+        shared_info["definition"]["source_path"],
+        shared_info["definition"]["source_hash"],
+        project_roots=[str(project)],
+    )
     assert deleted["ok"]
     assert not (global_rules / rule_id / "rule.py").exists()
-    assert rule_id not in json.loads(
+    assert json.loads(
         config.project_rules_config_path(project).read_text()
-    ).get("rules", {})
+    )["rules"][rule_id]["enabled"] is True
 
 
 def test_all_builtins_use_managed_fuzzy_format():
