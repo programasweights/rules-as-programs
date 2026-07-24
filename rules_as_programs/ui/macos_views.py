@@ -1087,7 +1087,10 @@ class PopoverRenderer:
                 continue
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 title, "invoke:", "")
-            self._wire(item, lambda _sender, fn=callback: fn())
+            self._wire(
+                item,
+                lambda _sender, fn=callback: self.controller.defer_menu_action(fn),
+            )
             item.setEnabled_(enabled)
             menu.addItem_(item)
         view = sender if sender is not None else getattr(self.controller, "content_view", None)

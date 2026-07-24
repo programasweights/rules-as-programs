@@ -290,6 +290,12 @@ class MacOSController(NSObject):
         if self.popover.isShown():
             self.popover.performClose_(sender)
             return
+        self._show_popover()
+
+    @objc.python_method
+    def _show_popover(self) -> None:
+        if not self.popover or not self.status_item or self.popover.isShown():
+            return
         self._render()
         button = self.status_item.button()
         self.popover.showRelativeToRect_ofView_preferredEdge_(
@@ -298,6 +304,11 @@ class MacOSController(NSObject):
         window = self.popover.contentViewController().view().window()
         if window:
             window.makeKeyWindow()
+
+    @objc.python_method
+    def defer_menu_action(self, callback: Callable[[], None]) -> None:
+        """Run after NSMenu tracking ends so popover mutations remain visible."""
+        _on_main(callback)
 
     def popoverWillShow_(self, _notification):
         if self.status_item:
@@ -385,6 +396,10 @@ class MacOSController(NSObject):
             "destructive": destructive,
         }
         self._render()
+        # Menu selection can dismiss a transient popover after its action
+        # returns. Re-show on the next AppKit turn so the confirmation cannot
+        # disappear behind the menu-tracking loop.
+        _on_main(self._show_popover)
 
     @objc.python_method
     def cancel_confirmation(self) -> None:

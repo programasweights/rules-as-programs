@@ -14,6 +14,50 @@ def _walk(view):
         yield from _walk(child)
 
 
+def test_action_menu_defers_until_tracking_ends():
+    from AppKit import NSApplication
+    from rules_as_programs.ui.macos_views import PopoverRenderer
+
+    class Controller:
+        content_view = None
+
+        def __init__(self):
+            self.deferred = []
+
+        def defer_menu_action(self, callback):
+            self.deferred.append(callback)
+
+    NSApplication.sharedApplication()
+    controller = Controller()
+    renderer = PopoverRenderer(controller)
+    called = []
+    renderer.popup_menu(
+        None, [("Remove rule…", lambda: called.append(True), True)])
+    item = renderer._menus[-1].itemAtIndex_(0)
+    renderer._target.invoke_(item)
+
+    assert not called
+    assert len(controller.deferred) == 1
+    controller.deferred[0]()
+    assert called
+
+
+def test_confirmation_schedules_popover_reopen(monkeypatch):
+    from rules_as_programs.ui import macos_app
+
+    scheduled = []
+    monkeypatch.setattr(
+        macos_app, "_on_main", lambda callback: scheduled.append(callback))
+    controller = macos_app.MacOSController.alloc().init()
+    controller.request_confirmation(
+        "Delete?", "Exact source", "Delete", lambda: None,
+        destructive=True)
+
+    assert controller.confirmation
+    assert scheduled
+    assert scheduled[-1].__name__ == "_show_popover"
+
+
 def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
     from AppKit import (
