@@ -63,6 +63,43 @@ def test_sf_symbol_helper_keeps_accessible_fallback():
     assert str(button.accessibilityLabel()) == "Information"
 
 
+def test_table_mouse_activation_uses_clicked_not_stale_selected_row():
+    from rules_as_programs.ui.native_popover import RAPTableAdapter
+
+    class Table:
+        @staticmethod
+        def clickedRow():
+            return 1
+
+    class Owner:
+        rows = [
+            {"type": "section", "title": "Project"},
+            {"type": "finding", "value": {"id": 7}},
+        ]
+        table = Table()
+
+        def __init__(self):
+            self.activated = []
+
+        @staticmethod
+        def row_is_actionable(row):
+            return row.get("type") == "finding"
+
+        def _activate_row(self, row):
+            self.activated.append(row["value"]["id"])
+
+        def activate_clicked_row(self):
+            row = self.table.clickedRow()
+            if self.row_is_actionable(self.rows[row]):
+                self._activate_row(self.rows[row])
+
+    owner = Owner()
+    adapter = RAPTableAdapter.alloc().init()
+    adapter.owner = owner
+    adapter.activate_(None)
+    assert owner.activated == [7]
+
+
 def test_confirmation_schedules_popover_reopen(monkeypatch):
     from rules_as_programs.ui import macos_app
 
@@ -83,13 +120,16 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
     from AppKit import (
         NSApplication,
+        NSBitmapImageFileTypePNG,
         NSButton,
+        NSMakeRect,
         NSSegmentedControl,
         NSStatusBar,
         NSTableView,
     )
     from rules_as_programs.ui.macos_app import MacOSController, _paw_template_image
     from rules_as_programs.ui.model import demo_snapshot
+    from Foundation import NSIndexSet
 
     NSApplication.sharedApplication()
     controller = MacOSController.alloc().init()
@@ -114,7 +154,69 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     table = tables[0]
     root_identity = controller.content_controller.view()
     table_identity = controller.renderer.table
+    project = next(iter(snapshot.findings_by_project))
+    group = snapshot.findings_by_project[project][0]
     assert any(row["type"] == "finding" for row in controller.renderer.rows)
+    from rules_as_programs.ui.native_popover import RAPTableRowView
+    finding_index = next(
+        index for index, row in enumerate(controller.renderer.rows)
+        if row["type"] == "finding")
+    finding_model = controller.renderer.rows[finding_index]
+    hover_row = RAPTableRowView.alloc().initWithFrame_(
+        NSMakeRect(0, 0, 420, 48))
+    hover_row.configure(controller.renderer.row_key(finding_model), True)
+
+    def rendered_png(view):
+        bitmap = view.bitmapImageRepForCachingDisplayInRect_(view.bounds())
+        view.cacheDisplayInRect_toBitmapImageRep_(view.bounds(), bitmap)
+        return bytes(bitmap.representationUsingType_properties_(
+            NSBitmapImageFileTypePNG, {}))
+
+    resting = rendered_png(hover_row)
+    hover_row.mouseEntered_(None)
+    assert hover_row.hovered()
+    assert rendered_png(hover_row) != resting
+    finding_cell = controller.renderer.row_view(finding_model)
+    finding_buttons = [
+        control for control in _walk(finding_cell)
+        if isinstance(control, NSButton)
+    ]
+    assert {
+        str(button.accessibilityLabel() or "") for button in finding_buttons
+    } >= {
+        f"Mark {group['rule_title']} reviewed",
+        f"Actions for {group['rule_title']}",
+    }
+    assert all(button.image() is not None for button in finding_buttons)
+    title_field = next(
+        control for control in _walk(finding_cell)
+        if hasattr(control, "stringValue")
+        and str(control.stringValue()).startswith(group["rule_title"]))
+    first_button_x = min(button.frame().origin.x for button in finding_buttons)
+    assert (
+        title_field.frame().origin.x + title_field.frame().size.width
+        <= first_button_x
+    )
+    section_index = next(
+        index for index, row in enumerate(controller.renderer.rows)
+        if row["type"] == "section")
+    assert controller.renderer._adapter.tableView_isGroupRow_(
+        table, section_index)
+    assert not controller.renderer._adapter.tableView_shouldSelectRow_(
+        table, section_index)
+    project_section = next(
+        row for row in controller.renderer.rows
+        if row.get("type") == "section" and row.get("project_root") == project)
+    project_section_cell = controller.renderer.row_view(project_section)
+    section_buttons = [
+        control for control in _walk(project_section_cell)
+        if isinstance(control, NSButton)
+    ]
+    assert {str(button.title()) for button in section_buttons} >= {
+        "+ Rule", "Rules", ""}
+    assert any(
+        str(button.accessibilityLabel() or "").startswith("Mark all findings")
+        for button in section_buttons)
     project_frame = controller.renderer.project_popup.frame()
     mode_frame = controller.renderer.mode_control.frame()
     add_frame = controller.renderer.add_button.frame()
@@ -128,9 +230,22 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     ]
     assert navigation
     assert navigation[0].selectedSegment() == 0
+    table.selectRowIndexes_byExtendingSelection_(
+        NSIndexSet.indexSetWithIndex_(finding_index), False)
+    controller.renderer.selection_changed()
+    selected_key = controller.renderer.row_key(finding_model)
+    controller._render()
+    selected_after = int(table.selectedRow())
+    assert controller.renderer.row_key(
+        controller.renderer.rows[selected_after]) == selected_key
+    assert controller.renderer.row_key({
+        "type": "section", "title": "project",
+        "project_root": "/one/project", "section_key": "project:/one/project",
+    }) != controller.renderer.row_key({
+        "type": "section", "title": "project",
+        "project_root": "/two/project", "section_key": "project:/two/project",
+    })
 
-    project = next(iter(snapshot.findings_by_project))
-    group = snapshot.findings_by_project[project][0]
     controller.route = "inbox"
     controller.selected_finding = group
     controller.detail_loading = False
@@ -275,6 +390,16 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         isinstance(control, NSButton)
         and str(control.title()) == "Runs here"
         for control in _walk(project_rule_cell)
+    )
+    controller.route = "projects"
+    controller._render()
+    project_model = next(
+        row for row in controller.renderer.rows if row["type"] == "project")
+    project_cell = controller.renderer.row_view(project_model)
+    assert any(
+        isinstance(control, NSButton)
+        and str(control.title()) == "+ Rule"
+        for control in _walk(project_cell)
     )
 
     captured = []
