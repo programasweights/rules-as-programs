@@ -34,12 +34,25 @@ def test_action_menu_defers_until_tracking_ends():
     renderer.popup_menu(
         None, [("Remove rule…", lambda: called.append(True), True)])
     item = renderer._menus[-1].itemAtIndex_(0)
-    renderer._target.invoke_(item)
+    # Snapshot rerenders clear ordinary control callbacks while an NSMenu can
+    # still be tracking. Menu callbacks must survive that reset.
+    renderer._reset()
+    renderer._menu_target.invoke_(item)
 
     assert not called
     assert len(controller.deferred) == 1
     controller.deferred[0]()
     assert called
+
+    controller.deferred.clear()
+    renderer.popup_menu(
+        None, [("Remove another rule…", lambda: called.append(True), True)])
+    second_item = renderer._menus[-1].itemAtIndex_(0)
+    renderer._reset()
+    renderer._menu_target.invoke_(second_item)
+    assert len(controller.deferred) == 1
+    controller.deferred[0]()
+    assert called == [True, True]
 
 
 def test_confirmation_schedules_popover_reopen(monkeypatch):

@@ -79,6 +79,15 @@ class RAPPopoverActionTarget(NSObject):
             callback(sender)
 
 
+class RAPPopoverMenuActionTarget(NSObject):
+    def invoke_(self, sender):
+        callbacks = getattr(self, "_callbacks", {})
+        callback = callbacks.pop(int(sender.tag()), None)
+        owner = getattr(self, "owner", None)
+        if callback and owner:
+            owner.defer_menu_action(callback)
+
+
 def _relative_time(ts: float) -> str:
     delta = max(0, int(time.time() - float(ts or 0)))
     if delta < 60:
@@ -103,6 +112,11 @@ class PopoverRenderer:
         self._target = RAPPopoverActionTarget.alloc().init()
         self._target._callbacks = self._callbacks
         self._next_tag = 1
+        self._menu_callbacks: dict[int, Callable[[], None]] = {}
+        self._menu_target = RAPPopoverMenuActionTarget.alloc().init()
+        self._menu_target._callbacks = self._menu_callbacks
+        self._menu_target.owner = controller
+        self._next_menu_tag = 1
         self._menus: list[NSMenu] = []
         self.layout = PopoverLayout(
             POPOVER_WIDTH, POPOVER_HEIGHT, HEADER_HEIGHT, FOOTER_HEIGHT)
@@ -120,6 +134,17 @@ class PopoverRenderer:
         control.setTarget_(self._target)
         control.setAction_("invoke:")
         return control
+
+    def _wire_menu(
+        self, item: NSMenuItem, callback: Callable[[], None]
+    ) -> int:
+        tag = self._next_menu_tag
+        self._next_menu_tag += 1
+        self._menu_callbacks[tag] = callback
+        item.setTag_(tag)
+        item.setTarget_(self._menu_target)
+        item.setAction_("invoke:")
+        return tag
 
     @staticmethod
     def _label(
@@ -1081,19 +1106,21 @@ class PopoverRenderer:
     ) -> None:
         menu = NSMenu.alloc().initWithTitle_("Actions")
         self._menus.append(menu)
+        tags: list[int] = []
         for title, callback, enabled in items:
             if title == "-":
                 menu.addItem_(NSMenuItem.separatorItem())
                 continue
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 title, "invoke:", "")
-            self._wire(
-                item,
-                lambda _sender, fn=callback: self.controller.defer_menu_action(fn),
-            )
+            tags.append(self._wire_menu(item, callback))
             item.setEnabled_(enabled)
             menu.addItem_(item)
         view = sender if sender is not None else getattr(self.controller, "content_view", None)
         if view is not None:
-            menu.popUpMenuPositioningItem_atLocation_inView_(
-                None, (0, view.bounds().size.height), view)
+            try:
+                menu.popUpMenuPositioningItem_atLocation_inView_(
+                    None, (0, view.bounds().size.height), view)
+            finally:
+                for tag in tags:
+                    self._menu_callbacks.pop(tag, None)
