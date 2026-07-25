@@ -339,10 +339,11 @@ class PersistentPopoverRenderer:
 
     @staticmethod
     def _set_review_title(
-        button: NSButton, title: str, *, size: float
+        button: NSButton, title: str, *, size: float, color=None
     ) -> None:
-        font = NSFont.boldSystemFontOfSize_(size)
-        color = NSColor.controlAccentColor()
+        font = NSFont.systemFontOfSize_weight_(
+            size, NSFontWeightSemibold)
+        color = color or NSColor.controlAccentColor()
         attributed = NSAttributedString.alloc().initWithString_attributes_(
             title,
             {
@@ -353,6 +354,16 @@ class PersistentPopoverRenderer:
         button.setFont_(font)
         button.setAttributedTitle_(attributed)
         button.setContentTintColor_(color)
+
+    def _review_finding(self, sender: NSButton, finding: dict[str, Any]) -> None:
+        self._set_review_title(
+            sender, "✓", size=17, color=NSColor.systemGreenColor())
+        self.controller.done_group(finding)
+
+    def _review_project(self, sender: NSButton, project_root: str) -> None:
+        self._set_review_title(
+            sender, "✓ All", size=11.5, color=NSColor.systemGreenColor())
+        self.controller.done_project(project_root)
 
     @staticmethod
     def _label(
@@ -823,12 +834,12 @@ class PersistentPopoverRenderer:
                     self.controller.open_manage_rules(path)))
                 review_all = self._button(
                     "✓ All", (348, 6, 70, 24),
-                    lambda _sender, path=project_root:
-                    self.controller.done_project(path),
+                    lambda sender, path=project_root:
+                    self._review_project(sender, path),
                     accessibility=(
                         f"Mark all findings in {_project_name(project_root)} "
                         "reviewed"))
-                self._set_review_title(review_all, "✓ All", size=12)
+                self._set_review_title(review_all, "✓ All", size=11.5)
                 cell.addSubview_(review_all)
         elif kind == "finding":
             severity = str(value.get("severity", "info"))
@@ -917,10 +928,11 @@ class PersistentPopoverRenderer:
                     accessibility=f"Actions for {title}"))
                 review = self._button(
                     "✓", (320, 10, 34, 28),
-                    lambda _sender, item=value: self.controller.done_group(item),
+                    lambda sender, item=value:
+                    self._review_finding(sender, item),
                     role="icon",
                     accessibility=f"Mark {title} reviewed")
-                self._set_review_title(review, "✓", size=19)
+                self._set_review_title(review, "✓", size=17)
                 cell.addSubview_(review)
             else:
                 cell.addSubview_(self._icon_button(

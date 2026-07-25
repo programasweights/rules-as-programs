@@ -202,7 +202,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         if str(button.accessibilityLabel() or "").startswith("Mark "))
     assert action_button.image() is not None
     assert str(review_glyph.title()) == "✓"
-    assert review_glyph.font().pointSize() == 19
+    assert review_glyph.font().pointSize() == 17
     title_field = next(
         control for control in _walk(finding_cell)
         if hasattr(control, "stringValue")
@@ -253,6 +253,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     bulk_review = next(
         button for button in section_buttons
         if str(button.title()) == "✓ All")
+    assert bulk_review.font().pointSize() == 11.5
     assert bulk_review.contentTintColor().isEqual_(
         NSColor.controlAccentColor())
     review_button = next(
@@ -260,6 +261,10 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         if str(button.accessibilityLabel() or "").startswith("Mark "))
     assert review_button.contentTintColor().isEqual_(
         NSColor.controlAccentColor())
+    controller.renderer._set_review_title(
+        review_button, "✓", size=17, color=NSColor.systemGreenColor())
+    assert review_button.contentTintColor().isEqual_(
+        NSColor.systemGreenColor())
     project_heading = next(
         control for control in _walk(project_section_cell)
         if hasattr(control, "stringValue")
