@@ -222,7 +222,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         if isinstance(control, NSButton)
     ]
     assert {str(button.title()) for button in section_buttons} >= {
-        "+ Rule", "Rules", ""}
+        "+ Rule", "Rules", "✓ All"}
     assert any(
         str(button.accessibilityLabel() or "").startswith("Mark all findings")
         for button in section_buttons)
@@ -257,6 +257,16 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     ]
     assert navigation
     assert navigation[0].selectedSegment() == 0
+    snapshot.data["health_issues"] = [{
+        "code": "runtime_exception",
+        "summary": "Rule check failed",
+        "impact": "this rule check was skipped",
+    }]
+    controller._apply_snapshot(snapshot)
+    controller._render()
+    assert not any(
+        row.get("type") == "issue" for row in controller.renderer.rows)
+    snapshot.data["health_issues"] = []
     table.selectRowIndexes_byExtendingSelection_(
         NSIndexSet.indexSetWithIndex_(finding_index), False)
     controller.renderer.selection_changed()
@@ -272,24 +282,6 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         "type": "section", "title": "project",
         "project_root": "/two/project", "section_key": "project:/two/project",
     })
-    issue_cell = controller.renderer.row_view({
-        "type": "issue",
-        "value": {
-            "summary": "Rule check failed",
-            "impact": "this rule check was skipped",
-            "code": "runtime_exception",
-        },
-    })
-    issue_labels = {
-        str(control.stringValue()): control.frame()
-        for control in _walk(issue_cell)
-        if hasattr(control, "stringValue")
-    }
-    assert (
-        issue_labels["Rule check failed"].origin.y
-        < issue_labels["this rule check was skipped"].origin.y
-    )
-
     controller.route = "inbox"
     controller.selected_finding = group
     controller.detail_loading = False

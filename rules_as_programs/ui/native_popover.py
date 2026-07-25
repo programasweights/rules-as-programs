@@ -538,24 +538,13 @@ class PersistentPopoverRenderer:
         ):
             return [{"type": "loading", "title": "Loading review history…"}]
         selected = getattr(self.controller, "home_project", "")
-        issues = list(self.snapshot.data.get("health_issues") or []) if mode == "open" else []
         attention = list(self.snapshot.attention) if mode == "open" else []
         if selected:
-            issues = [
-                item for item in issues
-                if item.get("project_root") in ("", selected)
-                or selected in (item.get("affected_projects") or [])
-            ]
             attention = [
                 item for item in attention
                 if item.get("project_root") == selected
             ]
         rows: list[dict[str, Any]] = []
-        if issues:
-            rows.append({
-                "type": "section", "title": "Monitoring issues",
-                "count": len(issues), "section_key": "issues"})
-            rows.extend({"type": "issue", "value": item} for item in issues)
         if attention:
             rows.append({
                 "type": "section", "title": "Needs reply",
@@ -747,15 +736,16 @@ class PersistentPopoverRenderer:
                     "Rules", (290, 3, 52, 24),
                     lambda _sender, path=project_root:
                     self.controller.open_manage_rules(path)))
-                cell.addSubview_(self._icon_button(
-                    "checkmark", "✓", (350, 1, 34, 27),
+                review_all = self._button(
+                    "✓ All", (348, 3, 70, 24),
                     lambda _sender, path=project_root:
                     self.controller.done_project(path),
                     accessibility=(
                         f"Mark all findings in {_project_name(project_root)} "
-                        "reviewed"),
-                    tint=NSColor.systemGreenColor(),
-                    point_size=15, weight="semibold"))
+                        "reviewed"))
+                review_all.setContentTintColor_(NSColor.systemGreenColor())
+                review_all.setFont_(NSFont.boldSystemFontOfSize_(11))
+                cell.addSubview_(review_all)
         elif kind == "finding":
             severity = str(value.get("severity", "info"))
             severity_label = {
