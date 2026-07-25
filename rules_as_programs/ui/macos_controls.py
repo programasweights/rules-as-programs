@@ -42,13 +42,22 @@ def system_symbol(
     accessibility: str,
     *,
     point_size: float = 13,
+    weight: str = "regular",
 ):
     """Return an SF Symbol when supported, otherwise None."""
     try:
         image = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
             name, accessibility)
         symbol_config = getattr(AppKit, "NSImageSymbolConfiguration", None)
-        font_weight = getattr(AppKit, "NSFontWeightRegular", 0.0)
+        font_weight = getattr(
+            AppKit,
+            {
+                "medium": "NSFontWeightMedium",
+                "semibold": "NSFontWeightSemibold",
+                "bold": "NSFontWeightBold",
+            }.get(weight, "NSFontWeightRegular"),
+            0.0,
+        )
         if (
             image and symbol_config is not None
             and hasattr(image, "imageWithSymbolConfiguration_")
@@ -71,9 +80,10 @@ def set_button_symbol(
     *,
     fallback: str = "",
     point_size: float = 13,
+    weight: str = "regular",
 ) -> bool:
     image = system_symbol(
-        name, accessibility, point_size=point_size)
+        name, accessibility, point_size=point_size, weight=weight)
     if image is None:
         button.setTitle_(fallback or accessibility)
         return False

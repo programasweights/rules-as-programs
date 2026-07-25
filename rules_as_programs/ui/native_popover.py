@@ -278,14 +278,16 @@ class PersistentPopoverRenderer:
 
     def _icon_button(
         self, symbol: str, fallback: str, frame, callback, *,
-        accessibility: str, tint=None,
+        accessibility: str, tint=None, point_size: float = 13,
+        weight: str = "regular",
     ) -> NSButton:
         button = RAPHoverButton.alloc().initWithFrame_(NSMakeRect(*frame))
         style_button(
             button, role="icon", accessibility=accessibility,
             tooltip=accessibility)
         set_button_symbol(
-            button, symbol, accessibility, fallback=fallback, point_size=13)
+            button, symbol, accessibility, fallback=fallback,
+            point_size=point_size, weight=weight)
         if tint is not None and hasattr(button, "setContentTintColor_"):
             button.setContentTintColor_(tint)
         return self._wire(button, callback)
@@ -752,7 +754,8 @@ class PersistentPopoverRenderer:
                     accessibility=(
                         f"Mark all findings in {_project_name(project_root)} "
                         "reviewed"),
-                    tint=NSColor.systemGreenColor()))
+                    tint=NSColor.systemGreenColor(),
+                    point_size=15, weight="semibold"))
         elif kind == "finding":
             severity = str(value.get("severity", "info"))
             severity_label = {
@@ -765,10 +768,12 @@ class PersistentPopoverRenderer:
                 "warn": "exclamationmark.triangle.fill",
                 "info": "info.circle.fill",
             }.get(severity, "info.circle")
-            symbol = system_symbol(symbol_name, severity.title(), point_size=13)
+            symbol = system_symbol(
+                symbol_name, severity.title(),
+                point_size=13, weight="semibold")
             if symbol:
                 image = NSImageView.alloc().initWithFrame_(
-                    NSMakeRect(PAD, 16, 16, 16))
+                    NSMakeRect(PAD, 13, 16, 16))
                 image.setImage_(symbol)
                 image.setContentTintColor_({
                     "critical": NSColor.systemRedColor(),
@@ -808,7 +813,8 @@ class PersistentPopoverRenderer:
                     "checkmark", "✓", (320, 10, 34, 28),
                     lambda _sender, item=value: self.controller.done_group(item),
                     accessibility=f"Mark {title} reviewed",
-                    tint=NSColor.systemGreenColor()))
+                    tint=NSColor.systemGreenColor(),
+                    point_size=15, weight="semibold"))
             else:
                 cell.addSubview_(self._icon_button(
                     "ellipsis", "…", (360, 10, 34, 28),
