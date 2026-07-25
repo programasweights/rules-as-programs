@@ -120,6 +120,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
     from AppKit import (
         NSApplication,
+        NSAppearance,
         NSBitmapImageFileTypePNG,
         NSButton,
         NSColor,
@@ -209,6 +210,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         if hasattr(control, "stringValue")
         and str(control.stringValue()) in ("Critical", "Warning", "Info"))
     assert title_field.frame().origin.y == severity_field.frame().origin.y
+    assert severity_field.textColor().isEqual_(NSColor.labelColor())
     first_button_x = min(button.frame().origin.x for button in finding_buttons)
     assert (
         title_field.frame().origin.x + title_field.frame().size.width
@@ -221,6 +223,8 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         table, section_index)
     assert not controller.renderer._adapter.tableView_shouldSelectRow_(
         table, section_index)
+    assert controller.renderer.separator_config(section_index) == (True, 14)
+    assert controller.renderer.separator_config(finding_index)[1] in (14, 94)
     project_section = next(
         row for row in controller.renderer.rows
         if row.get("type") == "section" and row.get("project_root") == project)
@@ -265,6 +269,18 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     ]
     assert navigation
     assert navigation[0].selectedSegment() == 0
+    assert not controller.renderer.header_separator.isHidden()
+    assert not controller.renderer.footer_separator.isHidden()
+    for appearance_name in (
+        "NSAppearanceNameAqua",
+        "NSAppearanceNameDarkAqua",
+        "NSAppearanceNameAccessibilityHighContrastAqua",
+        "NSAppearanceNameAccessibilityHighContrastDarkAqua",
+    ):
+        appearance = NSAppearance.appearanceNamed_(appearance_name)
+        if appearance:
+            controller.renderer.root.setAppearance_(appearance)
+            controller.renderer.root.displayIfNeeded()
     snapshot.data["health_issues"] = [{
         "code": "runtime_exception",
         "summary": "Rule check failed",

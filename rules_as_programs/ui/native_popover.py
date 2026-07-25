@@ -10,10 +10,14 @@ import objc
 from AppKit import (
     NSButton,
     NSBezierPath,
+    NSBox,
+    NSBoxSeparator,
     NSColor,
     NSControlStateValueOff,
     NSControlStateValueOn,
     NSFont,
+    NSFontWeightMedium,
+    NSFontWeightSemibold,
     NSImageView,
     NSLineBreakByTruncatingTail,
     NSMenu,
@@ -57,9 +61,10 @@ SEVERITY_RANK = {"critical": 3, "warn": 2, "info": 1}
 APP_TITLE_SIZE = 16
 PROJECT_TITLE_SIZE = 12.5
 SECTION_TITLE_SIZE = 11.5
-ROW_TITLE_SIZE = 11.5
+ROW_TITLE_SIZE = 12
 BODY_SIZE = 10.5
 META_SIZE = 9.5
+SEVERITY_SIZE = 10.5
 
 
 def _relative_time(ts: float) -> str:
@@ -103,6 +108,8 @@ class RAPTableRowView(NSTableRowView):
         self._actionable = False
         self._row_key = ""
         self._tracking = None
+        self._show_separator = False
+        self._separator_inset = PAD
         return self
 
     def updateTrackingAreas(self):
@@ -138,16 +145,39 @@ class RAPTableRowView(NSTableRowView):
                 max(0, bounds.size.width - 8),
                 max(0, bounds.size.height - 4),
             )
-            color = NSColor.selectedContentBackgroundColor(
-            ).colorWithAlphaComponent_(0.09)
+            color = NSColor.labelColor().colorWithAlphaComponent_(0.12)
             color.setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 inset, 6, 6).fill()
 
+    def drawSeparatorInRect_(self, _rect):
+        if not self._show_separator:
+            return
+        scale = (
+            float(self.window().backingScaleFactor())
+            if self.window() else 2.0
+        )
+        thickness = 1.0 / max(1.0, scale)
+        NSColor.separatorColor().setFill()
+        NSBezierPath.bezierPathWithRect_(NSMakeRect(
+            self._separator_inset,
+            0,
+            max(0, self.bounds().size.width - self._separator_inset - PAD),
+            thickness,
+        )).fill()
+
     @objc.python_method
-    def configure(self, row_key: str, actionable: bool) -> None:
+    def configure(
+        self,
+        row_key: str,
+        actionable: bool,
+        show_separator: bool = False,
+        separator_inset: float = PAD,
+    ) -> None:
         self._row_key = row_key
         self._actionable = actionable
+        self._show_separator = show_separator
+        self._separator_inset = separator_inset
         if not actionable:
             self._hovered = False
         self.setNeedsDisplay_(True)
@@ -223,7 +253,13 @@ class RAPTableAdapter(NSObject):
             view = RAPTableRowView.alloc().initWithFrame_(NSMakeRect(
                 0, 0, POPOVER_WIDTH, owner.row_height(model)))
             view.setIdentifier_(identifier)
-        view.configure(owner.row_key(model), owner.row_is_actionable(model))
+        show_separator, separator_inset = owner.separator_config(int(row))
+        view.configure(
+            owner.row_key(model),
+            owner.row_is_actionable(model),
+            show_separator,
+            separator_inset,
+        )
         return view
 
 
@@ -294,13 +330,17 @@ class PersistentPopoverRenderer:
 
     @staticmethod
     def _label(
-        text: str, frame, *, size=11, bold=False, color=None, lines=1,
+        text: str, frame, *, size=11, bold=False, weight=None,
+        color=None, lines=1,
     ) -> NSTextField:
         label = NSTextField.labelWithString_(str(text))
         label.setFrame_(NSMakeRect(*frame))
-        label.setFont_(
-            NSFont.boldSystemFontOfSize_(size)
-            if bold else NSFont.systemFontOfSize_(size))
+        if weight is not None:
+            label.setFont_(NSFont.systemFontOfSize_weight_(size, weight))
+        else:
+            label.setFont_(
+                NSFont.boldSystemFontOfSize_(size)
+                if bold else NSFont.systemFontOfSize_(size))
         label.setTextColor_(color or NSColor.labelColor())
         label.setMaximumNumberOfLines_(lines)
         label.setLineBreakMode_(NSLineBreakByTruncatingTail)
@@ -314,7 +354,7 @@ class PersistentPopoverRenderer:
         self.root.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
         self.title_label = self._label(
             "Rules as Programs", (PAD, 8, 230, 24),
-            size=APP_TITLE_SIZE, bold=True)
+            size=APP_TITLE_SIZE, weight=NSFontWeightSemibold)
         self.root.addSubview_(self.title_label)
         self.status_label = self._label(
             "", (PAD, 34, 380, 18), size=10,
@@ -357,6 +397,11 @@ class PersistentPopoverRenderer:
         self._wire(self.search, lambda sender: self.controller.filter_rules(
             str(sender.stringValue())))
         self.root.addSubview_(self.search)
+        self.header_separator = NSBox.alloc().initWithFrame_(
+            NSMakeRect(0, HEADER_HEIGHT - 1, POPOVER_WIDTH, 1))
+        self.header_separator.setBoxType_(NSBoxSeparator)
+        self.header_separator.setAutoresizingMask_(NSViewWidthSizable)
+        self.root.addSubview_(self.header_separator)
 
         self.scroll = NSScrollView.alloc().initWithFrame_(
             NSMakeRect(0, HEADER_HEIGHT, POPOVER_WIDTH, 360))
@@ -400,6 +445,11 @@ class PersistentPopoverRenderer:
             "More…", (346, 7, 68, 27),
             lambda sender: self.controller.show_app_menu(sender))
         self.root.addSubview_(self.more_button)
+        self.footer_separator = NSBox.alloc().initWithFrame_(
+            NSMakeRect(0, 461, POPOVER_WIDTH, 1))
+        self.footer_separator.setBoxType_(NSBoxSeparator)
+        self.footer_separator.setAutoresizingMask_(NSViewWidthSizable)
+        self.root.addSubview_(self.footer_separator)
 
         self.confirmation_view = RAPPersistentRoot.alloc().initWithFrame_(
             self.root.bounds())
@@ -718,7 +768,7 @@ class PersistentPopoverRenderer:
                 size=(
                     PROJECT_TITLE_SIZE
                     if project_section else SECTION_TITLE_SIZE),
-                bold=True,
+                weight=NSFontWeightSemibold,
                 color=(
                     NSColor.labelColor()
                     if project_section else NSColor.secondaryLabelColor())))
@@ -775,15 +825,16 @@ class PersistentPopoverRenderer:
                 cell.addSubview_(self._label(
                     "!", (PAD, 15, 16, 18), size=11, bold=True))
             cell.addSubview_(self._label(
-                severity_label, (34, 14, 56, 20), size=10,
-                color=NSColor.secondaryLabelColor()))
+                severity_label, (34, 14, 56, 20), size=SEVERITY_SIZE,
+                weight=NSFontWeightMedium, color=NSColor.labelColor()))
             title = str(value.get("rule_title") or value.get("rule_id", "Rule"))
             if value.get("stale"):
                 title += " · changed"
             elif value.get("review_reason") == "rule_deleted":
                 title += " · deleted"
             cell.addSubview_(self._label(
-                title, (94, 14, 148, 20), size=ROW_TITLE_SIZE, bold=True))
+                title, (94, 14, 148, 20), size=ROW_TITLE_SIZE,
+                weight=NSFontWeightMedium))
             occurrences = int(value.get("occurrences", 1) or 1)
             if occurrences > 1:
                 cell.addSubview_(self._label(
@@ -923,7 +974,7 @@ class PersistentPopoverRenderer:
             name = str(value.get("name") or _project_name(value.get("path", "")))
             cell.addSubview_(self._label(
                 name, (PAD, 7, 220, 20),
-                size=PROJECT_TITLE_SIZE, bold=True))
+                size=PROJECT_TITLE_SIZE, weight=NSFontWeightSemibold))
             if value.get("open_count"):
                 cell.addSubview_(self._label(
                     str(value.get("open_count")), (238, 7, 28, 20),
@@ -1005,6 +1056,17 @@ class PersistentPopoverRenderer:
     def row_is_actionable(row: dict[str, Any]) -> bool:
         return row.get("type") in ("finding", "rule", "project")
 
+    def separator_config(self, index: int) -> tuple[bool, float]:
+        if not (0 <= index < len(self.rows) - 1):
+            return False, PAD
+        row = self.rows[index]
+        next_row = self.rows[index + 1]
+        if row.get("type") == "section" or next_row.get("type") == "section":
+            return True, PAD
+        if row.get("type") == "finding":
+            return True, 94
+        return True, PAD
+
     def activate_clicked_row(self) -> None:
         row = int(self.table.clickedRow())
         if 0 <= row < len(self.rows) and self.row_is_actionable(self.rows[row]):
@@ -1046,6 +1108,7 @@ class PersistentPopoverRenderer:
             self.add_button, self.back_button, self.route_title,
             self.mode_control, self.search, self.scroll,
             self.navigation, self.more_button,
+            self.header_separator, self.footer_separator,
         )
         for view in main_views:
             view.setHidden_(bool(confirmation))
@@ -1131,6 +1194,8 @@ class PersistentPopoverRenderer:
             bool(content_height > available_height + 1))
         self.table_column.setWidth_(self.scroll.contentSize().width)
         footer_y = height - FOOTER_HEIGHT
+        self.footer_separator.setFrame_(
+            NSMakeRect(0, footer_y, POPOVER_WIDTH, 1))
         self.navigation.setFrameOrigin_((PAD, footer_y + 7))
         self.more_button.setFrameOrigin_((346, footer_y + 7))
         self.confirmation_view.setFrame_(self.root.bounds())
