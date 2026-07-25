@@ -122,6 +122,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         NSApplication,
         NSBitmapImageFileTypePNG,
         NSButton,
+        NSColor,
         NSMakeRect,
         NSSegmentedControl,
         NSStatusBar,
@@ -195,6 +196,11 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         control for control in _walk(finding_cell)
         if hasattr(control, "stringValue")
         and str(control.stringValue()).startswith(group["rule_title"]))
+    severity_field = next(
+        control for control in _walk(finding_cell)
+        if hasattr(control, "stringValue")
+        and str(control.stringValue()) in ("Critical", "Warning", "Info"))
+    assert title_field.frame().origin.y == severity_field.frame().origin.y
     first_button_x = min(button.frame().origin.x for button in finding_buttons)
     assert (
         title_field.frame().origin.x + title_field.frame().size.width
@@ -220,6 +226,16 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert any(
         str(button.accessibilityLabel() or "").startswith("Mark all findings")
         for button in section_buttons)
+    review_button = next(
+        button for button in finding_buttons
+        if str(button.accessibilityLabel() or "").startswith("Mark "))
+    assert review_button.contentTintColor().isEqual_(
+        NSColor.systemGreenColor())
+    project_heading = next(
+        control for control in _walk(project_section_cell)
+        if hasattr(control, "stringValue")
+        and str(control.stringValue()) == project.split("/")[-1])
+    assert project_heading.font().pointSize() > title_field.font().pointSize()
     add_rule_button = next(
         button for button in section_buttons
         if str(button.title()) == "+ Rule")

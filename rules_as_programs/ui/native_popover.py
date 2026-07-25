@@ -54,6 +54,12 @@ from .model import UISnapshot
 PAD = 14
 HEADER_HEIGHT = 92
 SEVERITY_RANK = {"critical": 3, "warn": 2, "info": 1}
+APP_TITLE_SIZE = 16
+PROJECT_TITLE_SIZE = 12.5
+SECTION_TITLE_SIZE = 11.5
+ROW_TITLE_SIZE = 11.5
+BODY_SIZE = 10.5
+META_SIZE = 9.5
 
 
 def _relative_time(ts: float) -> str:
@@ -272,7 +278,7 @@ class PersistentPopoverRenderer:
 
     def _icon_button(
         self, symbol: str, fallback: str, frame, callback, *,
-        accessibility: str,
+        accessibility: str, tint=None,
     ) -> NSButton:
         button = RAPHoverButton.alloc().initWithFrame_(NSMakeRect(*frame))
         style_button(
@@ -280,6 +286,8 @@ class PersistentPopoverRenderer:
             tooltip=accessibility)
         set_button_symbol(
             button, symbol, accessibility, fallback=fallback, point_size=13)
+        if tint is not None and hasattr(button, "setContentTintColor_"):
+            button.setContentTintColor_(tint)
         return self._wire(button, callback)
 
     @staticmethod
@@ -303,7 +311,8 @@ class PersistentPopoverRenderer:
             NSMakeRect(0, 0, POPOVER_WIDTH, 500))
         self.root.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
         self.title_label = self._label(
-            "Rules as Programs", (PAD, 8, 230, 24), size=16, bold=True)
+            "Rules as Programs", (PAD, 8, 230, 24),
+            size=APP_TITLE_SIZE, bold=True)
         self.root.addSubview_(self.title_label)
         self.status_label = self._label(
             "", (PAD, 34, 380, 18), size=10,
@@ -712,9 +721,16 @@ class PersistentPopoverRenderer:
         cell = self._cell(row)
         value = row.get("value") or {}
         if kind == "section":
+            project_section = bool(row.get("project_root"))
             cell.addSubview_(self._label(
                 row.get("title", ""), (PAD, 7, 190, 20),
-                size=11, bold=True, color=NSColor.secondaryLabelColor()))
+                size=(
+                    PROJECT_TITLE_SIZE
+                    if project_section else SECTION_TITLE_SIZE),
+                bold=True,
+                color=(
+                    NSColor.labelColor()
+                    if project_section else NSColor.secondaryLabelColor())))
             if row.get("count") is not None:
                 cell.addSubview_(self._label(
                     str(row.get("count", 0)), (202, 7, 28, 20),
@@ -730,12 +746,13 @@ class PersistentPopoverRenderer:
                     lambda _sender, path=project_root:
                     self.controller.open_manage_rules(path)))
                 cell.addSubview_(self._icon_button(
-                    "checkmark.circle", "✓", (350, 1, 34, 27),
+                    "checkmark", "✓", (350, 1, 34, 27),
                     lambda _sender, path=project_root:
                     self.controller.done_project(path),
                     accessibility=(
                         f"Mark all findings in {_project_name(project_root)} "
-                        "reviewed")))
+                        "reviewed"),
+                    tint=NSColor.systemGreenColor()))
         elif kind == "finding":
             severity = str(value.get("severity", "info"))
             severity_label = {
@@ -751,7 +768,7 @@ class PersistentPopoverRenderer:
             symbol = system_symbol(symbol_name, severity.title(), point_size=13)
             if symbol:
                 image = NSImageView.alloc().initWithFrame_(
-                    NSMakeRect(PAD, 14, 16, 16))
+                    NSMakeRect(PAD, 16, 16, 16))
                 image.setImage_(symbol)
                 image.setContentTintColor_({
                     "critical": NSColor.systemRedColor(),
@@ -761,9 +778,9 @@ class PersistentPopoverRenderer:
                 cell.addSubview_(image)
             else:
                 cell.addSubview_(self._label(
-                    "!", (PAD, 14, 16, 16), size=11, bold=True))
+                    "!", (PAD, 15, 16, 18), size=11, bold=True))
             cell.addSubview_(self._label(
-                severity_label, (34, 15, 56, 16), size=9.5,
+                severity_label, (34, 14, 56, 20), size=10,
                 color=NSColor.secondaryLabelColor()))
             title = str(value.get("rule_title") or value.get("rule_id", "Rule"))
             if value.get("stale"):
@@ -771,29 +788,30 @@ class PersistentPopoverRenderer:
             elif value.get("review_reason") == "rule_deleted":
                 title += " · deleted"
             cell.addSubview_(self._label(
-                title, (94, 7, 148, 20), size=11.5, bold=True))
+                title, (94, 14, 148, 20), size=ROW_TITLE_SIZE, bold=True))
             occurrences = int(value.get("occurrences", 1) or 1)
             if occurrences > 1:
                 cell.addSubview_(self._label(
-                    f"×{occurrences}", (246, 9, 30, 18), size=9,
+                    f"×{occurrences}", (246, 15, 30, 18), size=META_SIZE,
                     color=NSColor.secondaryLabelColor()))
             cell.addSubview_(self._label(
                 _relative_time(value.get("last_seen") or value.get("ts", 0)),
-                (278, 9, 38, 18), size=9,
+                (278, 15, 38, 18), size=META_SIZE,
                 color=NSColor.secondaryLabelColor()))
             if row.get("mode") == "open":
                 cell.addSubview_(self._icon_button(
-                    "ellipsis.circle", "…", (360, 8, 34, 28),
+                    "ellipsis", "…", (360, 10, 34, 28),
                     lambda sender, item=value:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
                 cell.addSubview_(self._icon_button(
-                    "checkmark.circle", "✓", (320, 8, 34, 28),
+                    "checkmark", "✓", (320, 10, 34, 28),
                     lambda _sender, item=value: self.controller.done_group(item),
-                    accessibility=f"Mark {title} reviewed"))
+                    accessibility=f"Mark {title} reviewed",
+                    tint=NSColor.systemGreenColor()))
             else:
                 cell.addSubview_(self._icon_button(
-                    "ellipsis.circle", "…", (360, 8, 34, 28),
+                    "ellipsis", "…", (360, 10, 34, 28),
                     lambda sender, item=value:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
@@ -906,7 +924,8 @@ class PersistentPopoverRenderer:
         elif kind == "project":
             name = str(value.get("name") or _project_name(value.get("path", "")))
             cell.addSubview_(self._label(
-                name, (PAD, 7, 220, 20), size=11.5, bold=True))
+                name, (PAD, 7, 220, 20),
+                size=PROJECT_TITLE_SIZE, bold=True))
             if value.get("open_count"):
                 cell.addSubview_(self._label(
                     str(value.get("open_count")), (238, 7, 28, 20),
