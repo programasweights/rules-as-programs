@@ -191,7 +191,15 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         f"Mark {group['rule_title']} reviewed",
         f"Actions for {group['rule_title']}",
     }
-    assert all(button.image() is not None for button in finding_buttons)
+    action_button = next(
+        button for button in finding_buttons
+        if str(button.accessibilityLabel() or "").startswith("Actions "))
+    review_glyph = next(
+        button for button in finding_buttons
+        if str(button.accessibilityLabel() or "").startswith("Mark "))
+    assert action_button.image() is not None
+    assert str(review_glyph.title()) == "✓"
+    assert review_glyph.font().pointSize() == 17
     title_field = next(
         control for control in _walk(finding_cell)
         if hasattr(control, "stringValue")
@@ -524,6 +532,8 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert document.name_field is not None
     assert document.description_editor is not None
     assert document.spec
+    assert str(document.description_editor.string()) == rules_api.source_projection(
+        source)["spec"]
     assert not document.spec_scroll.hasHorizontalScroller()
     assert document.description_editor.textContainer().widthTracksTextView()
     assert document.name_field.nextKeyView() == document.description_editor
@@ -580,7 +590,9 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert description.selectedRange().length == 0
 
     original_description = document.description_editor
-    description.setString_("Flag replies that claim deployment succeeded.")
+    edited_spec = str(description.string()).replace(
+        "Decide whether", "Carefully decide whether", 1)
+    description.setString_(edited_spec)
     document.editor_changed()
     assert document.description_editor is original_description
     assert document.deploy_button.isEnabled()
@@ -611,6 +623,7 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     projection = rules_api.source_projection(canonical)
     assert projection["name"] == "Renamed Example"
     assert projection["id"] == rule_id
+    assert projection["spec"] == edited_spec
     button_titles = {
         str(control.title())
         for control in _walk(document.window.contentView())
@@ -624,6 +637,8 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     document.show_advanced()
     assert document._advanced_window is not None
     assert document._advanced_editor is not None
+    assert rules_api.source_projection(
+        str(document._advanced_editor.string()))["spec"] == edited_spec
     document._set_busy(True, "Deploying…")
     assert not document._advanced_editor.isEditable()
     assert not document._advanced_apply.isEnabled()
@@ -716,7 +731,8 @@ def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
     assert not document.deploy_button.isEnabled()
     assert str(document.deploy_button.title()) == "Deployed"
     document.description_editor.setString_(
-        "Flag a changed deployment example.")
+        str(document.description_editor.string()).replace(
+            "Decide whether", "Carefully decide whether", 1))
     document.editor_changed()
     document.save_draft()
     assert document.deploy_button.isEnabled()

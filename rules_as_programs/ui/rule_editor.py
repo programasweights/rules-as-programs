@@ -311,9 +311,7 @@ class RAPRuleEditorDocument(NSObject):
             or "Untitled rule"
         )
         self.spec = str(projection.get("spec", ""))
-        self.description = str(
-            projection.get("description")
-            if self.managed_fuzzy else projection.get("spec", ""))
+        self.description = self.spec
         self.allowed_label = str(projection.get("allowed_label", "OK"))
         self.cases = list(projection.get("cases", []))
         self.on = list(projection.get("on", []))
@@ -778,7 +776,8 @@ class RAPRuleEditorDocument(NSObject):
             return
         self.name = str(self.name_field.stringValue()).strip()
         if not self.custom:
-            self.description = str(self.description_editor.string()).strip()
+            self.spec = str(self.description_editor.string()).strip()
+            self.description = self.spec
 
     @objc.python_method
     def _compose(self) -> tuple[bool, str, str]:
@@ -788,21 +787,26 @@ class RAPRuleEditorDocument(NSObject):
                 self.full_source, self.rule_id, self.name)
             return ok, source, error
         if self.managed_fuzzy:
-            try:
-                source = rules_api.generate_managed_fuzzy_source(
-                    self.rule_id,
-                    self.name,
-                    self.description,
-                    severity=self.severity,
-                    on=self.on,
-                    inputs=self.inputs,
-                    probes=self.probes,
-                    channel=self.channel,
-                    cases=self.cases,
+            if "Return ONLY one of:" not in self.spec:
+                return (
+                    False,
+                    self.full_source,
+                    "Rule spec must keep the output contract: "
+                    "Return ONLY one of: OK, INFO, WARNING, CRITICAL",
                 )
-            except ValueError as exc:
-                return False, self.full_source, str(exc)
-            return True, source, ""
+            projection = rules_api.source_projection(self.full_source)
+            ok, source, error = rules_api.patch_source_projection(
+                self.full_source,
+                on=self.on,
+                inputs=self.inputs,
+                severity=self.severity,
+                function_source=projection.get("function_source", ""),
+                spec=self.spec,
+            )
+            if ok:
+                ok, source, error = rules_api.patch_rule_identity(
+                    source, self.rule_id, self.name)
+            return ok, source, error
         ok, source, error = rules_api.patch_source_projection(
             self.full_source,
             on=self.on,
@@ -810,7 +814,7 @@ class RAPRuleEditorDocument(NSObject):
             severity=self.severity,
             function_source=rules_api.source_projection(
                 self.full_source).get("function_source", ""),
-            spec=self.description or None,
+            spec=self.spec or None,
         )
         if ok:
             ok, source, error = rules_api.patch_rule_identity(
@@ -822,7 +826,7 @@ class RAPRuleEditorDocument(NSObject):
         self._programmatic = True
         if sync_text:
             self.name_field.setStringValue_(self.name)
-            self.description_editor.setString_(self.description)
+            self.description_editor.setString_(self.spec)
         for kind, button in self.trigger_buttons.items():
             button.setState_(
                 NSControlStateValueOn if kind in self.on

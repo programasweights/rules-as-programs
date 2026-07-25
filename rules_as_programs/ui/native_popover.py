@@ -799,12 +799,14 @@ class PersistentPopoverRenderer:
                     lambda sender, item=value:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
-                cell.addSubview_(self._icon_button(
-                    "checkmark", "✓", (320, 10, 34, 28),
+                review = self._button(
+                    "✓", (320, 10, 34, 28),
                     lambda _sender, item=value: self.controller.done_group(item),
-                    accessibility=f"Mark {title} reviewed",
-                    tint=NSColor.systemGreenColor(),
-                    point_size=15, weight="semibold"))
+                    role="icon",
+                    accessibility=f"Mark {title} reviewed")
+                review.setContentTintColor_(NSColor.systemGreenColor())
+                review.setFont_(NSFont.boldSystemFontOfSize_(17))
+                cell.addSubview_(review)
             else:
                 cell.addSubview_(self._icon_button(
                     "ellipsis", "…", (360, 10, 34, 28),
