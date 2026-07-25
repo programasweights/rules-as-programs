@@ -242,9 +242,9 @@ class RAPTableAdapter(NSObject):
             owner.activate_clicked_row()
 
     def tableView_isGroupRow_(self, _table, row):
-        owner = getattr(self, "owner", None)
-        return bool(
-            owner and owner.rows[int(row)].get("type") == "section")
+        # Section rows are styled manually so AppKit does not add a hard
+        # group-row separator that visually disconnects them from their items.
+        return False
 
     def tableView_shouldSelectRow_(self, _table, row):
         owner = getattr(self, "owner", None)
@@ -768,7 +768,7 @@ class PersistentPopoverRenderer:
     @staticmethod
     def row_height(row: dict[str, Any]) -> float:
         return {
-            "section": 30,
+            "section": 36,
             "issue": 78,
             "attention": 70,
             "finding": 48,
@@ -799,7 +799,7 @@ class PersistentPopoverRenderer:
         if kind == "section":
             project_section = bool(row.get("project_root"))
             cell.addSubview_(self._label(
-                row.get("title", ""), (PAD, 7, 190, 20),
+                row.get("title", ""), (PAD, 10, 190, 20),
                 size=(
                     PROJECT_TITLE_SIZE
                     if project_section else SECTION_TITLE_SIZE),
@@ -809,20 +809,20 @@ class PersistentPopoverRenderer:
                     if project_section else NSColor.secondaryLabelColor())))
             if row.get("count") is not None:
                 cell.addSubview_(self._label(
-                    str(row.get("count", 0)), (202, 7, 28, 20),
+                    str(row.get("count", 0)), (202, 10, 28, 20),
                     size=10, color=NSColor.secondaryLabelColor()))
             project_root = str(row.get("project_root", ""))
             if row.get("project_actions") and project_root:
                 cell.addSubview_(self._button(
-                    "+ Rule", (232, 3, 56, 24),
+                    "+ Rule", (232, 6, 56, 24),
                     lambda sender, path=project_root:
                     self.controller.begin_add_rule(path, sender)))
                 cell.addSubview_(self._button(
-                    "Rules", (290, 3, 52, 24),
+                    "Rules", (290, 6, 52, 24),
                     lambda _sender, path=project_root:
                     self.controller.open_manage_rules(path)))
                 review_all = self._button(
-                    "✓ All", (348, 3, 70, 24),
+                    "✓ All", (348, 6, 70, 24),
                     lambda _sender, path=project_root:
                     self.controller.done_project(path),
                     accessibility=(
@@ -1121,24 +1121,9 @@ class PersistentPopoverRenderer:
         return row.get("type") in ("finding", "rule", "project")
 
     def separator_config(self, index: int) -> tuple[bool, float]:
-        if not (0 <= index < len(self.rows) - 1):
-            return False, PAD
-        row = self.rows[index]
-        next_row = self.rows[index + 1]
-        if row.get("type") == "section":
-            return False, PAD
-        if row.get("type") == "finding":
-            if next_row.get("type") == "section":
-                return True, PAD
-            if next_row.get("type") == "finding":
-                current_project = str(
-                    (row.get("value") or {}).get("project_root", ""))
-                next_project = str(
-                    (next_row.get("value") or {}).get("project_root", ""))
-                return True, 42 if current_project == next_project else PAD
-        if next_row.get("type") == "section":
-            return True, PAD
-        return True, PAD
+        # The popover groups rows through spacing and typography. Content
+        # separators made the narrow list feel like a spreadsheet.
+        return False, PAD
 
     def activate_clicked_row(self) -> None:
         row = int(self.table.clickedRow())

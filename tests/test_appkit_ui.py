@@ -182,11 +182,6 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     hover_row.mouseEntered_(None)
     assert hover_row.hovered()
     assert rendered_png(hover_row) != resting
-    hover_row.mouseExited_(None)
-    without_separator = rendered_png(hover_row)
-    hover_row.configure(
-        controller.renderer.row_key(finding_model), True, True, 94)
-    assert rendered_png(hover_row) != without_separator
     finding_cell = controller.renderer.row_view(finding_model)
     finding_cell.layoutSubtreeIfNeeded()
     finding_buttons = [
@@ -235,12 +230,12 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     section_index = next(
         index for index, row in enumerate(controller.renderer.rows)
         if row["type"] == "section")
-    assert controller.renderer._adapter.tableView_isGroupRow_(
+    assert not controller.renderer._adapter.tableView_isGroupRow_(
         table, section_index)
     assert not controller.renderer._adapter.tableView_shouldSelectRow_(
         table, section_index)
     assert controller.renderer.separator_config(section_index) == (False, 14)
-    assert controller.renderer.separator_config(finding_index)[1] in (14, 42)
+    assert controller.renderer.separator_config(finding_index) == (False, 14)
     project_section = next(
         row for row in controller.renderer.rows
         if row.get("type") == "section" and row.get("project_root") == project)
