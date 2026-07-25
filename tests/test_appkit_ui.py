@@ -152,6 +152,9 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         control for control in controls if isinstance(control, NSTableView)]
     assert len(tables) == 1
     table = tables[0]
+    assert table.backgroundColor().alphaComponent() == 0
+    assert not controller.renderer.scroll.drawsBackground()
+    assert not controller.renderer.scroll.hasVerticalScroller()
     root_identity = controller.content_controller.view()
     table_identity = controller.renderer.table
     project = next(iter(snapshot.findings_by_project))
@@ -217,6 +220,14 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert any(
         str(button.accessibilityLabel() or "").startswith("Mark all findings")
         for button in section_buttons)
+    add_rule_button = next(
+        button for button in section_buttons
+        if str(button.title()) == "+ Rule")
+    from rules_as_programs.ui.macos_controls import RAPHoverButton
+    assert isinstance(add_rule_button, RAPHoverButton)
+    add_resting = rendered_png(add_rule_button)
+    add_rule_button.mouseEntered_(None)
+    assert rendered_png(add_rule_button) != add_resting
     project_frame = controller.renderer.project_popup.frame()
     mode_frame = controller.renderer.mode_control.frame()
     add_frame = controller.renderer.add_button.frame()
@@ -245,6 +256,23 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         "type": "section", "title": "project",
         "project_root": "/two/project", "section_key": "project:/two/project",
     })
+    issue_cell = controller.renderer.row_view({
+        "type": "issue",
+        "value": {
+            "summary": "Rule check failed",
+            "impact": "this rule check was skipped",
+            "code": "runtime_exception",
+        },
+    })
+    issue_labels = {
+        str(control.stringValue()): control.frame()
+        for control in _walk(issue_cell)
+        if hasattr(control, "stringValue")
+    }
+    assert (
+        issue_labels["Rule check failed"].origin.y
+        < issue_labels["this rule check was skipped"].origin.y
+    )
 
     controller.route = "inbox"
     controller.selected_finding = group

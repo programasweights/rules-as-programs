@@ -30,7 +30,7 @@ from AppKit import (
     NSTableColumn,
     NSTableRowView,
     NSTableView,
-    NSTableViewStyleInset,
+    NSTableViewStylePlain,
     NSTextField,
     NSTrackingActiveInActiveApp,
     NSTrackingArea,
@@ -151,6 +151,13 @@ class RAPTableRowView(NSTableRowView):
         return bool(self._hovered)
 
 
+class RAPTableCellView(NSTableCellView):
+    """Top-down coordinates for compact, manually arranged native cells."""
+
+    def isFlipped(self):
+        return True
+
+
 class RAPControlTarget(NSObject):
     def invoke_(self, sender):
         callback = getattr(self, "callbacks", {}).get(int(sender.tag()))
@@ -254,7 +261,9 @@ class PersistentPopoverRenderer:
         self, title: str, frame, callback, *,
         role: str = "flat", accessibility: str | None = None,
     ) -> NSButton:
-        button = NSButton.alloc().initWithFrame_(NSMakeRect(*frame))
+        button_class = (
+            RAPHoverButton if role in ("flat", "icon") else NSButton)
+        button = button_class.alloc().initWithFrame_(NSMakeRect(*frame))
         button.setTitle_(title)
         style_button(
             button, role=role,
@@ -340,20 +349,26 @@ class PersistentPopoverRenderer:
 
         self.scroll = NSScrollView.alloc().initWithFrame_(
             NSMakeRect(0, HEADER_HEIGHT, POPOVER_WIDTH, 360))
-        self.scroll.setHasVerticalScroller_(True)
+        self.scroll.setHasVerticalScroller_(False)
+        self.scroll.setAutohidesScrollers_(True)
         self.scroll.setDrawsBackground_(False)
+        if hasattr(self.scroll.contentView(), "setDrawsBackground_"):
+            self.scroll.contentView().setDrawsBackground_(False)
         self.scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
         self.table = RAPNativeTable.alloc().initWithFrame_(
             NSMakeRect(0, 0, POPOVER_WIDTH, 360))
         self.table.owner = self
         column = NSTableColumn.alloc().initWithIdentifier_("main")
         column.setWidth_(POPOVER_WIDTH)
+        self.table_column = column
         self.table.addTableColumn_(column)
         self.table.setHeaderView_(None)
         self.table.setIntercellSpacing_((0, 0))
         self.table.setRowSizeStyle_(0)
+        self.table.setBackgroundColor_(NSColor.clearColor())
+        self.table.setUsesAlternatingRowBackgroundColors_(False)
         if hasattr(self.table, "setStyle_"):
-            self.table.setStyle_(NSTableViewStyleInset)
+            self.table.setStyle_(NSTableViewStylePlain)
         self.table.setDataSource_(self._adapter)
         self.table.setDelegate_(self._adapter)
         self.table.setAllowsEmptySelection_(True)
@@ -682,7 +697,7 @@ class PersistentPopoverRenderer:
 
     def _cell(self, row: dict[str, Any]) -> NSTableCellView:
         height = self.row_height(row)
-        return NSTableCellView.alloc().initWithFrame_(
+        return RAPTableCellView.alloc().initWithFrame_(
             NSMakeRect(0, 0, POPOVER_WIDTH, height))
 
     def row_view(self, row: dict[str, Any]) -> NSView:
@@ -1093,6 +1108,11 @@ class PersistentPopoverRenderer:
         self.scroll.setFrame_(NSMakeRect(
             0, HEADER_HEIGHT, POPOVER_WIDTH,
             max(40, height - HEADER_HEIGHT - FOOTER_HEIGHT)))
+        available_height = max(
+            40, height - HEADER_HEIGHT - FOOTER_HEIGHT)
+        self.scroll.setHasVerticalScroller_(
+            bool(content_height > available_height + 1))
+        self.table_column.setWidth_(self.scroll.contentSize().width)
         footer_y = height - FOOTER_HEIGHT
         self.navigation.setFrameOrigin_((PAD, footer_y + 7))
         self.more_button.setFrameOrigin_((346, footer_y + 7))
