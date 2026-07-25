@@ -16,15 +16,18 @@ from AppKit import (
     NSControlStateValueOff,
     NSControlStateValueOn,
     NSFont,
+    NSFontAttributeName,
     NSFontWeightMedium,
     NSFontWeightSemibold,
     NSImageView,
+    NSLayoutConstraint,
     NSLineBreakByTruncatingTail,
     NSMenu,
     NSMenuItem,
     NSPopUpButton,
     NSProgressIndicator,
     NSProgressIndicatorStyleSpinning,
+    NSForegroundColorAttributeName,
     NSSearchField,
     NSSegmentedControl,
     NSSegmentSwitchTrackingSelectOne,
@@ -44,7 +47,7 @@ from AppKit import (
     NSViewHeightSizable,
     NSViewWidthSizable,
 )
-from Foundation import NSIndexSet, NSMakeRect, NSObject
+from Foundation import NSIndexSet, NSAttributedString, NSMakeRect, NSObject
 
 from .layout import FOOTER_HEIGHT, POPOVER_MAX_HEIGHT, POPOVER_WIDTH
 from .macos_controls import (
@@ -149,8 +152,10 @@ class RAPTableRowView(NSTableRowView):
             color.setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 inset, 6, 6).fill()
+        self._draw_configured_separator()
 
-    def drawSeparatorInRect_(self, _rect):
+    @objc.python_method
+    def _draw_configured_separator(self) -> None:
         if not self._show_separator:
             return
         scale = (
@@ -161,10 +166,15 @@ class RAPTableRowView(NSTableRowView):
         NSColor.separatorColor().setFill()
         NSBezierPath.bezierPathWithRect_(NSMakeRect(
             self._separator_inset,
-            0,
+            self.bounds().size.height - thickness,
             max(0, self.bounds().size.width - self._separator_inset - PAD),
             thickness,
         )).fill()
+
+    def drawSeparatorInRect_(self, _rect):
+        # Separators are drawn from drawBackgroundInRect_ because AppKit does
+        # not consistently invoke this selector when table grid lines are off.
+        return
 
     @objc.python_method
     def configure(
@@ -327,6 +337,22 @@ class PersistentPopoverRenderer:
         if tint is not None and hasattr(button, "setContentTintColor_"):
             button.setContentTintColor_(tint)
         return self._wire(button, callback)
+
+    @staticmethod
+    def _set_review_title(
+        button: NSButton, title: str, *, size: float
+    ) -> None:
+        font = NSFont.boldSystemFontOfSize_(size)
+        attributed = NSAttributedString.alloc().initWithString_attributes_(
+            title,
+            {
+                NSFontAttributeName: font,
+                NSForegroundColorAttributeName: NSColor.systemGreenColor(),
+            },
+        )
+        button.setFont_(font)
+        button.setAttributedTitle_(attributed)
+        button.setContentTintColor_(NSColor.systemGreenColor())
 
     @staticmethod
     def _label(
@@ -793,8 +819,7 @@ class PersistentPopoverRenderer:
                     accessibility=(
                         f"Mark all findings in {_project_name(project_root)} "
                         "reviewed"))
-                review_all.setContentTintColor_(NSColor.systemGreenColor())
-                review_all.setFont_(NSFont.boldSystemFontOfSize_(11))
+                self._set_review_title(review_all, "✓ All", size=12)
                 cell.addSubview_(review_all)
         elif kind == "finding":
             severity = str(value.get("severity", "info"))
@@ -812,8 +837,7 @@ class PersistentPopoverRenderer:
                 symbol_name, severity.title(),
                 point_size=13, weight="semibold")
             if symbol:
-                image = NSImageView.alloc().initWithFrame_(
-                    NSMakeRect(PAD, 13, 16, 16))
+                image = NSImageView.alloc().init()
                 image.setImage_(symbol)
                 image.setContentTintColor_({
                     "critical": NSColor.systemRedColor(),
@@ -821,29 +845,64 @@ class PersistentPopoverRenderer:
                     "info": NSColor.systemBlueColor(),
                 }.get(severity, NSColor.secondaryLabelColor()))
                 cell.addSubview_(image)
+                image.setTranslatesAutoresizingMaskIntoConstraints_(False)
+                NSLayoutConstraint.activateConstraints_([
+                    image.leadingAnchor().constraintEqualToAnchor_constant_(
+                        cell.leadingAnchor(), PAD),
+                    image.centerYAnchor().constraintEqualToAnchor_constant_(
+                        cell.centerYAnchor(), -2),
+                    image.widthAnchor().constraintEqualToConstant_(16),
+                    image.heightAnchor().constraintEqualToConstant_(16),
+                ])
             else:
                 cell.addSubview_(self._label(
                     "!", (PAD, 15, 16, 18), size=11, bold=True))
-            cell.addSubview_(self._label(
+            severity_field = self._label(
                 severity_label, (34, 14, 56, 20), size=SEVERITY_SIZE,
-                weight=NSFontWeightMedium, color=NSColor.labelColor()))
+                weight=NSFontWeightMedium, color=NSColor.labelColor())
+            cell.addSubview_(severity_field)
             title = str(value.get("rule_title") or value.get("rule_id", "Rule"))
             if value.get("stale"):
                 title += " · changed"
             elif value.get("review_reason") == "rule_deleted":
                 title += " · deleted"
-            cell.addSubview_(self._label(
+            title_field = self._label(
                 title, (94, 14, 148, 20), size=ROW_TITLE_SIZE,
-                weight=NSFontWeightMedium))
+                weight=NSFontWeightMedium)
+            cell.addSubview_(title_field)
             occurrences = int(value.get("occurrences", 1) or 1)
-            if occurrences > 1:
-                cell.addSubview_(self._label(
-                    f"×{occurrences}", (246, 15, 30, 18), size=META_SIZE,
-                    color=NSColor.secondaryLabelColor()))
-            cell.addSubview_(self._label(
+            occurrence_field = self._label(
+                f"×{occurrences}" if occurrences > 1 else "",
+                (246, 15, 30, 18), size=META_SIZE,
+                color=NSColor.secondaryLabelColor())
+            cell.addSubview_(occurrence_field)
+            age_field = self._label(
                 _relative_time(value.get("last_seen") or value.get("ts", 0)),
                 (278, 15, 38, 18), size=META_SIZE,
-                color=NSColor.secondaryLabelColor()))
+                color=NSColor.secondaryLabelColor())
+            cell.addSubview_(age_field)
+            for field, leading, width in (
+                (severity_field, 34, 56),
+                (title_field, 94, 148),
+                (occurrence_field, 246, 30),
+                (age_field, 278, 38),
+            ):
+                field.setTranslatesAutoresizingMaskIntoConstraints_(False)
+                NSLayoutConstraint.activateConstraints_([
+                    field.leadingAnchor().constraintEqualToAnchor_constant_(
+                        cell.leadingAnchor(), leading),
+                    field.widthAnchor().constraintEqualToConstant_(width),
+                ])
+            NSLayoutConstraint.activateConstraints_([
+                title_field.centerYAnchor().constraintEqualToAnchor_(
+                    cell.centerYAnchor()),
+                severity_field.firstBaselineAnchor().constraintEqualToAnchor_(
+                    title_field.firstBaselineAnchor()),
+                occurrence_field.firstBaselineAnchor().constraintEqualToAnchor_(
+                    title_field.firstBaselineAnchor()),
+                age_field.firstBaselineAnchor().constraintEqualToAnchor_(
+                    title_field.firstBaselineAnchor()),
+            ])
             if row.get("mode") == "open":
                 cell.addSubview_(self._icon_button(
                     "ellipsis", "…", (360, 10, 34, 28),
@@ -855,8 +914,7 @@ class PersistentPopoverRenderer:
                     lambda _sender, item=value: self.controller.done_group(item),
                     role="icon",
                     accessibility=f"Mark {title} reviewed")
-                review.setContentTintColor_(NSColor.systemGreenColor())
-                review.setFont_(NSFont.boldSystemFontOfSize_(17))
+                self._set_review_title(review, "✓", size=19)
                 cell.addSubview_(review)
             else:
                 cell.addSubview_(self._icon_button(

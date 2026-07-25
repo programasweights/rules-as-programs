@@ -181,7 +181,13 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     hover_row.mouseEntered_(None)
     assert hover_row.hovered()
     assert rendered_png(hover_row) != resting
+    hover_row.mouseExited_(None)
+    without_separator = rendered_png(hover_row)
+    hover_row.configure(
+        controller.renderer.row_key(finding_model), True, True, 94)
+    assert rendered_png(hover_row) != without_separator
     finding_cell = controller.renderer.row_view(finding_model)
+    finding_cell.layoutSubtreeIfNeeded()
     finding_buttons = [
         control for control in _walk(finding_cell)
         if isinstance(control, NSButton)
@@ -200,7 +206,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         if str(button.accessibilityLabel() or "").startswith("Mark "))
     assert action_button.image() is not None
     assert str(review_glyph.title()) == "✓"
-    assert review_glyph.font().pointSize() == 17
+    assert review_glyph.font().pointSize() == 19
     title_field = next(
         control for control in _walk(finding_cell)
         if hasattr(control, "stringValue")
@@ -209,7 +215,13 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         control for control in _walk(finding_cell)
         if hasattr(control, "stringValue")
         and str(control.stringValue()) in ("Critical", "Warning", "Info"))
-    assert title_field.frame().origin.y == severity_field.frame().origin.y
+    title_baseline = (
+        title_field.frame().origin.y
+        + title_field.firstBaselineOffsetFromTop())
+    severity_baseline = (
+        severity_field.frame().origin.y
+        + severity_field.firstBaselineOffsetFromTop())
+    assert abs(title_baseline - severity_baseline) < 0.5
     assert severity_field.textColor().isEqual_(NSColor.labelColor())
     first_button_x = min(button.frame().origin.x for button in finding_buttons)
     assert (
