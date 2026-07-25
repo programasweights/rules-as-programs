@@ -67,7 +67,6 @@ SECTION_TITLE_SIZE = 11.5
 ROW_TITLE_SIZE = 12
 BODY_SIZE = 10.5
 META_SIZE = 9.5
-SEVERITY_SIZE = 10.5
 
 
 def _relative_time(ts: float) -> str:
@@ -343,16 +342,17 @@ class PersistentPopoverRenderer:
         button: NSButton, title: str, *, size: float
     ) -> None:
         font = NSFont.boldSystemFontOfSize_(size)
+        color = NSColor.controlAccentColor()
         attributed = NSAttributedString.alloc().initWithString_attributes_(
             title,
             {
                 NSFontAttributeName: font,
-                NSForegroundColorAttributeName: NSColor.systemGreenColor(),
+                NSForegroundColorAttributeName: color,
             },
         )
         button.setFont_(font)
         button.setAttributedTitle_(attributed)
-        button.setContentTintColor_(NSColor.systemGreenColor())
+        button.setContentTintColor_(color)
 
     @staticmethod
     def _label(
@@ -845,38 +845,33 @@ class PersistentPopoverRenderer:
             symbol = system_symbol(
                 symbol_name, severity.title(),
                 point_size=13, weight="semibold")
+            severity_image = None
             if symbol:
-                image = NSImageView.alloc().init()
-                image.setImage_(symbol)
-                image.setContentTintColor_({
+                severity_image = NSImageView.alloc().init()
+                severity_image.setImage_(symbol)
+                severity_image.setContentTintColor_({
                     "critical": NSColor.systemRedColor(),
                     "warn": NSColor.systemOrangeColor(),
                     "info": NSColor.systemBlueColor(),
                 }.get(severity, NSColor.secondaryLabelColor()))
-                cell.addSubview_(image)
-                image.setTranslatesAutoresizingMaskIntoConstraints_(False)
+                cell.addSubview_(severity_image)
+                severity_image.setTranslatesAutoresizingMaskIntoConstraints_(False)
                 NSLayoutConstraint.activateConstraints_([
-                    image.leadingAnchor().constraintEqualToAnchor_constant_(
+                    severity_image.leadingAnchor().constraintEqualToAnchor_constant_(
                         cell.leadingAnchor(), PAD),
-                    image.centerYAnchor().constraintEqualToAnchor_constant_(
-                        cell.centerYAnchor(), -2),
-                    image.widthAnchor().constraintEqualToConstant_(16),
-                    image.heightAnchor().constraintEqualToConstant_(16),
+                    severity_image.widthAnchor().constraintEqualToConstant_(16),
+                    severity_image.heightAnchor().constraintEqualToConstant_(16),
                 ])
             else:
                 cell.addSubview_(self._label(
                     "!", (PAD, 15, 16, 18), size=11, bold=True))
-            severity_field = self._label(
-                severity_label, (34, 14, 56, 20), size=SEVERITY_SIZE,
-                weight=NSFontWeightMedium, color=NSColor.labelColor())
-            cell.addSubview_(severity_field)
             title = str(value.get("rule_title") or value.get("rule_id", "Rule"))
             if value.get("stale"):
                 title += " · changed"
             elif value.get("review_reason") == "rule_deleted":
                 title += " · deleted"
             title_field = self._label(
-                title, (94, 14, 148, 20), size=ROW_TITLE_SIZE,
+                title, (42, 14, 200, 20), size=ROW_TITLE_SIZE,
                 weight=NSFontWeightMedium)
             cell.addSubview_(title_field)
             occurrences = int(value.get("occurrences", 1) or 1)
@@ -891,8 +886,7 @@ class PersistentPopoverRenderer:
                 color=NSColor.secondaryLabelColor())
             cell.addSubview_(age_field)
             for field, leading, width in (
-                (severity_field, 34, 56),
-                (title_field, 94, 148),
+                (title_field, 42, 200),
                 (occurrence_field, 246, 30),
                 (age_field, 278, 38),
             ):
@@ -905,13 +899,16 @@ class PersistentPopoverRenderer:
             NSLayoutConstraint.activateConstraints_([
                 title_field.centerYAnchor().constraintEqualToAnchor_(
                     cell.centerYAnchor()),
-                severity_field.firstBaselineAnchor().constraintEqualToAnchor_(
-                    title_field.firstBaselineAnchor()),
                 occurrence_field.firstBaselineAnchor().constraintEqualToAnchor_(
                     title_field.firstBaselineAnchor()),
                 age_field.firstBaselineAnchor().constraintEqualToAnchor_(
                     title_field.firstBaselineAnchor()),
             ])
+            if severity_image is not None:
+                NSLayoutConstraint.activateConstraints_([
+                    severity_image.centerYAnchor().constraintEqualToAnchor_(
+                        title_field.centerYAnchor()),
+                ])
             if row.get("mode") == "open":
                 cell.addSubview_(self._icon_button(
                     "ellipsis", "…", (360, 10, 34, 28),
@@ -1128,10 +1125,19 @@ class PersistentPopoverRenderer:
             return False, PAD
         row = self.rows[index]
         next_row = self.rows[index + 1]
-        if row.get("type") == "section" or next_row.get("type") == "section":
-            return True, PAD
+        if row.get("type") == "section":
+            return False, PAD
         if row.get("type") == "finding":
-            return True, 94
+            if next_row.get("type") == "section":
+                return True, PAD
+            if next_row.get("type") == "finding":
+                current_project = str(
+                    (row.get("value") or {}).get("project_root", ""))
+                next_project = str(
+                    (next_row.get("value") or {}).get("project_root", ""))
+                return True, 42 if current_project == next_project else PAD
+        if next_row.get("type") == "section":
+            return True, PAD
         return True, PAD
 
     def activate_clicked_row(self) -> None:

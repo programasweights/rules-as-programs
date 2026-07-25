@@ -124,6 +124,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         NSBitmapImageFileTypePNG,
         NSButton,
         NSColor,
+        NSImageView,
         NSMakeRect,
         NSSegmentedControl,
         NSStatusBar,
@@ -211,18 +212,21 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         control for control in _walk(finding_cell)
         if hasattr(control, "stringValue")
         and str(control.stringValue()).startswith(group["rule_title"]))
-    severity_field = next(
+    severity_image = next(
         control for control in _walk(finding_cell)
-        if hasattr(control, "stringValue")
-        and str(control.stringValue()) in ("Critical", "Warning", "Info"))
-    title_baseline = (
+        if isinstance(control, NSImageView))
+    assert not any(
+        hasattr(control, "stringValue")
+        and str(control.stringValue()) in ("Critical", "Warning", "Info")
+        for control in _walk(finding_cell)
+    )
+    severity_center = (
+        severity_image.frame().origin.y
+        + severity_image.frame().size.height / 2)
+    title_center = (
         title_field.frame().origin.y
-        + title_field.firstBaselineOffsetFromTop())
-    severity_baseline = (
-        severity_field.frame().origin.y
-        + severity_field.firstBaselineOffsetFromTop())
-    assert abs(title_baseline - severity_baseline) < 0.5
-    assert severity_field.textColor().isEqual_(NSColor.labelColor())
+        + title_field.frame().size.height / 2)
+    assert abs(severity_center - title_center) <= 0.5
     first_button_x = min(button.frame().origin.x for button in finding_buttons)
     assert (
         title_field.frame().origin.x + title_field.frame().size.width
@@ -235,8 +239,8 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         table, section_index)
     assert not controller.renderer._adapter.tableView_shouldSelectRow_(
         table, section_index)
-    assert controller.renderer.separator_config(section_index) == (True, 14)
-    assert controller.renderer.separator_config(finding_index)[1] in (14, 94)
+    assert controller.renderer.separator_config(section_index) == (False, 14)
+    assert controller.renderer.separator_config(finding_index)[1] in (14, 42)
     project_section = next(
         row for row in controller.renderer.rows
         if row.get("type") == "section" and row.get("project_root") == project)
@@ -251,11 +255,16 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert any(
         str(button.accessibilityLabel() or "").startswith("Mark all findings")
         for button in section_buttons)
+    bulk_review = next(
+        button for button in section_buttons
+        if str(button.title()) == "✓ All")
+    assert bulk_review.contentTintColor().isEqual_(
+        NSColor.controlAccentColor())
     review_button = next(
         button for button in finding_buttons
         if str(button.accessibilityLabel() or "").startswith("Mark "))
     assert review_button.contentTintColor().isEqual_(
-        NSColor.systemGreenColor())
+        NSColor.controlAccentColor())
     project_heading = next(
         control for control in _walk(project_section_cell)
         if hasattr(control, "stringValue")
