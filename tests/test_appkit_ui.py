@@ -240,6 +240,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     project_section = next(
         row for row in controller.renderer.rows
         if row.get("type") == "section" and row.get("project_root") == project)
+    assert "count" not in project_section
     project_section_cell = controller.renderer.row_view(project_section)
     section_buttons = [
         control for control in _walk(project_section_cell)
@@ -465,6 +466,8 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     )
     controller.route = "projects"
     controller._render()
+    assert controller.renderer.navigation.imageForSegment_(0) is not None
+    assert str(controller.renderer.navigation.labelForSegment_(0)) == "Findings"
     project_model = next(
         row for row in controller.renderer.rows if row["type"] == "project")
     project_cell = controller.renderer.row_view(project_model)

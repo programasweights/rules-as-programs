@@ -537,6 +537,16 @@ class PersistentPopoverRenderer:
         route_index = {"inbox": 0, "rules": 1, "projects": 2}.get(route, 0)
         self.navigation.setSelectedSegment_(route_index)
         inbox = route == "inbox"
+        back_symbol = (
+            None if inbox
+            else system_symbol(
+                "chevron.backward", "Back to Findings", point_size=10)
+        )
+        self.navigation.setImage_forSegment_(back_symbol, 0)
+        self.navigation.setLabel_forSegment_(
+            "Findings" if back_symbol is not None or inbox else "‹ Findings",
+            0,
+        )
         self.project_popup.setHidden_(not inbox and route != "rules")
         self.add_button.setHidden_(not inbox and route != "rules")
         self.back_button.setHidden_(inbox)
@@ -679,7 +689,6 @@ class PersistentPopoverRenderer:
                 "type": "section",
                 "title": _project_name(project),
                 "project_root": project,
-                "count": len(values),
                 "section_key": f"project:{project}",
                 "project_actions": mode == "open",
             })
