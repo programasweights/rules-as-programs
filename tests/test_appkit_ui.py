@@ -344,8 +344,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         "current_rule": {
             "source": "from rules_as_programs import rule\n",
             "scope": "project",
-            "on": ["message"],
-            "inputs": ["message"],
+            "trigger": "afterAgentResponse",
             "definition": {"source_path": "/tmp/rule.py"},
         },
         "audit": {"rule_source": "from rules_as_programs import rule\n"},
@@ -354,7 +353,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
                     "Return ONLY one of: OK, INFO, WARNING, CRITICAL",
         },
         "evaluation": {
-            "schema_version": 3,
+            "schema_version": 4,
             "rule": {
                 "id": group["rule_id"],
                 "name": group["rule_title"],
@@ -362,41 +361,45 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
                 "source_hash": "sourcehash",
             },
             "input": {
-                "text": "## Latest message\nAgent response",
+                "text": "Agent response",
                 "sha256": "inputhash",
                 "char_count": 32,
-                "format": "rap-evidence-v1",
+                "format": "plain",
+                "json_pointer": "/text",
+                "pointer_source": "default",
+                "value_type": "string",
                 "event_ids": ["event"],
             },
             "severity": "warn",
             "trigger": {
                 "event_id": "event",
                 "kind": "message",
+                "hook": "afterAgentResponse",
                 "included_in_input": True,
+                "raw_payload": {
+                    "hook_event_name": "afterAgentResponse",
+                    "text": "Agent response",
+                },
             },
         },
         "ledger": {
             "events": [{
+                "id": "thought",
+                "kind": "thought",
+                "text": "Earlier thought",
+                "is_trigger": False,
+            }, {
                 "id": "event",
                 "kind": "message",
                 "text": "Agent response",
                 "is_trigger": True,
             }],
             "start": 0,
-            "end": 1,
-            "total": 1,
+            "end": 2,
+            "total": 2,
             "path": str(tmp_path / "ledger.jsonl"),
         },
-        "trace": [{
-            "type": "evidence",
-            "text": "evidence",
-            "probes": [{"command": "git status", "output": " M file.py"}],
-            "events": [{"kind": "shell_exec", "ts": group["ts"], "text": "pytest"}],
-        }, {
-            "type": "paw",
-            "input": "evidence",
-            "output": "UNVERIFIED_CLAIM",
-        }],
+        "trace": [],
     }
     controller._render()
     assert controller.content_controller.view() is root_identity
@@ -411,6 +414,10 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert not hasattr(inspector, "finding_label")
     assert not hasattr(inspector, "output_label")
     assert not hasattr(inspector, "copy_input_button")
+    assert not any(
+        isinstance(control, NSSegmentedControl)
+        and control.segmentCount() == 2
+        for control in _walk(inspector.window.contentView()))
     inspector_text = [
         str(control.stringValue())
         for control in _walk(inspector.window.contentView())
@@ -424,14 +431,13 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         control for control in _walk(inspector.window.contentView())
         if isinstance(control, NSScrollView)
     ]) == 2
-    assert "Latest message" in str(inspector.input_view.string())
-    inspector.set_input_mode(1)
-    assert str(inspector.input_view.string()) == (
-        "## Latest message\nAgent response")
+    assert str(inspector.input_heading.stringValue()) == "Assistant response"
+    assert str(inspector.input_view.string()) == "Agent response"
+    assert inspector.window.contentView().frame().size.height < 400
     inspector.show_context()
     assert inspector.detail_page.isHidden()
     assert not inspector.context_page.isHidden()
-    assert inspector.context_table.numberOfRows() == 1
+    assert inspector.context_table.numberOfRows() == 2
     inspector.window.contentView().layoutSubtreeIfNeeded()
     assert inspector.context_scroll.frame().size.width >= (
         inspector.context_page.frame().size.width - 1)
@@ -555,6 +561,7 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
         NSEventModifierFlagControl,
         NSEventModifierFlagShift,
         NSKeyDown,
+        NSTextField,
     )
     from rules_as_programs import rules_api
     from rules_as_programs.ui.macos_app import MacOSController
@@ -611,11 +618,25 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert not document.spec_scroll.hasHorizontalScroller()
     assert document.description_editor.textContainer().widthTracksTextView()
     assert document.name_field.nextKeyView() == document.description_editor
-    assert document.description_editor.nextKeyView() == document.all_projects_radio
+    assert document.description_editor.nextKeyView() == document.trigger_popup
     assert document.deploy_button.isEnabled()
     assert not document._scope_confirmed
     assert document.coverage_mode == "selected"
-    assert "project" in str(document.scope_summary.stringValue())
+    assert document.scope_summary.isHidden()
+    assert document.trigger == "afterShellExecution"
+    assert [
+        str(document.trigger_popup.itemAtIndex_(index).representedObject())
+        for index in range(6)
+    ] == [
+        "afterShellExecution",
+        "afterAgentThought",
+        "preToolUse",
+        "afterAgentResponse",
+        "postToolUseFailure",
+        "afterFileEdit",
+    ]
+    assert "afterShellExecution /command" in str(
+        document.input_contract_label.stringValue())
     manager.open({
         **document.rule,
         "_finding_context": {
@@ -624,9 +645,10 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
                 "severity": "warn",
             },
             "evaluation": {
-                    "schema_version": 3,
+                    "schema_version": 4,
                 "input": {
                     "text": "exact finding input",
+                    "json_pointer": "/text",
                 },
                     "severity": "warn",
             },
@@ -649,8 +671,10 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
         for control in _walk(document.window.contentView())
         if hasattr(control, "accessibilityLabel")
     ]
-    assert "About Runs when" in info_labels
-    assert "About Reads" in info_labels
+    assert "Trigger" in [
+        str(control.stringValue()) for control in _walk(
+            document.window.contentView())
+        if isinstance(control, NSTextField)]
     initial_editor = document.name_field.currentEditor()
     assert document.window.firstResponder() == initial_editor
     assert initial_editor.selectedRange().length == len(
@@ -717,7 +741,8 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert document.window is not None
     ok, canonical, error = document._compose()
     assert ok, error
-    assert "inputs=" in canonical
+    assert "trigger='afterShellExecution'" in canonical
+    assert "inputs=" not in canonical
     projection = rules_api.source_projection(canonical)
     assert projection["name"] == "Renamed Example"
     assert projection["id"] == rule_id

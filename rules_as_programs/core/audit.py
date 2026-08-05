@@ -2,8 +2,8 @@
 
 Each violation is one JSON line in ``<project>/.cursor/rules-as-programs/log/
 audit.jsonl`` recording its stable finding ID, timestamp, rule, severity,
-suppression state, output message, and typed input trace (agent events, probes,
-and PAW input/output). A ``.gitignore`` (``*``) is dropped in the log folder so
+suppression state, exact mapped trigger input, raw trigger payload, and PAW
+decision trace. A ``.gitignore`` (``*``) is dropped in the log folder so
 audit logs are never committed.
 """
 

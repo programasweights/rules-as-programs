@@ -57,6 +57,9 @@ class LoadedRule:
     severity: str
     on: list[str]
     fn: Callable
+    trigger: str = ""
+    input_pointer: str = ""
+    max_input_bytes: int = 65536
     inputs: list[str] = field(default_factory=list)
     probes: dict[str, str] = field(default_factory=dict)
     channel: str = "finding"
@@ -73,6 +76,8 @@ class LoadedRule:
         if not is_rule_id(d.id):
             raise ValueError("rule id must be a 16-character Crockford Base32 value")
         return cls(id=d.id, title=d.title, severity=d.severity, on=list(d.on),
+                   trigger=d.trigger, input_pointer=d.input_pointer,
+                   max_input_bytes=d.max_input_bytes,
                    inputs=list(d.inputs),
                    probes=dict(d.probes),
                    channel=d.channel,

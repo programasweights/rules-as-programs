@@ -17,7 +17,7 @@ def _detail(input_text='{"message":"hello","nested":{"value":1}}'):
             "ts": 2,
         },
         "evaluation": {
-            "schema_version": 3,
+            "schema_version": 4,
             "rule": {
                 "id": "rule",
                 "name": "User rule name",
@@ -26,11 +26,15 @@ def _detail(input_text='{"message":"hello","nested":{"value":1}}'):
             "input": {
                 "text": input_text,
                 "format": "plain",
+                "json_pointer": "/text",
+                "pointer_source": "default",
+                "value_type": "string",
                 "event_ids": ["trigger"],
             },
             "severity": "warn",
             "trigger": {
                 "event_id": "trigger",
+                "hook": "afterAgentResponse",
                 "event": {
                     "id": "trigger", "kind": "message", "text": "trigger"},
             },
@@ -80,7 +84,7 @@ def test_recorded_plain_format_prevents_false_evidence_projection():
     text = "## Latest message\nThis is custom input, not RAP evidence."
     presented = present_finding(_detail(text))
     assert presented["input_presentation"].format == "plain"
-    assert presented["input_sections"] == []
+    assert presented["input_text"] == text
 
 
 def test_trigger_snapshot_is_used_only_when_ledger_is_empty():

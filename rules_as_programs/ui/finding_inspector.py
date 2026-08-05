@@ -21,7 +21,6 @@ from AppKit import (
     NSPopUpButton,
     NSScrollView,
     NSSearchField,
-    NSSegmentedControl,
     NSTableCellView,
     NSTableColumn,
     NSTableView,
@@ -87,34 +86,24 @@ class RAPContextAdapter(NSObject):
         cell = NSTableCellView.alloc().init()
         expanded = event.get("id") == self.owner.expanded_event_id
         timestamp = self.owner.event_time(event)
-        time_label = self.owner.label(
-            timestamp, size=10, color=NSColor.secondaryLabelColor())
         markers = []
         if event.get("is_trigger"):
-            markers.append("Trigger")
-        if event.get("id") in self.owner.included_event_ids:
-            markers.append("Included")
+            markers.extend(["Trigger", "Rule input"])
         kind = str(event.get("kind", "event"))
         kind_label = self.owner.label(
-            " · ".join([kind, *markers]), size=10, bold=True)
+            " · ".join([self.owner.event_label(kind), timestamp, *markers]),
+            size=10, bold=True)
         text = str(event.get("text", ""))
         body = self.owner.label(
             text if expanded else text.replace("\n", " ")[:240],
             size=10.5, lines=0 if expanded else 2, selectable=expanded)
-        time_label.setTranslatesAutoresizingMaskIntoConstraints_(False)
         kind_label.setTranslatesAutoresizingMaskIntoConstraints_(False)
         body.setTranslatesAutoresizingMaskIntoConstraints_(False)
-        cell.addSubview_(time_label)
         cell.addSubview_(kind_label)
         cell.addSubview_(body)
         _activate(
-            time_label.leadingAnchor().constraintEqualToAnchor_constant_(
-                cell.leadingAnchor(), 12),
-            time_label.topAnchor().constraintEqualToAnchor_constant_(
-                cell.topAnchor(), 10),
-            time_label.widthAnchor().constraintEqualToConstant_(82),
             kind_label.leadingAnchor().constraintEqualToAnchor_constant_(
-                time_label.trailingAnchor(), 12),
+                cell.leadingAnchor(), 18),
             kind_label.topAnchor().constraintEqualToAnchor_constant_(
                 cell.topAnchor(), 8),
             kind_label.trailingAnchor().constraintEqualToAnchor_constant_(
@@ -129,7 +118,7 @@ class RAPContextAdapter(NSObject):
                 cell.bottomAnchor(), -8),
         )
         cell.setAccessibilityLabel_(
-            f"{timestamp}, {kind_label.stringValue()}, {text}")
+            f"{kind_label.stringValue()}, {text}")
         return cell
 
     def tableViewSelectionDidChange_(self, _notification):
@@ -160,7 +149,6 @@ class RAPFindingInspector(NSObject):
         self._next_tag = 1
         self._menus: list[NSMenu] = []
         self.page = "detail"
-        self.input_mode = 0
         self.expanded_event_id = ""
         self.included_event_ids: set[str] = set()
         return self
@@ -189,11 +177,11 @@ class RAPFindingInspector(NSObject):
             | NSWindowStyleMaskMiniaturizable
         )
         self.window = RAPCommandWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(0, 0, 820, 680), mask,
+            NSMakeRect(0, 0, 760, 360), mask,
             NSBackingStoreBuffered, False)
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
-        self.window.setContentMinSize_(NSMakeSize(680, 500))
+        self.window.setContentMinSize_(NSMakeSize(640, 240))
         self.window.setTitle_("")
         self.window.setTitleVisibility_(NSWindowTitleHidden)
         self.window.setTitlebarAppearsTransparent_(True)
@@ -367,17 +355,9 @@ class RAPFindingInspector(NSObject):
                 self.page_container.bottomAnchor()),
         )
         self.detail_page = page
-        input_label = self.label("Input", size=11, bold=True)
-        self.input_mode_control = NSSegmentedControl.alloc().init()
-        self.input_mode_control.setSegmentCount_(2)
-        self.input_mode_control.setLabel_forSegment_("Structured", 0)
-        self.input_mode_control.setLabel_forSegment_("Raw", 1)
-        self.input_mode_control.setSelectedSegment_(0)
-        self._wire(
-            self.input_mode_control,
-            lambda sender: self.set_input_mode(int(sender.selectedSegment())))
+        self.input_heading = self.label("Input", size=11, bold=True)
         input_header = self.stack([
-            input_label, NSView.alloc().init(), self.input_mode_control])
+            self.input_heading, NSView.alloc().init()])
         scroll = NSScrollView.alloc().init()
         scroll.setHasVerticalScroller_(True)
         scroll.setAutohidesScrollers_(True)
@@ -403,7 +383,7 @@ class RAPFindingInspector(NSObject):
         self.input_scroll = scroll
         self.input_view = editor
         self.context_button = self.button(
-            "Context  ›", lambda _sender: self.show_context(),
+            "Session Activity  ›", lambda _sender: self.show_context(),
             accessibility="Open surrounding context")
         self.context_button.setFont_(NSFont.systemFontOfSize_weight_(11, 0.4))
         input_header.setTranslatesAutoresizingMaskIntoConstraints_(False)
@@ -411,6 +391,8 @@ class RAPFindingInspector(NSObject):
         page.addSubview_(input_header)
         page.addSubview_(scroll)
         page.addSubview_(self.context_button)
+        self.context_height = (
+            self.context_button.heightAnchor().constraintEqualToConstant_(34))
         _activate(
             input_header.topAnchor().constraintEqualToAnchor_constant_(
                 page.topAnchor(), 8),
@@ -433,7 +415,7 @@ class RAPFindingInspector(NSObject):
                 page.trailingAnchor(), -12),
             self.context_button.bottomAnchor().constraintEqualToAnchor_constant_(
                 page.bottomAnchor(), -8),
-            self.context_button.heightAnchor().constraintEqualToConstant_(34),
+            self.context_height,
         )
 
     @objc.python_method
@@ -454,7 +436,13 @@ class RAPFindingInspector(NSObject):
         self.context_page = page
         self.back_button = self.button(
             "‹ Details", lambda _sender: self.show_detail())
-        self.context_heading = self.label("Context", size=11, bold=True)
+        self.context_heading = self.label(
+            "Session Activity", size=11, bold=True)
+        self.context_explanation = self.label(
+            "Only the highlighted trigger field was evaluated.",
+            size=9.5, color=NSColor.secondaryLabelColor())
+        self.context_explanation.setTranslatesAutoresizingMaskIntoConstraints_(
+            False)
         self.context_search = NSSearchField.alloc().init()
         self.context_search.setPlaceholderString_("Search")
         self.context_search.setSendsSearchStringImmediately_(True)
@@ -506,6 +494,7 @@ class RAPFindingInspector(NSObject):
             self.page_label, NSView.alloc().init(), self.later_button])
         self.context_pager = pager
         page.addSubview_(navigation)
+        page.addSubview_(self.context_explanation)
         page.addSubview_(context_scroll)
         page.addSubview_(pager)
         _activate(
@@ -516,8 +505,15 @@ class RAPFindingInspector(NSObject):
             navigation.trailingAnchor().constraintEqualToAnchor_constant_(
                 page.trailingAnchor(), -12),
             navigation.heightAnchor().constraintEqualToConstant_(34),
+            self.context_explanation.topAnchor().constraintEqualToAnchor_(
+                navigation.bottomAnchor()),
+            self.context_explanation.leadingAnchor().constraintEqualToAnchor_constant_(
+                page.leadingAnchor(), 18),
+            self.context_explanation.trailingAnchor().constraintEqualToAnchor_constant_(
+                page.trailingAnchor(), -18),
+            self.context_explanation.heightAnchor().constraintEqualToConstant_(18),
             context_scroll.topAnchor().constraintEqualToAnchor_constant_(
-                navigation.bottomAnchor(), 4),
+                self.context_explanation.bottomAnchor(), 4),
             context_scroll.leadingAnchor().constraintEqualToAnchor_(
                 page.leadingAnchor()),
             context_scroll.trailingAnchor().constraintEqualToAnchor_(
@@ -557,26 +553,35 @@ class RAPFindingInspector(NSObject):
         }.get(severity, NSColor.secondaryLabelColor()))
         self.included_event_ids = set(
             p["input"].get("event_ids") or [])
-        self.input_mode_control.setHidden_(not bool(p["input_sections"]))
         self._refresh_input()
+        additional = int(p.get("additional_activity_count", 0))
+        self.context_button.setHidden_(additional == 0)
+        self.context_height.setConstant_(34 if additional else 0)
+        self.context_button.setTitle_(
+            f"Session Activity · {additional} additional "
+            f"event{'s' if additional != 1 else ''}  ›")
         self.reload_context()
         self._show_page(self.page)
 
     @objc.python_method
     def _refresh_input(self) -> None:
         p = self.presentation
-        if self.input_mode == 0 and p["input_sections"]:
-            rendered = "\n\n".join(
-                f"{section['label']}\n{section['text']}"
-                for section in p["input_sections"])
-        else:
-            rendered = p["input_text"]
+        rendered = p["input_text"]
         self.input_view.setString_(rendered)
-
-    @objc.python_method
-    def set_input_mode(self, mode: int) -> None:
-        self.input_mode = 1 if mode else 0
-        self._refresh_input()
+        self.input_heading.setStringValue_(p.get("input_label", "Input"))
+        if p.get("input_typography") in ("monospace", "path"):
+            self.input_view.setFont_(
+                NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+        else:
+            self.input_view.setFont_(NSFont.systemFontOfSize_(12))
+        lines = max(1, rendered.count("\n") + len(rendered) // 88 + 1)
+        input_height = max(70, min(320, lines * 17 + 24))
+        activity_height = 40 if p.get("additional_activity_count") else 0
+        self._detail_height = 82 + 42 + input_height + activity_height + 24
+        if self.page == "detail":
+            self.window.setContentSize_(NSMakeSize(
+                max(640, self.window.contentView().frame().size.width),
+                self._detail_height))
 
     @objc.python_method
     def _show_page(self, page: str) -> None:
@@ -587,11 +592,16 @@ class RAPFindingInspector(NSObject):
     @objc.python_method
     def show_context(self) -> None:
         self._show_page("context")
+        self.window.setContentSize_(NSMakeSize(
+            max(640, self.window.contentView().frame().size.width), 640))
         self.context_table.reloadData()
 
     @objc.python_method
     def show_detail(self) -> None:
         self._show_page("detail")
+        self.window.setContentSize_(NSMakeSize(
+            max(640, self.window.contentView().frame().size.width),
+            getattr(self, "_detail_height", 320)))
 
     @objc.python_method
     def filtered_context_events(self) -> list[dict[str, Any]]:
@@ -633,6 +643,22 @@ class RAPFindingInspector(NSObject):
         return (
             datetime.datetime.fromtimestamp(timestamp).strftime("%-I:%M:%S %p")
             if timestamp else "")
+
+    @staticmethod
+    def event_label(kind: str) -> str:
+        return {
+            "user_prompt": "You",
+            "message": "Agent",
+            "thought": "Agent thought",
+            "shell_exec": "Shell",
+            "shell_attempt": "Shell attempt",
+            "file_edit": "File edit",
+            "tool_use": "Tool",
+            "tool_result": "Tool result",
+            "tool_failure": "Tool failure",
+            "subagent_start": "Subagent task",
+            "subagent_stop": "Subagent result",
+        }.get(kind, kind.replace("_", " ").title())
 
     @objc.python_method
     def page_context(self, direction: int) -> None:

@@ -58,6 +58,8 @@ class Event:
     conversation_id: str
     project_root: str
     generation_id: str = ""
+    hook_name: str = ""
+    raw_payload: dict[str, Any] = field(default_factory=dict)
     payload: dict[str, Any] = field(default_factory=dict)
     ts: float = field(default_factory=time.time)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -72,6 +74,8 @@ class Event:
             conversation_id=d.get("conversation_id", "unknown"),
             project_root=d.get("project_root", ""),
             generation_id=d.get("generation_id", ""),
+            hook_name=d.get("hook_name", ""),
+            raw_payload=d.get("raw_payload", {}),
             payload=d.get("payload", {}),
             ts=d.get("ts", time.time()),
             id=d.get("id", uuid.uuid4().hex),

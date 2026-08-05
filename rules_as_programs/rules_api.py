@@ -30,6 +30,7 @@ from .core.rule import (
     LoadedRule, is_rule_id, load_rule_file, load_rule_file_with_error,
     load_rules, new_rule_id, rule_definition_count, rule_paths,
 )
+from .core.triggers import TRIGGERS
 from .sdk import RULE_ATTR, RuleDef, SEVERITIES
 
 try:
@@ -169,6 +170,9 @@ def _summary(
         "name": r.title,
         "title": r.title,
         "severity": r.severity,
+        "trigger": r.trigger,
+        "input_pointer": r.input_pointer,
+        "max_input_bytes": r.max_input_bytes,
         "scope": r.scope,
         "on": r.on,
         "inputs": r.inputs,
@@ -516,7 +520,7 @@ def source_projection(source: str) -> dict[str, Any]:
         for keyword in decorator.keywords:
             if keyword.arg in (
                 "id", "name", "title", "on", "inputs", "probes", "channel",
-                "severity"
+                "severity", "trigger", "input_pointer", "max_input_bytes"
             ):
                 try:
                     values[keyword.arg] = ast.literal_eval(keyword.value)
@@ -529,6 +533,9 @@ def source_projection(source: str) -> dict[str, Any]:
     probes = values.get("probes", {})
     severity = values.get("severity", "warn")
     channel = values.get("channel", "finding")
+    trigger = values.get("trigger", "")
+    input_pointer = values.get("input_pointer", "")
+    max_input_bytes = values.get("max_input_bytes", 65536)
     raw_id = values.get("id", "")
     resolved_id = raw_id if is_rule_id(raw_id) else ""
     if not resolved_id:
@@ -546,6 +553,10 @@ def source_projection(source: str) -> dict[str, Any]:
     if not isinstance(severity, str):
         custom = True
     if not isinstance(channel, str):
+        custom = True
+    if not isinstance(trigger, str) or not isinstance(input_pointer, str):
+        custom = True
+    if not isinstance(max_input_bytes, int) or max_input_bytes <= 0:
         custom = True
     has_probes = bool(probes)
     if not inputs_declared:
@@ -603,7 +614,7 @@ def source_projection(source: str) -> dict[str, Any]:
         and isinstance(function.body[0].value, ast.Constant)
         and isinstance(function.body[0].value.value, str)
     ) else function.body
-    managed_v3_shape = False
+    managed_v4_shape = False
     if (
         len(executable_body) == 2
         and isinstance(executable_body[0], ast.Assign)
@@ -614,14 +625,15 @@ def source_projection(source: str) -> dict[str, Any]:
             return_source = ast.unparse(executable_body[1].value)
         except Exception:
             assignment_source = return_source = ""
-        managed_v3_shape = (
-            assignment_source == "ctx.paw(SPEC)(ctx.input())"
+        managed_v4_shape = (
+            assignment_source == "ctx.paw(SPEC)(ctx.input)"
             and return_source == "ctx.result(decision)"
         )
     managed_fuzzy = (
         MANAGED_FUZZY_MARKER in source
         and bool(spec)
-        and managed_v3_shape
+        and managed_v4_shape
+        and trigger in TRIGGERS
     )
     description = ""
     output_labels: list[str] = []
@@ -658,10 +670,15 @@ def source_projection(source: str) -> dict[str, Any]:
         "has_probes": has_probes,
         "severity": severity if isinstance(severity, str) else "warn",
         "channel": channel if isinstance(channel, str) else "finding",
+        "trigger": trigger if isinstance(trigger, str) else "",
+        "input_pointer": (
+            input_pointer if isinstance(input_pointer, str) else ""),
+        "max_input_bytes": (
+            max_input_bytes if isinstance(max_input_bytes, int) else 65536),
         "spec": spec,
         "simple_fuzzy": bool(spec),
         "managed_fuzzy": managed_fuzzy,
-        "managed_version": 2 if managed_fuzzy else 0,
+        "managed_version": 4 if managed_fuzzy else 0,
         "description": description,
         "cases": spec_examples(spec) if managed_fuzzy else [],
         "output_labels": output_labels,
@@ -755,9 +772,8 @@ def patch_rule_identity(
 def patch_source_projection(
     source: str,
     *,
-    on: list[str],
-    inputs: list[str],
-    severity: str,
+    trigger: str,
+    input_pointer: str = "",
     function_source: str,
     spec: str | None = None,
 ) -> tuple[bool, str, str]:
@@ -788,13 +804,13 @@ def patch_source_projection(
         return False, source, "Custom decorator arguments require Full Python."
     unknown = []
     for keyword in decorator.keywords:
-        if keyword.arg not in ("on", "inputs", "severity"):
+        if keyword.arg not in (
+            "trigger", "input_pointer", "on", "inputs", "severity"):
             value = ast.get_source_segment(source, keyword.value)
             unknown.append((keyword.arg, value or "None"))
     arguments = [
-        ("on", repr(list(on))),
-        ("inputs", repr(list(inputs))),
-        ("severity", repr(severity)),
+        ("trigger", repr(trigger)),
+        *([("input_pointer", repr(input_pointer))] if input_pointer else []),
         *unknown,
     ]
     decorator_text = "@rule(\n" + "".join(
@@ -853,16 +869,11 @@ def validate_editor_source(source: str) -> tuple[bool, str]:
     positional = [*function.args.posonlyargs, *function.args.args]
     if len(positional) != 1 or positional[0].arg != "ctx":
         return False, "Rule function must take exactly one parameter named ctx."
-    if not projection.get("on"):
-        return False, "Choose at least one Runs when event."
-    unknown_on = set(projection["on"]) - ALL_KINDS
-    if unknown_on:
-        return False, f"Unknown trigger event(s): {', '.join(sorted(unknown_on))}"
-    unknown_inputs = set(projection.get("inputs", [])) - ALL_KINDS
-    if unknown_inputs:
-        return False, f"Unknown input event(s): {', '.join(sorted(unknown_inputs))}"
-    if projection.get("severity") not in SEVERITIES:
-        return False, f"Unknown severity: {projection.get('severity')}"
+    if projection.get("trigger") not in TRIGGERS:
+        return False, "Choose one supported Trigger."
+    pointer = str(projection.get("input_pointer", ""))
+    if pointer and not pointer.startswith("/"):
+        return False, "Input JSON Pointer must start with '/'."
     return True, ""
 
 
@@ -1110,7 +1121,7 @@ def rename_rule(
     }
 
 
-MANAGED_FUZZY_MARKER = "# RAP_MANAGED_FUZZY_V3"
+MANAGED_FUZZY_MARKER = "# RAP_MANAGED_FUZZY_V4"
 
 DEFAULT_FUZZY_DESCRIPTION = (
     "Decide whether rsync or scp was used to synchronize project source code "
@@ -1118,18 +1129,9 @@ DEFAULT_FUZZY_DESCRIPTION = (
     "assets, build artifacts, backups, or release packages is allowed."
 )
 DEFAULT_FUZZY_CASES = [
-    ("## Recent activity\n- (shell_exec) $ git push", "OK"),
-    (
-        "## Recent activity\n"
-        "- (shell_exec) $ rsync -av src/ deploy@host:/srv/app/src/",
-        "WARNING",
-    ),
-    (
-        "## Recent activity\n"
-        "- (shell_exec) $ scp public/logo.png cdn@host:/srv/assets/\n"
-        "- (message) Uploaded a static image asset.",
-        "OK",
-    ),
+    ("git push", "OK"),
+    ("rsync -av src/ deploy@host:/srv/app/src/", "WARNING"),
+    ("scp public/logo.png cdn@host:/srv/assets/", "OK"),
 ]
 
 
@@ -1138,10 +1140,9 @@ def generate_managed_fuzzy_source(
     name: str,
     description: str,
     *,
-    severity: str,
-    on: list[str],
-    inputs: list[str],
-    probes: dict[str, str] | None = None,
+    trigger: str,
+    input_pointer: str = "",
+    max_input_bytes: int = 65536,
     channel: str = "finding",
     cases: list[tuple[str, str]] | None = None,
 ) -> str:
@@ -1159,7 +1160,11 @@ def generate_managed_fuzzy_source(
     function_name = scaffold.slugify(name).replace("-", "_")
     safe_spec = spec.replace('"""', '\\"\\"\\"')
     safe_name = name.replace('"""', '\\"\\"\\"')
-    probe_line = f"    probes={dict(probes)!r},\n" if probes else ""
+    pointer_line = (
+        f"    input_pointer={input_pointer!r},\n" if input_pointer else "")
+    budget_line = (
+        f"    max_input_bytes={max_input_bytes!r},\n"
+        if max_input_bytes != 65536 else "")
     channel_line = (
         f"    channel={channel!r},\n" if channel != "finding" else ""
     )
@@ -1170,16 +1175,15 @@ def generate_managed_fuzzy_source(
         "@rule(\n"
         f"    id={rule_id!r},\n"
         f"    name={name!r},\n"
-        f"    on={list(on)!r},\n"
-        f"    inputs={list(inputs)!r},\n"
-        f"{probe_line}"
+        f"    trigger={trigger!r},\n"
+        f"{pointer_line}"
+        f"{budget_line}"
         f"{channel_line}"
-        f"    severity={severity!r},\n"
         "    spec=SPEC,\n"
         ")\n"
         f"def {function_name}(ctx):\n"
         f'    """{safe_name}"""\n'
-        "    decision = ctx.paw(SPEC)(ctx.input())\n"
+        "    decision = ctx.paw(SPEC)(ctx.input)\n"
         "    return ctx.result(decision)\n"
     )
 
@@ -1187,14 +1191,12 @@ def generate_managed_fuzzy_source(
 def draft_rule_source(rule_id: str, title: str | None = None) -> str:
     if not is_rule_id(rule_id):
         raise ValueError("rule_id must be a valid 16-character ID")
-    title = title or "Use Git for source synchronization."
+    title = title or "Do not use rsync."
     return generate_managed_fuzzy_source(
         rule_id,
         title,
         DEFAULT_FUZZY_DESCRIPTION,
-        severity="warn",
-        on=["shell_exec", "session_stop"],
-        inputs=["shell_exec", "message"],
+        trigger="afterShellExecution",
         cases=DEFAULT_FUZZY_CASES,
     )
 
@@ -1202,11 +1204,10 @@ def draft_rule_source(rule_id: str, title: str | None = None) -> str:
 PLAIN_RULE_TEMPLATE = '''from rules_as_programs import rule
 
 
-@rule(id="{rule_id}", name="{title}",
-      on=["message"], inputs=["message"], severity="warn")
+@rule(id="{rule_id}", name="{title}", trigger="afterAgentResponse")
 def {func}(ctx):
     """{title}"""
-    if "unsafe phrase" in ctx.input().lower():
+    if "unsafe phrase" in ctx.input.lower():
         return ctx.result("WARNING")
 '''
 

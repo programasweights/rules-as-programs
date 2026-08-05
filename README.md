@@ -77,18 +77,19 @@ Click it to open the native macOS popover:
 - **Needs reply** appears above findings with the agent’s question and clears
   automatically when you submit the next prompt (or manually with Not waiting).
 - Clicking a finding opens the latest occurrence as an expanded tray row: one
-  rule name, its severity, the exact input, and a full-width Context destination.
-  Context replaces the input view instead of expanding into a narrow timeline.
+  rule name, its severity, and the exact predefined Cursor field sent to PAW.
+  Session Activity appears only when additional events exist and is never
+  silently included in Basic rule input.
 - **Edit Rule…** keeps the finding available as tuning context and can add the
   exact recorded input as an explicit test case without auto-deploying it.
 - Findings record immutable compact rule ID, Name at the time, and active source hash.
   After a different source revision is activated, older open findings remain
   visible as **Rule changed — needs recheck** and stop contributing to severity
   badges until manually reviewed.
-- **Rule Editor** is organized around intent: Name, Rule spec, Runs in,
-  Runs when, and Reads. Every trigger/input has an information tip with an
-  example. **View Python…** exposes the generated function without competing
-  with the normal spec editor.
+- **Rule Editor** is organized around Name, Rule spec, one Trigger, and its
+  derived read-only Input. Common triggers are ranked; More actions is
+  searchable. Advanced input mapping can override the trigger’s default JSON
+  Pointer for one rule.
 - **Deploy** is the single primary lifecycle action. New rules choose All
   projects or Selected projects; existing rules deploy directly. A clean rule
   shows a disabled **Deployed** button.
@@ -139,8 +140,9 @@ its runtime incident automatically.
 
 Every evaluated violation is appended to
 `<project>/.cursor/rules-as-programs/log/audit.jsonl` with a stable finding ID,
-timestamp, rule, severity, suppression state, typed evidence/probes, and rule
-output. The log folder is auto-`.gitignore`d. Open it from the popover, or use
+timestamp, rule, severity, suppression state, exact input provenance, raw
+trigger payload, and rule output. The log folder is
+auto-`.gitignore`d. Open it from the popover, or use
 `rap status` in the terminal.
 
 Operational diagnostics are local too:
@@ -150,10 +152,8 @@ Operational diagnostics are local too:
 
 | Rule | What its program watches for |
 | --- | --- |
-| `github-sync` | Meaningful local changes left uncommitted / unpushed to GitHub |
-| `unverifiable-claim` | Claiming a check succeeded (e.g. "SSH works") when the evidence shows it couldn't actually be performed |
-| `deployment-checklist` | Deploying without tests / migrations / GitHub sync / rollback addressed |
-| `evidence-vs-assumption` | Stating a conclusion as fact when it depends on a prerequisite that was never obtained |
+| `unverifiable-claim` | An assistant response makes an unqualified success claim |
+| `evidence-vs-assumption` | An agent thought relies on an unsupported assumption |
 | `agent-needs-reply` | A completed response directly requires a user choice, confirmation, or missing information (purple attention, not a violation) |
 
 Each is a small `.py` file: a `@rule` function that gathers evidence and calls a
@@ -168,20 +168,20 @@ Cursor hooks ──stdin JSON──▶ rap-hook (thin, instant, fail-open)
                                    │ unix socket
                                    ▼
                          rap daemon (long-lived)
-     normalize → evidence ledger → rule engine → PAW judge → verdict store
+     preserve raw event → exact trigger field → PAW judge → verdict store
                                    │
                                    ▼
         menu-bar item + per-project audit log + `rap status`
 ```
 
-- **Rules run independently.** Judgment happens in the daemon, over an
-  append-only *evidence ledger* of what the agent actually thought and did —
-  never by injecting more text into the agent's prompt.
+- **Rules run independently.** Each Basic rule has one Cursor trigger and one
+  predefined input field. The exact field shown in the Inspector is the exact
+  string passed to PAW.
 - **It inspects reasoning and actions.** Cursor's `afterAgentThought`,
   `afterAgentResponse`, `afterShellExecution`, `afterFileEdit`, and tool hooks
   are normalized into one event schema.
-- **It surfaces missing evidence.** Rules cross-reference a claim against the
-  ledger; PAW decides `SUPPORTED` vs `UNVERIFIED_CLAIM` vs `HONEST_LIMITATION`.
+- **It is deliberately transparent.** Surrounding Session Activity is retained
+  for inspection but is not evaluated by Basic rules.
 - **It never stalls the agent.** Hooks return in milliseconds; PAW inference runs
   in the background with warm models; if PAW is slow or offline, the rule simply
   produces no verdict (graceful degrade).
@@ -194,8 +194,8 @@ Cursor hooks ──stdin JSON──▶ rap-hook (thin, instant, fail-open)
 
 ## Writing and customizing rules
 
-The normal UI requires no Python: edit Name, Rule spec, Runs in, Runs when, and
-Reads, then Deploy. Python remains canonical underneath at `rules/<id>/rule.py`;
+The normal UI requires no Python: edit Name, Rule spec, choose one Trigger, and
+Deploy. Input is derived from the trigger’s documented JSON Pointer. Python remains canonical underneath at `rules/<id>/rule.py`;
 **View Python…** opens the underlying program and advanced diagnostics.
 
 Every rule has:
@@ -210,31 +210,28 @@ The generated Python remains a single `@rule` function:
 ```python
 from rules_as_programs import rule
 
-SPEC = """Decide whether rsync or scp was used to synchronize project source code instead of Git. Directly copying source is a violation; transferring assets or release artifacts is allowed.
+SPEC = """Decide whether this executed shell command uses rsync to synchronize project source code. Transferring release assets is allowed.
 Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
-Input: ## Recent activity
-- (shell_exec) $ rsync -av src/ host:/srv/app/src/
+Input: rsync -av src/ host:/srv/app/src/
 Output: WARNING
 
-Input: ## Recent activity
-- (shell_exec) $ scp public/logo.png host:/srv/assets/
+Input: cp public/logo.png dist/assets/
 Output: OK"""
 
 @rule(id="7km3v9c2xq4t8n1p",
-      name="Use Git for source synchronization",
-      on=["shell_exec", "session_stop"], inputs=["shell_exec", "message"],
+      name="Do not use rsync",
+      trigger="afterShellExecution",
       spec=SPEC)
-def use_git_for_source_sync(ctx):
-    """Use Git—not direct source copying—to synchronize code."""
-    decision = ctx.paw(SPEC)(ctx.input())
+def do_not_use_rsync(ctx):
+    """Do not use rsync to synchronize source."""
+    decision = ctx.paw(SPEC)(ctx.input)
     return ctx.result(decision)
 ```
 
-`ctx` gives you `ctx.input()`, `ctx.evidence(probes=, include=, latest=)`,
-`ctx.events(*kinds)`, `ctx.run(cmd)`, and `ctx.paw(spec)`. Existing explicit
-`ctx.evidence(...)` rules remain supported. A plain-Python rule simply returns a
-message when violated. Custom Python may return `("critical", "msg")`.
+`ctx.input` is the exact trigger field selected by the central mapping or a
+rule-level advanced `input_pointer`. `ctx.paw(spec)` evaluates only that string;
+`ctx.result(...)` returns the dynamic severity.
 
 Canonical editable rules live in My Rule Library at
 `~/.cursor/rules-as-programs/rules/<id>/rule.py`. Existing project-owned
@@ -255,7 +252,7 @@ remains at `<repo>/.cursor/rules-as-programs/config.json`.
 
 ```bash
 rap rules list                     # rules for this project (on/off, scope, paw/py)
-rap rules add github-sync [--global]
+rap rules add unverifiable-claim [--global]
 rap rules test unverifiable-claim  # compile the SPEC and run its examples
 rap rules enable|disable <id>
 rap rules convert                  # draft .py rules from existing prose rules

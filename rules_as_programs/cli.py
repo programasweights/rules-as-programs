@@ -224,7 +224,7 @@ def _rules_list(args) -> int:
         kind = "paw" if r.spec else "py "
         print(
             f"  [{state}] {r.title:<34} ({r.scope:<7}) {kind} "
-            f"sev={r.severity:<8} id={r.id[:8]}…"
+            f"trigger={r.trigger or 'unset'} id={r.id[:8]}…"
         )
     return 0
 

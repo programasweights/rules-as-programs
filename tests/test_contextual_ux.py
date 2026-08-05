@@ -85,7 +85,8 @@ def test_paw_draft_is_in_memory_and_examples_are_parsed(monkeypatch, tmp_path):
     assert "public/logo.png" in source
     assert "EXAMPLES =" not in source
     projection = rules_api.source_projection(source)
-    assert projection["inputs"] == ["shell_exec", "message"]
+    assert projection["trigger"] == "afterShellExecution"
+    assert projection["inputs"] == []
     assert len(rules_api.spec_examples(projection["spec"])) == 3
     assert not config.project_rules_dir(project).exists()
 
@@ -95,24 +96,22 @@ def test_source_projection_round_trips_and_custom_metadata_falls_back():
     projection = rules_api.source_projection(source)
     ok, patched, error = rules_api.patch_source_projection(
         source,
-        on=["message"],
-        inputs=["message"],
-        severity="critical",
+        trigger="afterAgentThought",
         function_source=projection["function_source"].replace(
             "ctx.result(decision)", "ctx.result(decision)", 1),
         spec=projection["spec"],
     )
     assert ok, error
     updated = rules_api.source_projection(patched)
-    assert updated["on"] == ["message"]
-    assert updated["inputs"] == ["message"]
-    assert updated["severity"] == "critical"
+    assert updated["trigger"] == "afterAgentThought"
+    assert updated["inputs"] == []
 
-    custom = source.replace("severity='warn'", "severity=DEFAULT_SEVERITY")
+    custom = source.replace(
+        "trigger='afterShellExecution'", "trigger=DEFAULT_TRIGGER")
     assert rules_api.source_projection(custom)["custom"]
     structurally_custom = source.replace(
-        "    decision = ctx.paw(SPEC)(ctx.input())",
-        "    evidence = ctx.input()\n"
+        "    decision = ctx.paw(SPEC)(ctx.input)",
+        "    evidence = ctx.input\n"
         "    decision = ctx.paw(SPEC)(evidence)",
     )
     assert not rules_api.source_projection(structurally_custom)["managed_fuzzy"]
@@ -129,7 +128,7 @@ def custom_rule(ctx):
 
     builtin = (
         Path(__file__).parents[1]
-        / "rules_as_programs" / "builtin_rules" / "github-sync.py"
+        / "rules_as_programs" / "builtin_rules" / "unverifiable-claim.py"
     ).read_text()
     builtin_projection = rules_api.source_projection(builtin)
     assert builtin_projection["simple_fuzzy"]
@@ -142,6 +141,26 @@ def test_plain_python_draft_uses_strict_result_contract():
         new_rule_id(), "Flag unsafe phrase")
     assert 'ctx.result("WARNING")' in source
     assert "return \"The agent used" not in source
+
+
+def test_obsolete_managed_rules_are_pruned(monkeypatch, tmp_path):
+    from rules_as_programs import scaffold
+
+    global_rules = tmp_path / "global"
+    project = tmp_path / "project"
+    old = global_rules / "old" / "rule.py"
+    current = project / ".cursor/rules-as-programs/rules/current/rule.py"
+    old.parent.mkdir(parents=True)
+    current.parent.mkdir(parents=True)
+    old.write_text("# RAP_MANAGED_FUZZY_V3\n")
+    current.write_text("# RAP_MANAGED_FUZZY_V4\n")
+    monkeypatch.setattr(config, "global_rules_dir", lambda: global_rules)
+
+    removed = scaffold.prune_obsolete_managed_rules([str(project)])
+
+    assert str(old) in removed
+    assert not old.exists()
+    assert current.exists()
 
 
 def test_compact_identity_uses_stable_folder_and_safe_name_updates(
@@ -239,14 +258,16 @@ def test_attention_lifecycle_and_cursor_prompt_events(monkeypatch, tmp_path):
     assert prompt.kind == USER_PROMPT
     assert prompt.generation_id == "generation-2"
 
-    question = normalize({
+    question_events = normalize({
         "hook_event_name": "preToolUse",
         "conversation_id": "conversation",
         "generation_id": "generation-1",
         "workspace_roots": ["/project"],
         "tool_name": "AskQuestion",
         "tool_input": {"question": "Which database?"},
-    })[0]
+    })
+    question = next(
+        event for event in question_events if event.kind == QUESTION_REQUEST)
     assert question.kind == QUESTION_REQUEST
 
 
@@ -354,15 +375,18 @@ def test_all_builtins_use_managed_fuzzy_format():
         source = path.read_text()
         projection = rules_api.source_projection(source)
         assert projection["managed_fuzzy"], path.name
-        assert projection["managed_version"] == 2
+        assert projection["managed_version"] == 4
         assert projection["id_persisted"], path.name
         assert is_rule_id(projection["id"]), path.name
         assert "EXAMPLES =" not in source
         assert projection["output_labels"] == [
             "OK", "INFO", "WARNING", "CRITICAL"]
         projections[path.stem] = projection
-    assert projections["github-sync"]["probes"]["git_status"]
-    assert projections["deployment-checklist"]["probes"]["git_status"]
+    assert set(projections) == {
+        "agent-needs-reply",
+        "evidence-vs-assumption",
+        "unverifiable-claim",
+    }
 
 
 def test_popover_height_fits_content_and_caps_scroll():

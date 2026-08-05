@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from ..core.triggers import TRIGGERS
+
 
 @dataclass(frozen=True)
 class TextPresentation:
@@ -100,7 +102,7 @@ def evidence_sections(text: str) -> list[dict[str, Any]]:
 def present_finding(detail: dict[str, Any]) -> dict[str, Any]:
     finding = dict(detail.get("finding") or {})
     evaluation = dict(detail.get("evaluation") or {})
-    if evaluation.get("schema_version") != 3:
+    if evaluation.get("schema_version") != 4:
         raise ValueError("unsupported finding schema")
     input_data = dict(evaluation.get("input") or {})
     input_text = str(input_data.get("text", ""))
@@ -112,6 +114,8 @@ def present_finding(detail: dict[str, Any]) -> dict[str, Any]:
         text = TextPresentation("plain", input_text, input_text)
     events = list((detail.get("ledger") or {}).get("events") or [])
     trigger = dict(evaluation.get("trigger") or {})
+    hook = str(trigger.get("hook", ""))
+    definition = TRIGGERS.get(hook)
     trigger_snapshot = trigger.get("event")
     if (
         isinstance(trigger_snapshot, dict)
@@ -146,12 +150,19 @@ def present_finding(detail: dict[str, Any]) -> dict[str, Any]:
         "input": input_data,
         "input_text": input_text,
         "input_presentation": text,
-        "input_sections": (
-            evidence_sections(input_text)
-            if text.format == "rap-evidence-v1" else []),
+        "input_label": (
+            definition.input_label if definition else "Input"),
+        "input_typography": (
+            definition.typography if definition else "proportional"),
+        "input_provenance": (
+            f"{hook} {input_data.get('json_pointer', '')} "
+            f"({input_data.get('pointer_source', 'default')})"
+        ).strip(),
         "trigger": trigger,
         "context_preview": preview,
         "context_events": events,
+        "additional_activity_count": len([
+            event for event in events if not event.get("is_trigger")]),
         "rule_deleted": bool(
             finding.get("review_reason") == "rule_deleted"
             or recorded_source and not current_rule),

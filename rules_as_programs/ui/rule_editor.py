@@ -36,6 +36,7 @@ from AppKit import (
     NSMenuItem,
     NSPasteboard,
     NSPasteboardTypeString,
+    NSPopUpButton,
     NSPopover,
     NSPopoverBehaviorTransient,
     NSSearchField,
@@ -67,6 +68,7 @@ from Foundation import NSMakeRect, NSMakeSize, NSObject
 from PyObjCTools import AppHelper
 
 from .. import rules_api, scaffold
+from ..core.triggers import COMMON_TRIGGERS, ORDERED_TRIGGERS, TRIGGERS
 from ..core import revisions
 from .layout import fit_rule_editor_layout
 from .macos_controls import (
@@ -77,15 +79,6 @@ from .macos_controls import (
     style_button,
 )
 from .model import UIModel
-
-RUN_OPTIONS = [
-    ("message", "Agent replies", "Runs after an assistant reply. Example: check a claim before it reaches you."),
-    ("shell_exec", "Command finishes", "Runs after a shell command returns. Example: verify tests or deployment output."),
-    ("file_edit", "File changes", "Runs after the agent records a file edit. Example: inspect whether a protected file changed."),
-    ("tool_result", "Tool result", "Runs after a non-shell tool responds. Example: validate a browser or API result."),
-    ("session_stop", "Turn ends", "Runs when the agent finishes its turn. Example: check the completed work as a whole."),
-]
-
 
 def _upsert_test_case(spec: str, input_text: str, wanted: str) -> str:
     lines = str(spec or "").splitlines()
@@ -121,15 +114,6 @@ def _upsert_test_case(spec: str, input_text: str, wanted: str) -> str:
             ("\n\n" if updated else "")
             + f"Input: {input_text}\nOutput: {wanted}")
     return updated
-
-
-READ_OPTIONS = [
-    ("message", "Latest reply", "Reads assistant messages, such as the final claim or explanation."),
-    ("thought", "Thoughts", "Reads captured agent reasoning when Cursor exposes it."),
-    ("shell_exec", "Commands", "Reads commands and their outputs, such as pytest or git status."),
-    ("file_edit", "File edits", "Reads recorded file changes and edited paths."),
-    ("tool_result", "Tool results", "Reads results from browser, API, and other non-shell tools."),
-]
 
 
 def _on_main(callback: Callable[[], None]) -> None:
@@ -359,6 +343,8 @@ class RAPRuleEditorDocument(NSObject):
         self.channel = str(projection.get("channel", "finding"))
         self.severity = str(projection.get("severity", "warn"))
         self.inputs_inferred = bool(projection.get("inputs_inferred"))
+        self.trigger = str(projection.get("trigger", "afterAgentResponse"))
+        self.input_pointer = str(projection.get("input_pointer", ""))
 
     @objc.python_method
     def _build_window(self) -> None:
@@ -519,43 +505,6 @@ class RAPRuleEditorDocument(NSObject):
         return self._stack(views, vertical=False, spacing=6)
 
     @objc.python_method
-    def _option_group(self, title: str, options, destination: dict) -> NSStackView:
-        heading = self._heading(
-            title,
-            "Runs when chooses the event that invokes the rule."
-            if title == "Runs when"
-            else "Reads chooses the evidence included when the rule runs.",
-        )
-        columns = [self._stack([], vertical=True, spacing=5) for _ in range(2)]
-        for index, (kind, label, help_text) in enumerate(options):
-            checkbox = NSButton.alloc().init()
-            checkbox.setButtonType_(NSButtonTypeSwitch)
-            checkbox.setTitle_(label)
-            checkbox.setAccessibilityLabel_(label)
-            self._wire(
-                checkbox,
-                lambda sender, value=kind, target=destination: self.toggle_metadata(
-                    target, value,
-                    sender.state() == NSControlStateValueOn),
-            )
-            info = self._button(
-                "",
-                lambda sender, t=label, b=help_text: self.show_info(sender, t, b),
-                role="flat",
-                accessibility=f"About {label}",
-            )
-            set_button_symbol(
-                info, "info.circle", f"About {label}", fallback="Info")
-            row = self._stack([checkbox, info, self._spacer()],
-                              vertical=False, spacing=4)
-            columns[index % 2].addArrangedSubview_(row)
-            destination[kind] = checkbox
-        grid = self._stack(columns, vertical=False, spacing=18)
-        _activate(
-            columns[0].widthAnchor().constraintEqualToAnchor_(columns[1].widthAnchor()))
-        return self._stack([heading, grid], vertical=True, spacing=7)
-
-    @objc.python_method
     def _build_content(self) -> None:
         root = self.window.contentView()
         footer = NSView.alloc().init()
@@ -673,11 +622,12 @@ class RAPRuleEditorDocument(NSObject):
             size=11, color=NSColor.systemOrangeColor(), lines=2)
         content.addArrangedSubview_(self.custom_label)
 
-        content.addArrangedSubview_(self._heading(
+        self.scope_heading = self._heading(
             "Runs in",
             "All projects includes current and future projects. Selected projects "
             "runs only in the projects you choose.",
-        ))
+        )
+        content.addArrangedSubview_(self.scope_heading)
         self.all_projects_radio = NSButton.alloc().init()
         self.all_projects_radio.setButtonType_(NSButtonTypeRadio)
         self.all_projects_radio.setTitle_("All projects")
@@ -707,22 +657,42 @@ class RAPRuleEditorDocument(NSObject):
         self.scope_summary = self._label(
             "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
         content.addArrangedSubview_(self.scope_summary)
+        self.scope_heading.setHidden_(True)
+        scope_row.setHidden_(True)
+        self.scope_summary.setHidden_(True)
 
         self.trigger_buttons: dict[str, NSButton] = {}
         self.input_buttons: dict[str, NSButton] = {}
-        self.triggers_group = self._option_group(
-            "Runs when", RUN_OPTIONS, self.trigger_buttons)
-        self.inputs_group = self._option_group(
-            "Reads", READ_OPTIONS, self.input_buttons)
-        self.metadata_stack = self._stack(
-            [self.triggers_group, self.inputs_group],
-            vertical=True,
-            spacing=16,
-        )
+        self.trigger_popup = NSPopUpButton.alloc().init()
+        for definition in COMMON_TRIGGERS:
+            self.trigger_popup.addItemWithTitle_(
+                f"{definition.label} — {definition.hook} "
+                f"{definition.input_pointer}")
+            self.trigger_popup.lastItem().setRepresentedObject_(definition.hook)
+        self.trigger_popup.menu().addItem_(NSMenuItem.separatorItem())
+        self.trigger_popup.addItemWithTitle_("More actions…")
+        self.trigger_popup.lastItem().setRepresentedObject_("__more__")
+        self._wire(self.trigger_popup, self.trigger_changed)
+        self.input_contract_label = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
+        self.input_mapping_button = self._button(
+            "Advanced input…", lambda _sender: self.show_input_mapping(),
+            role="flat")
+        self.metadata_stack = self._stack([
+            self._label("Trigger", size=12, bold=True),
+            self.trigger_popup,
+            self._label("Input", size=12, bold=True),
+            self._stack([
+                self.input_contract_label,
+                self._spacer(),
+                self.input_mapping_button,
+            ], vertical=False, spacing=8),
+        ], vertical=True, spacing=7)
         content.addArrangedSubview_(self.metadata_stack)
         self.inferred_label = self._label(
-            "Inputs are inferred from the Python source.",
+            "",
             size=10, color=NSColor.secondaryLabelColor())
+        self.inferred_label.setHidden_(True)
         content.addArrangedSubview_(self.inferred_label)
 
         self.diagnostics_label = self._label(
@@ -756,6 +726,8 @@ class RAPRuleEditorDocument(NSObject):
             self.all_projects_radio,
             self.selected_projects_radio,
             self.edit_projects_button,
+            self.trigger_popup,
+            self.input_mapping_button,
             self.advanced_button,
             self.finding_show_button,
             self.finding_copy_button,
@@ -789,6 +761,8 @@ class RAPRuleEditorDocument(NSObject):
             self.all_projects_radio,
             self.selected_projects_radio,
             self.edit_projects_button,
+            self.trigger_popup,
+            self.input_mapping_button,
             *self.trigger_buttons.values(),
             *self.input_buttons.values(),
             self.rule_actions_button,
@@ -863,9 +837,8 @@ class RAPRuleEditorDocument(NSObject):
             projection = rules_api.source_projection(self.full_source)
             ok, source, error = rules_api.patch_source_projection(
                 self.full_source,
-                on=self.on,
-                inputs=self.inputs,
-                severity=self.severity,
+                trigger=self.trigger,
+                input_pointer=self.input_pointer,
                 function_source=projection.get("function_source", ""),
                 spec=self.spec,
             )
@@ -875,9 +848,8 @@ class RAPRuleEditorDocument(NSObject):
             return ok, source, error
         ok, source, error = rules_api.patch_source_projection(
             self.full_source,
-            on=self.on,
-            inputs=self.inputs,
-            severity=self.severity,
+            trigger=self.trigger,
+            input_pointer=self.input_pointer,
             function_source=rules_api.source_projection(
                 self.full_source).get("function_source", ""),
             spec=self.spec or None,
@@ -901,6 +873,31 @@ class RAPRuleEditorDocument(NSObject):
             button.setState_(
                 NSControlStateValueOn if kind in self.inputs
                 else NSControlStateValueOff)
+        trigger_item = next(
+            (
+                item for item in self.trigger_popup.itemArray()
+                if str(item.representedObject() or "") == self.trigger
+            ),
+            None,
+        )
+        definition = TRIGGERS.get(self.trigger)
+        if trigger_item is None and definition is not None:
+            self.trigger_popup.insertItemWithTitle_atIndex_(
+                f"{definition.label} — {definition.hook} "
+                f"{definition.input_pointer}", 0)
+            trigger_item = self.trigger_popup.itemAtIndex_(0)
+            trigger_item.setRepresentedObject_(definition.hook)
+        if trigger_item is not None:
+            self.trigger_popup.selectItem_(trigger_item)
+        pointer = self.input_pointer or (
+            definition.input_pointer if definition else "")
+        source = "rule override" if self.input_pointer else "default"
+        self.input_contract_label.setStringValue_(
+            (
+                f"{definition.input_label}\n"
+                f"Cursor field: {definition.hook} {pointer} ({source})"
+            )
+            if definition else "Choose one supported trigger.")
         self.all_projects_radio.setState_(
             NSControlStateValueOn
             if self.coverage_mode == "all" else NSControlStateValueOff)
@@ -1122,14 +1119,110 @@ class RAPRuleEditorDocument(NSObject):
         self._refresh_ui()
 
     @objc.python_method
-    def toggle_metadata(
-        self, values: list[str], value: str, enabled: bool
-    ) -> None:
-        if enabled and value not in values:
-            values.append(value)
-        elif not enabled and value in values:
-            values.remove(value)
+    def trigger_changed(self, sender) -> None:
+        selected = sender.selectedItem().representedObject()
+        if selected == "__more__":
+            self.show_more_triggers()
+            return
+        self.trigger = str(selected or "afterAgentResponse")
+        self.input_pointer = ""
         self.editor_changed()
+
+    @objc.python_method
+    def show_more_triggers(self) -> None:
+        accessory = NSView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 520, 92))
+        search = NSSearchField.alloc().initWithFrame_(
+            NSMakeRect(0, 62, 520, 26))
+        search.setPlaceholderString_("Search triggers")
+        chooser = NSPopUpButton.alloc().initWithFrame_(
+            NSMakeRect(0, 28, 520, 28))
+        self._more_trigger_options = [
+            definition for definition in ORDERED_TRIGGERS
+            if not definition.common
+        ]
+        self._more_trigger_chooser = chooser
+        self._populate_more_triggers("")
+        details = self._label(
+            "Search by action, Cursor hook, or JSON Pointer.",
+            size=9.5, color=NSColor.secondaryLabelColor())
+        details.setFrame_(NSMakeRect(2, 2, 516, 20))
+        accessory.addSubview_(search)
+        accessory.addSubview_(chooser)
+        accessory.addSubview_(details)
+        self._wire(
+            search,
+            lambda sender: self._populate_more_triggers(
+                str(sender.stringValue())))
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Choose a trigger")
+        alert.setInformativeText_(
+            "Each trigger reads exactly one documented Cursor field.")
+        alert.setAccessoryView_(accessory)
+        alert.addButtonWithTitle_("Use Trigger")
+        alert.addButtonWithTitle_("Cancel")
+
+        def completed(response):
+            if response == NSAlertFirstButtonReturn:
+                if chooser.selectedItem() is None:
+                    return
+                self.trigger = str(
+                    chooser.selectedItem().representedObject())
+                self.input_pointer = ""
+                self.editor_changed()
+            else:
+                self._refresh_ui()
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def _populate_more_triggers(self, query: str) -> None:
+        chooser = self._more_trigger_chooser
+        chooser.removeAllItems()
+        normalized = query.strip().lower()
+        for definition in self._more_trigger_options:
+            searchable = (
+                f"{definition.label} {definition.hook} "
+                f"{definition.input_pointer} {definition.category}").lower()
+            if normalized and normalized not in searchable:
+                continue
+            chooser.addItemWithTitle_(
+                f"[{definition.category}] {definition.label} — Input: "
+                f"{definition.hook} {definition.input_pointer}")
+            chooser.lastItem().setRepresentedObject_(definition.hook)
+
+    @objc.python_method
+    def show_input_mapping(self) -> None:
+        definition = TRIGGERS.get(self.trigger)
+        default = definition.input_pointer if definition else ""
+        field = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 460, 24))
+        field.setStringValue_(self.input_pointer or default)
+        field.setPlaceholderString_(default)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Advanced input mapping")
+        alert.setInformativeText_(
+            f"Default: {self.trigger} {default}. Clear the field to restore "
+            "the default mapping.")
+        alert.setAccessoryView_(field)
+        alert.addButtonWithTitle_("Apply")
+        alert.addButtonWithTitle_("Cancel")
+
+        def completed(response):
+            if response != NSAlertFirstButtonReturn:
+                return
+            pointer = str(field.stringValue()).strip()
+            if pointer and not pointer.startswith("/"):
+                self.diagnostics_label.setStringValue_(
+                    "Input JSON Pointer must start with '/'.")
+                self.diagnostics_label.setHidden_(False)
+                return
+            self.input_pointer = "" if pointer == default else pointer
+            self.editor_changed()
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
 
     @objc.python_method
     def set_coverage_mode(self, mode: str) -> None:

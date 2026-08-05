@@ -30,22 +30,11 @@ from ...core.events import (
     TOOL_USE,
     USER_PROMPT,
 )
+from ...core.triggers import ORDERED_TRIGGERS
 from ..base import Adapter
 
 # Cursor hook event -> we register a single client for all of these.
-SUBSCRIBED_HOOKS = [
-    "sessionStart",
-    "beforeSubmitPrompt",
-    "afterAgentThought",
-    "afterAgentResponse",
-    "afterShellExecution",
-    "afterFileEdit",
-    "afterMCPExecution",
-    "preToolUse",
-    "postToolUse",
-    "postToolUseFailure",
-    "stop",
-]
+SUBSCRIBED_HOOKS = [definition.hook for definition in ORDERED_TRIGGERS]
 
 
 def _project_root(raw: dict[str, Any]) -> str:
@@ -70,12 +59,19 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
     conv = _conversation_id(raw)
     proj = _project_root(raw)
 
-    def mk(kind: str, payload: dict[str, Any]) -> Event:
+    def mk(
+        kind: str,
+        payload: dict[str, Any],
+        *,
+        hook_name: str = name,
+    ) -> Event:
         return Event(
             kind=kind,
             conversation_id=conv,
             project_root=proj,
             generation_id=str(raw.get("generation_id", "")),
+            hook_name=hook_name,
+            raw_payload=dict(raw),
             payload=payload,
         )
 
@@ -90,6 +86,12 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
                              "duration_ms": raw.get("duration_ms")})]
     if name == "afterAgentResponse":
         return [mk(MESSAGE, {"text": raw.get("text", "")})]
+    if name == "beforeShellExecution":
+        return [mk("shell_attempt", {
+            "command": raw.get("command", ""),
+            "cwd": raw.get("cwd", ""),
+            "sandbox": raw.get("sandbox"),
+        })]
     if name == "afterShellExecution":
         return [mk(SHELL_EXEC, {
             "command": raw.get("command", ""),
@@ -103,19 +105,27 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
             "edits": raw.get("edits", []),
         })]
     if name == "afterMCPExecution":
-        return [mk(TOOL_RESULT, {
+        return [mk("mcp_result", {
             "tool_name": raw.get("tool_name", ""),
             "output": raw.get("result_json", ""),
         })]
-    if name == "postToolUse":
-        return [mk(TOOL_USE, {
+    if name == "beforeMCPExecution":
+        return [mk("mcp_attempt", {
             "tool_name": raw.get("tool_name", ""),
             "tool_input": raw.get("tool_input", ""),
+        })]
+    if name == "postToolUse":
+        return [mk(TOOL_RESULT, {
+            "tool_name": raw.get("tool_name", ""),
             "output": raw.get("tool_output", ""),
         })]
     if name == "preToolUse":
         tool_name = str(raw.get("tool_name", ""))
         normalized = tool_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+        events = [mk(TOOL_USE, {
+            "tool_name": tool_name,
+            "tool_input": raw.get("tool_input", ""),
+        })]
         if "askquestion" in normalized:
             tool_input = raw.get("tool_input", "")
             question = ""
@@ -127,23 +137,58 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
                         for item in tool_input["questions"] if isinstance(item, dict)
                     ]
                     question = " ".join(prompt for prompt in prompts if prompt)
-            return [mk(QUESTION_REQUEST, {
+            events.append(mk(QUESTION_REQUEST, {
                 "tool_name": tool_name,
                 "tool_input": tool_input,
                 "question": question or str(tool_input),
-            })]
-        return []
+            }, hook_name=""))
+        return events
     if name == "postToolUseFailure":
         return [mk(TOOL_FAILURE, {
             "tool_name": raw.get("tool_name", ""),
             "tool_input": raw.get("tool_input", ""),
-            "error": raw.get("error", raw.get("failure_message", "")),
+            "error": raw.get(
+                "error_message",
+                raw.get("error", raw.get("failure_message", ""))),
             "failure_type": raw.get("failure_type", ""),
         })]
     if name == "sessionStart":
         return [mk(SESSION_START, {
             "composer_mode": raw.get("composer_mode"),
             "is_background_agent": raw.get("is_background_agent"),
+        })]
+    if name == "sessionEnd":
+        return [mk("session_end", {
+            "final_status": raw.get("final_status", ""),
+            "reason": raw.get("reason", ""),
+            "error_message": raw.get("error_message", ""),
+        })]
+    if name == "subagentStart":
+        return [mk("subagent_start", {
+            "task": raw.get("task", ""),
+            "subagent_type": raw.get("subagent_type", ""),
+        })]
+    if name == "subagentStop":
+        return [mk("subagent_stop", {
+            "summary": raw.get("summary", ""),
+            "status": raw.get("status", ""),
+        })]
+    if name == "beforeReadFile":
+        return [mk("file_read", {
+            "file_path": raw.get("file_path", ""),
+        })]
+    if name == "preCompact":
+        return [mk("pre_compact", {
+            "trigger": raw.get("trigger", ""),
+        })]
+    if name == "beforeTabFileRead":
+        return [mk("tab_file_read", {
+            "file_path": raw.get("file_path", ""),
+        })]
+    if name == "afterTabFileEdit":
+        return [mk("tab_file_edit", {
+            "file_path": raw.get("file_path", ""),
+            "edits": raw.get("edits", []),
         })]
     if name == "stop":
         return [mk(SESSION_STOP, {"status": raw.get("status", "completed")})]

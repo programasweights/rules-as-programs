@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS verdicts (
 CREATE INDEX IF NOT EXISTS idx_verdicts_project ON verdicts(project_root);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ts ON verdicts(ts);
 """
-FINDING_SCHEMA_VERSION = 3
+FINDING_SCHEMA_VERSION = 4
 
 
 def finding_fingerprint(

@@ -13,7 +13,6 @@ concurrent workers and trivially testable.
 from __future__ import annotations
 
 import hashlib
-import subprocess
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -23,9 +22,9 @@ from .events import Event
 from .ledger import Ledger
 from .rule import LoadedRule
 from .store import Verdict, VerdictStore, finding_fingerprint
+from .triggers import InputPointerError, TRIGGERS, extract_input
 from ..paw_runtime import PawRuntime
 
-MAX_INPUT_CHARS = 6000
 SEVERITY_ALIASES = {
     "info": "info",
     "warning": "warn",
@@ -57,141 +56,29 @@ class RuleContext:
 
     def __init__(
         self, ledger: Ledger, runtime: PawRuntime,
-        default_inputs: list[str] | None = None,
-        default_probes: dict[str, str] | None = None,
         default_compiler: str | None = None,
         through_seq: int | None = None,
+        input_text: str = "",
     ):
         self._ledger = ledger
         self._runtime = runtime
         self.project_root = ledger.project_root
         self.conversation_id = ledger.conversation_id
-        self._default_inputs = list(default_inputs or [])
-        self._default_probes = dict(default_probes or {})
         self._default_compiler = default_compiler
         self.through_seq = through_seq
+        self._input = input_text
         self.trace: list[dict[str, Any]] = []
 
-    # --- evidence access ------------------------------------------------
-    def events(self, *kinds: str):
-        wanted = set(kinds) if kinds else None
-        events = self._ledger.events()
-        if self.through_seq is not None:
-            events = events[:self.through_seq]
-        return (
-            [event for event in events if event.kind in wanted]
-            if wanted is not None else events
-        )
-
-    def latest(self, kind: str) -> str:
-        events = self.events(kind)
-        return events[-1].text() if events else ""
-
-    def input(self, max_events: int = 40) -> str:
-        """Build standard evidence from the rule's declared ``inputs``."""
-        latest = ["message"] if "message" in self._default_inputs else []
-        include = [
-            kind for kind in self._default_inputs if kind != "message"
-        ]
-        return self.evidence(
-            probes=self._default_probes,
-            latest=latest, include=include, max_events=max_events)
-
-    def run(self, cmd: str) -> str:
-        """Run a shell probe in the project root; records the output."""
-        try:
-            proc = subprocess.run(cmd, shell=True, cwd=self.project_root or None,
-                                  capture_output=True, text=True, timeout=10)
-            out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-        except (subprocess.SubprocessError, OSError) as exc:
-            out = f"(probe failed: {exc})"
-        self.trace.append({"type": "run", "cmd": cmd, "output": out})
-        return out
-
-    def evidence(self, probes: dict[str, str] | None = None,
-                 include: list[str] | None = None,
-                 latest: list[str] | None = None,
-                 max_events: int = 40) -> str:
-        """Format a standard evidence block (## Probes / ## Latest / ## Recent)."""
-        sections: list[str] = []
-        probe_data: list[dict[str, Any]] = []
-        latest_data: list[dict[str, Any]] = []
-        event_data: list[dict[str, Any]] = []
-        if probes:
-            parts = []
-            for name, cmd in probes.items():
-                output = self.run(cmd)
-                parts.append(f"[{name}]\n{output or '(no output)'}")
-                probe_data.append({
-                    "name": name,
-                    "command": cmd,
-                    "output": _snippet(output, 4000),
-                })
-            sections.append("## Probes\n" + "\n\n".join(parts))
-        for kind in (latest or []):
-            latest_events = self.events(kind)
-            latest_event = latest_events[-1] if latest_events else None
-            latest_text = latest_event.text() if latest_event else ""
-            if latest_text:
-                sections.append(f"## Latest {kind}\n{latest_text}")
-                latest_data.append({
-                    "id": latest_event.id,
-                    "kind": kind,
-                    "ts": latest_event.ts,
-                    "text": _snippet(latest_text, 4000),
-                    "_needle": f"## Latest {kind}\n{latest_text}",
-                })
-        if include:
-            evs = [
-                event for event in self.events()
-                if event.kind in set(include)
-            ][-max_events:]
-            if evs:
-                lines = [f"- ({e.kind}) {e.text()}" for e in evs]
-                sections.append("## Recent activity\n" + "\n".join(lines))
-                event_data = [{
-                    "id": e.id,
-                    "kind": e.kind,
-                    "ts": e.ts,
-                    "text": _snippet(e.text(), 2500),
-                    "_needle": line,
-                } for e, line in zip(evs, lines)]
-        full_text = "\n\n".join(sections).strip()
-        cursor = 0
-        for item in [*latest_data, *event_data]:
-            needle = str(item.pop("_needle", ""))
-            start = full_text.find(needle, cursor)
-            if start >= 0:
-                item["_full_input_span"] = [start, start + len(needle)]
-                cursor = start + len(needle)
-        trim_start = max(0, len(full_text) - MAX_INPUT_CHARS)
-        prefix_length = 4 if trim_start else 0
-        for item in [*latest_data, *event_data]:
-            span = item.pop("_full_input_span", None)
-            if span and span[1] > trim_start:
-                item["input_span"] = [
-                    max(prefix_length, prefix_length + span[0] - trim_start),
-                    prefix_length + span[1] - trim_start,
-                ]
-                item["input_inclusion"] = (
-                    "full" if span[0] >= trim_start else "partial")
-        text = full_text
-        if trim_start:
-            text = "...\n" + full_text[trim_start:]
-        text = text or "(no evidence gathered)"
-        trace_index = len(self.trace)
-        self.trace.append({
-            "type": "evidence",
-            "text": text,
-            "probes": probe_data,
-            "latest": latest_data,
-            "events": event_data,
-        })
-        return text
+    @property
+    def input(self) -> str:
+        return self._input
 
     def paw(self, spec: str, compiler: str | None = None) -> Callable[[str], str]:
         """Return a local PAW judge ``fn(text) -> label``; records input/output."""
         def call(text: str) -> str:
+            if text != self._input:
+                raise ValueError(
+                    "PAW input must be the exact trigger field ctx.input")
             resolved_compiler = (
                 compiler if compiler is not None else self._default_compiler)
             pid = self._runtime.program_id_for_spec(spec, resolved_compiler)
@@ -284,9 +171,29 @@ class Engine:
         )
         through_seq = (
             trigger_index + 1 if trigger_index >= 0 else len(initial_events))
+        hook_name = (
+            trigger_event.hook_name if trigger_event else rule.trigger)
+        raw_payload = (
+            trigger_event.raw_payload if trigger_event else {})
+        try:
+            input_text, input_pointer, input_type, input_overridden = (
+                extract_input(
+                    rule.trigger or hook_name,
+                    raw_payload,
+                    rule.input_pointer,
+                )
+            )
+            input_bytes = len(input_text.encode("utf-8"))
+            if input_bytes > rule.max_input_bytes:
+                raise InputPointerError(
+                    "input too large: "
+                    f"{input_bytes} bytes exceeds {rule.max_input_bytes}")
+        except InputPointerError as exc:
+            if self.on_error:
+                self.on_error(rule, ledger.project_root, str(exc))
+            return None
         ctx = RuleContext(
-            ledger, self.runtime, rule.inputs, rule.probes,
-            rule.compiler or None, through_seq)
+            ledger, self.runtime, rule.compiler or None, through_seq, input_text)
         try:
             result = rule.fn(ctx)
             parsed = self._parse_result(rule, result)
@@ -331,14 +238,16 @@ class Engine:
 
         evaluation = _evaluation_snapshot(
             rule,
-            ctx.trace,
             severity=severity,
             ledger=ledger,
             trigger_event=trigger_event,
             context_through_seq=through_seq,
-            rule_result=result,
             rule_source=rule_source,
             rule_source_hash=rule_hash,
+            input_text=input_text,
+            input_pointer=input_pointer,
+            input_type=input_type,
+            input_overridden=input_overridden,
         )
         verdict = Verdict(
             rule_id=rule.id, rule_title=rule.title, severity=severity,
@@ -386,7 +295,7 @@ class Engine:
         for rule in self.rules_provider(event.project_root):
             if rule.channel != "finding":
                 continue
-            if event.kind not in rule.on:
+            if not rule.trigger or event.hook_name != rule.trigger:
                 continue
             if self.is_enabled:
                 try:
@@ -401,96 +310,20 @@ class Engine:
         return out
 
 
-def _trace_input(trace: list[dict[str, Any]]) -> str:
-    for item in reversed(trace):
-        if item.get("type") == "evidence":
-            return item.get("text", "")
-        if item.get("type") == "paw":
-            return item.get("input", "")
-    return ""
-
-
-def _trace_label(trace: list[dict[str, Any]]) -> str:
-    for item in reversed(trace):
-        if item.get("type") == "paw":
-            return str(item.get("output", "")).strip()
-    return ""
-
-
-def _snippet(text: str, limit: int = 400) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[:limit] + " ..."
-
-
-def _input_segments(text: str) -> list[dict[str, Any]]:
-    headings = (
-        ("## Probes", "probes"),
-        ("## Latest", "latest"),
-        ("## Recent activity", "recent_activity"),
-    )
-    found = []
-    for marker, kind in headings:
-        start = text.find(marker)
-        if start >= 0:
-            found.append((start, kind))
-    found.sort()
-    segments = []
-    for index, (start, kind) in enumerate(found):
-        end = found[index + 1][0] if index + 1 < len(found) else len(text)
-        segments.append({
-            "kind": kind,
-            "start": start,
-            "end": end,
-        })
-    return segments
-
-
 def _evaluation_snapshot(
     rule: LoadedRule,
-    trace: list[dict[str, Any]],
     *,
     severity: str,
     ledger: Ledger,
     trigger_event: Event | None,
     context_through_seq: int,
-    rule_result: Any,
     rule_source: str,
     rule_source_hash: str,
+    input_text: str,
+    input_pointer: str,
+    input_type: str,
+    input_overridden: bool,
 ) -> dict[str, Any]:
-    evidence_entries = [
-        item for item in trace if item.get("type") == "evidence"]
-    result_trace_index = getattr(rule_result, "trace_index", None)
-    finding_trace = (
-        trace[result_trace_index]
-        if isinstance(result_trace_index, int)
-        and 0 <= result_trace_index < len(trace)
-        and trace[result_trace_index].get("type") == "finding_result"
-        else {}
-    )
-    selected_index = finding_trace.get("paw_trace_index")
-    paw = (
-        trace[selected_index]
-        if isinstance(selected_index, int)
-        and 0 <= selected_index < len(trace)
-        and trace[selected_index].get("type") == "paw"
-        else {}
-    )
-    evidence = evidence_entries[-1] if evidence_entries else {}
-    input_text = str(
-        paw.get("input") if paw else evidence.get("text", ""))
-    standard_input = bool(
-        paw and evidence and input_text == str(evidence.get("text", "")))
-    included_ids = (
-        {
-            str(item.get("id", ""))
-            for item in [
-                *list(evidence.get("latest") or []),
-                *list(evidence.get("events") or []),
-            ]
-            if item.get("id") and item.get("input_span")
-        }
-        if standard_input else set()
-    )
     input_bytes = input_text.encode("utf-8")
     events = ledger.events()
     trigger_index = next(
@@ -502,7 +335,7 @@ def _evaluation_snapshot(
     )
     through_seq = min(len(events), max(0, int(context_through_seq)))
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "rule": {
             "id": rule.id,
             "name": rule.title,
@@ -516,33 +349,19 @@ def _evaluation_snapshot(
             "sha256": hashlib.sha256(input_bytes).hexdigest(),
             "char_count": len(input_text),
             "byte_count": len(input_bytes),
-            "format": (
-                "rap-evidence-v1" if standard_input else "plain"),
-            "segments": (
-                _input_segments(input_text) if standard_input else []),
-            "event_ids": sorted(included_ids),
-            "event_segments": [
-                {
-                    "event_id": str(item.get("id", "")),
-                    "start": int(item["input_span"][0]),
-                    "end": int(item["input_span"][1]),
-                    "inclusion": item.get("input_inclusion", "full"),
-                }
-                for item in [
-                    *list(evidence.get("latest") or []),
-                    *list(evidence.get("events") or []),
-                ]
-                if standard_input and item.get("id") and item.get("input_span")
-            ],
+            "format": "json" if input_type in ("object", "array") else "plain",
+            "json_pointer": input_pointer,
+            "pointer_source": "override" if input_overridden else "default",
+            "value_type": input_type,
+            "event_ids": [trigger_event.id] if trigger_event else [],
         },
         "severity": severity,
         "trigger": {
             "event_id": trigger_event.id if trigger_event else "",
             "kind": trigger_event.kind if trigger_event else "",
+            "hook": trigger_event.hook_name if trigger_event else rule.trigger,
             "seq": trigger_index + 1 if trigger_index >= 0 else None,
-            "included_in_input": (
-                bool(trigger_event and trigger_event.id in included_ids)
-                if standard_input else None),
+            "included_in_input": True,
             "event": (
                 {
                     **trigger_event.to_dict(),

@@ -48,6 +48,7 @@ from .core.rule import (
     new_rule_id, rule_paths,
 )
 from .core.store import VerdictStore, reset_development_finding_history
+from .core.triggers import extract_input
 from .ipc import PROTOCOL_VERSION
 from .sdk import RULE_ATTR, RuleDef
 
@@ -126,6 +127,11 @@ class Daemon:
     def __init__(self) -> None:
         self.started_at = time.time()
         self.runtime = paw_runtime.shared()
+        scaffold.prune_obsolete_managed_rules([
+            str(item.get("path", ""))
+            for item in cursor_projects.discover_projects(limit=100)
+            if item.get("path")
+        ])
         reset_development_finding_history()
         self.store = VerdictStore()
         self.attention = AttentionStore()
@@ -191,10 +197,7 @@ class Daemon:
                 source="ask_question_tool",
             )
         self.work.submit(self._evaluate, event, ledger)
-        if (
-            event.kind == SESSION_STOP
-            and event.payload.get("status", "completed") == "completed"
-        ):
+        if event.hook_name == "afterAgentResponse":
             self.work.submit(self._evaluate_attention, event, ledger)
         should_warm = False
         if event.kind == SESSION_START:
@@ -223,13 +226,24 @@ class Daemon:
             )
             if rule is None or rule.channel != "attention":
                 return
+            if rule.trigger != event.hook_name:
+                return
+            input_text, _pointer, _value_type, _overridden = extract_input(
+                rule.trigger, event.raw_payload, rule.input_pointer)
+            input_bytes = len(input_text.encode("utf-8"))
+            if input_bytes > rule.max_input_bytes:
+                self._on_rule_error(
+                    rule, event.project_root,
+                    "input too large: "
+                    f"{input_bytes} bytes exceeds {rule.max_input_bytes}")
+                return
             context = RuleContext(
-                ledger, self.runtime, rule.inputs, rule.probes,
-                rule.compiler or None)
+                ledger, self.runtime, rule.compiler or None,
+                input_text=input_text)
             result = rule.fn(context)
             if not result:
                 return
-            latest = ledger.latest_text(MESSAGE)
+            latest = input_text
             self.attention.set(
                 project_root=event.project_root,
                 conversation_id=event.conversation_id,
@@ -371,11 +385,21 @@ class Daemon:
         self, rule: LoadedRule, project_root: str, message: str
     ) -> None:
         code = (
+            "input_too_large"
+            if "input too large" in message
+            else "input_field_missing"
+            if "input field missing" in message
+            else
             "invalid_output"
             if "invalid fuzzy severity" in message
             else "runtime_exception"
         )
         summary = (
+            f"{rule.title} input is too large"
+            if code == "input_too_large"
+            else f"{rule.title} input field is unavailable"
+            if code == "input_field_missing"
+            else
             f"{rule.title} check returned no valid decision"
             if code == "invalid_output"
             else f"{rule.title} check failed"
@@ -388,12 +412,15 @@ class Daemon:
             summary=summary,
             detail=message,
             impact="this rule check was skipped",
-            threshold=2,
+            threshold=1 if code.startswith("input_") else 2,
         )
         _log(f"rule error {rule.id} project={project_root}: {message}")
 
     def _on_rule_success(self, rule: LoadedRule, project_root: str) -> None:
-        for code in ("invalid_output", "runtime_exception"):
+        for code in (
+            "invalid_output", "runtime_exception",
+            "input_too_large", "input_field_missing",
+        ):
             self.incidents.clear(
                 code=code, project_root=project_root, rule_id=rule.id)
         with self._state_lock:
@@ -1149,7 +1176,7 @@ class Daemon:
                 finding["rule_id"], finding["project_root"]) or {}
             current_source = str(current_rule.get("source", ""))
             evaluation = dict(finding.get("evaluation") or {})
-            if evaluation.get("schema_version") != 3:
+            if evaluation.get("schema_version") != 4:
                 return {"ok": False, "error": "unsupported finding schema"}
             recorded_source = str(
                 (evaluation.get("rule") or {}).get("source", ""))
@@ -1193,7 +1220,7 @@ class Daemon:
             ledger = self.ledgers.get(
                 finding.get("conversation_id", ""), finding["project_root"])
             evaluation = dict(finding.get("evaluation") or {})
-            if evaluation.get("schema_version") != 3:
+            if evaluation.get("schema_version") != 4:
                 return {"ok": False, "error": "unsupported finding schema"}
             start_value = req.get("start")
             return {

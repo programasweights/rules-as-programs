@@ -53,34 +53,29 @@ from rules_as_programs import rule
 SPEC = """Decide whether the observed evidence violates this project rule.
 Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
-Input: ## Latest message
-<message and activity that follow the rule>
+Input: <exact Cursor trigger field that follows the rule>
 Output: OK
 
-Input: ## Latest message
-<message and activity that break the rule>
+Input: <exact Cursor trigger field that breaks the rule>
 Output: WARNING"""
 
 @rule(id="7km3v9c2xq4t8n1p",
       name="My project rule",
-      on=["message", "session_stop"],
-      inputs=["message", "thought", "shell_exec", "file_edit"],
+      trigger="afterAgentResponse",
       spec=SPEC)
 def my_rule(ctx):
     "One-line title from the docstring."
-    decision = ctx.paw(SPEC)(ctx.input())
+    decision = ctx.paw(SPEC)(ctx.input)
     return ctx.result(decision)
 ```
 
 For each rule:
 
-1. Decide what observable signal shows it being violated (a claim in a message, a
-   missing shell command, an uncommitted change, a risky edit, etc.) and pick the
-   right `on=[...]` event kinds.
+1. Choose one Cursor trigger whose predefined field directly contains the
+   observable signal. Basic rules never aggregate events.
 2. Write a tight `SPEC` ending in `Return ONLY one of: ...` with 3-5 `Input:`/
-   `Output:` examples that resemble what `ctx.evidence(...)` produces (see the
-   built-in rules for the `## Probes` / `## Latest message` / `## Recent activity`
-   format). `rap rules test` parses these cases directly; do not duplicate them
+   `Output:` examples containing that exact scalar field. `rap rules test`
+   parses these cases directly; do not duplicate them
    in a separate `EXAMPLES` list.
 3. Test and iterate until it passes: `rap rules test <id>`. Adjust the SPEC
    wording/examples, re-test. This is the PAW spec-engineering loop.
@@ -111,10 +106,10 @@ plus any you converted.
   likely needs a reply.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
   finding opens the latest occurrence as an expanded tray row with the exact
-  evaluated input. Context replaces Detail at full width. **Edit Rule…** retains
+  evaluated input. Session Activity is separate and never silently evaluated. **Edit Rule…** retains
   that strict finding record as tuning/test-case context.
-- Rule source opens in the intent-first **Rule Editor**: Name, Rule spec,
-  Runs in, Runs when, and Reads. **Deploy** validates, tests, compiles,
+- Rule source opens in the intent-first **Rule Editor**: Name, Rule spec, one
+  Trigger, and its derived Input. **Deploy** validates, tests, compiles,
   activates, and applies All Projects or Selected Projects coverage; failure
   leaves the previous deployment running. **View Python…** exposes the
   underlying program. Standard `Command-A` and `Control-A` select all text in

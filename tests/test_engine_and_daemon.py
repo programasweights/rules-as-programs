@@ -43,6 +43,8 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
         kind=MESSAGE,
         conversation_id="long-input",
         project_root=str(project),
+        hook_name="afterAgentResponse",
+        raw_payload={"text": text},
         payload={"text": text},
     )
     ledger.append(event)
@@ -53,8 +55,9 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
         title="Long input",
         severity="warn",
         on=[MESSAGE],
+        trigger="afterAgentResponse",
         inputs=[MESSAGE],
-        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input())),
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
         scope="project",
         source_path=str(rule_path),
@@ -71,9 +74,14 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
 
     assert len(evaluated["text"]) > 4000
     assert evaluated["text"].endswith(text)
-    assert entry["evaluation"]["schema_version"] == 3
+    assert entry["evaluation"]["schema_version"] == 4
     assert evaluated["event_ids"] == [event.id]
+    assert evaluated["json_pointer"] == "/text"
+    assert evaluated["pointer_source"] == "default"
     assert entry["evaluation"]["trigger"]["included_in_input"] is True
+    assert entry["evaluation"]["trigger"]["event"]["raw_payload"] == {
+        "text": text}
+    assert "raw_payload" not in entry["evaluation"]["trigger"]
     assert evaluated["sha256"] == hashlib.sha256(
         evaluated["text"].encode()).hexdigest()
 
@@ -96,6 +104,8 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
         kind=MESSAGE,
         conversation_id="frozen",
         project_root=str(project),
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "trigger input"},
         payload={"text": "trigger input"},
     )
     ledger.append(trigger)
@@ -117,11 +127,12 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
 
     def evaluate(ctx):
         ledger.append(late)
-        return ctx.result(ctx.paw("spec")(ctx.input()))
+        return ctx.result(ctx.paw("spec")(ctx.input))
 
     rule = LoadedRule(
         id=new_rule_id(), title="Frozen", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
+        trigger="afterAgentResponse",
         scope="project", source_path=str(rule_path))
     engine = Engine(
         FakeRuntime(output="WARNING"),
@@ -149,6 +160,8 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
         kind=MESSAGE,
         conversation_id="input-kinds",
         project_root=str(project),
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "ledger text"},
         payload={"text": "ledger text"},
     )
     ledger.append(event)
@@ -158,7 +171,8 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
     custom = LoadedRule(
         id=new_rule_id(), title="Custom", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE],
-        fn=lambda ctx: ctx.result(ctx.paw("spec")("custom input")),
+        trigger="afterAgentResponse",
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec", scope="project", source_path=str(rule_path))
     engine = Engine(
         FakeRuntime(output="WARNING"), store, lambda _project: [custom],
@@ -166,16 +180,16 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
     custom_verdict = engine.evaluate(custom, ledger, event)
     custom_evaluation = audit.read_finding(
         str(project), custom_verdict.id)["evaluation"]
-    assert custom_evaluation["input"]["text"] == "custom input"
-    assert custom_evaluation["trigger"]["included_in_input"] is None
+    assert custom_evaluation["input"]["text"] == "ledger text"
+    assert custom_evaluation["trigger"]["included_in_input"] is True
 
     def deterministic_result(ctx):
-        ctx.input()
         return ctx.result("WARNING")
 
     deterministic = LoadedRule(
         id=new_rule_id(), title="Deterministic", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE],
+        trigger="afterAgentResponse",
         fn=deterministic_result,
         scope="project", source_path=str(rule_path))
     deterministic_verdict = engine.evaluate(deterministic, ledger, event)
@@ -200,21 +214,21 @@ def test_finding_result_links_to_its_specific_paw_call(
     ledger = Ledger("multi-paw", str(project))
     event = Event(
         kind=MESSAGE, conversation_id="multi-paw",
-        project_root=str(project), payload={"text": "message"})
+        project_root=str(project), hook_name="afterAgentResponse",
+        raw_payload={"text": "message"}, payload={"text": "message"})
     ledger.append(event)
     path = project / "rule.py"
     path.write_text("# multi\n")
 
     def evaluate(ctx):
-        selected = ctx.paw("spec")("selected input")
+        selected = ctx.paw("spec")(ctx.input)
         selected_result = ctx.result(selected)
-        unrelated = ctx.paw("spec")("unrelated later input")
-        ctx.result(unrelated)
         return selected_result
 
     rule = LoadedRule(
         id=new_rule_id(), title="Multi", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
+        trigger="afterAgentResponse",
         scope="project", source_path=str(path))
     engine = Engine(
         FakeRuntime(output="WARNING"),
@@ -223,8 +237,44 @@ def test_finding_result_links_to_its_specific_paw_call(
     verdict = engine.evaluate(rule, ledger, event)
     evaluation = audit.read_finding(str(project), verdict.id)["evaluation"]
 
-    assert evaluation["input"]["text"] == "selected input"
+    assert evaluation["input"]["text"] == "message"
     assert evaluation["severity"] == "warn"
+
+
+def test_oversized_trigger_input_is_rejected_without_paw_call(tmp_path):
+    project = str(tmp_path)
+    ledger = Ledger("oversized", project)
+    event = Event(
+        kind=MESSAGE,
+        conversation_id="oversized",
+        project_root=project,
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "too long"},
+        payload={"text": "too long"},
+    )
+    ledger.append(event)
+    errors = []
+    runtime = FakeRuntime(output="WARNING")
+    rule = LoadedRule(
+        id=new_rule_id(),
+        title="Small input",
+        severity="warn",
+        on=[MESSAGE],
+        trigger="afterAgentResponse",
+        max_input_bytes=4,
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
+        spec="spec",
+    )
+    engine = Engine(
+        runtime,
+        VerdictStore(tmp_path / "verdicts.db"),
+        lambda _project: [rule],
+        on_error=lambda _rule, _root, message: errors.append(message),
+        is_enabled=lambda *_args: True,
+    )
+
+    assert engine.evaluate(rule, ledger, event) is None
+    assert errors == ["input too large: 8 bytes exceeds 4"]
 
 
 def test_orphaned_findings_archive_but_fallback_findings_remain(
@@ -239,7 +289,7 @@ def test_orphaned_findings_archive_but_fallback_findings_remain(
         severity="warn",
         conversation_id="conversation",
         evaluation={
-            "schema_version": 3,
+            "schema_version": 4,
             "rule": {"id": "rule", "name": "Rule", "source": ""},
             "input": {"text": "", "format": "plain", "event_ids": []},
             "severity": "warn",
@@ -285,10 +335,8 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         title="Rule",
         severity="warn",
         on=[MESSAGE],
-        fn=lambda ctx: (
-            ctx.evidence(latest=[MESSAGE]),
-            ctx.result("WARNING"),
-        )[1],
+        trigger="afterAgentResponse",
+        fn=lambda ctx: ctx.result("WARNING"),
         scope="project",
         source_path=str(rule_path),
     )
@@ -304,6 +352,8 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=str(project),
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "agent claim"},
         payload={"text": "agent claim"},
     )
     ledger.append(event)
@@ -312,7 +362,7 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
     assert store.by_project() == {}
     detail = audit.read_finding(str(project), verdicts[0].id)
     assert detail["trigger_event_id"] == event.id
-    assert detail["trace"][0]["latest"][0]["text"] == "agent claim"
+    assert detail["evaluation"]["input"]["text"] == "agent claim"
     assert detail["rule_source"] == "# exact source at finding time\n"
     assert detail["rule_scope"] == "project"
     assert detail["rule_source_hash"]
@@ -324,6 +374,8 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=str(project),
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "another claim"},
         payload={"text": "another claim"},
     )
     ledger.append(event2)
@@ -392,38 +444,31 @@ def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path
     project = tmp_path / "project"
     project.mkdir()
     ledger = Ledger("conversation", str(project))
-    ledger.append(Event(
+    response = Event(
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=str(project),
         generation_id="generation",
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "Which database should I use?"},
         payload={"text": "Which database should I use?"},
-    ))
-    stop = Event(
-        kind=SESSION_STOP,
-        conversation_id="conversation",
-        project_root=str(project),
-        generation_id="generation",
-        payload={"status": "completed"},
     )
-    ledger.append(stop)
+    ledger.append(response)
     detector = LoadedRule(
         id="gn3xtat6av4fy690",
         title="Needs reply",
         severity="info",
-        on=[SESSION_STOP],
-        inputs=[MESSAGE],
+        on=[MESSAGE],
+        trigger="afterAgentResponse",
         channel="attention",
-        fn=lambda ctx: (
-            "Agent needs a reply"
-            if ctx.paw("spec")(ctx.input()) == "REPLY_NEEDED" else None),
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
     )
     daemon = Daemon.__new__(Daemon)
-    daemon.runtime = FakeRuntime(output="REPLY_NEEDED")
+    daemon.runtime = FakeRuntime(output="INFO")
     daemon.attention = AttentionStore()
     daemon.rules_cache = _Rules([detector])
-    daemon._evaluate_attention(stop, ledger)
+    daemon._evaluate_attention(response, ledger)
     active = daemon.attention.active()
     assert len(active) == 1
     assert active[0]["project_root"] == str(project)
@@ -436,6 +481,12 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
     project.mkdir()
     ledger = Ledger("conversation", str(project))
     context = RuleContext(ledger, FakeRuntime())
+    try:
+        context.input = "rewritten"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("ctx.input must be immutable")
     assert context.result("OK") is None
     assert context.result("INFO") == ("info",)
     assert context.result("WARNING") == ("warn",)
@@ -448,6 +499,7 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
         title="Rule",
         severity="warn",
         on=[MESSAGE],
+        trigger="afterAgentResponse",
         fn=lambda ctx: ctx.result("HIGH"),
     )
     engine = Engine(
@@ -457,7 +509,8 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
     )
     event = Event(
         kind=MESSAGE, conversation_id="conversation",
-        project_root=str(project), payload={"text": "claim"})
+        project_root=str(project), hook_name="afterAgentResponse",
+        raw_payload={"text": "claim"}, payload={"text": "claim"})
     ledger.append(event)
     assert engine.on_event(event, ledger) == []
     assert "expected OK, INFO, WARNING, or CRITICAL" in errors[0]
@@ -480,6 +533,8 @@ def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=project,
+        hook_name="afterAgentResponse",
+        raw_payload={"text": "claim"},
         payload={"text": "claim"},
     )
     ledger.append(event)
@@ -489,7 +544,8 @@ def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
         severity="warn",
         on=[MESSAGE],
         inputs=[MESSAGE],
-        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input())),
+        trigger="afterAgentResponse",
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
         compiler="paw-ft-bs48",
     )
@@ -500,5 +556,5 @@ def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
         is_enabled=lambda *_args: True,
     )
 
-    assert engine.evaluate(rule, ledger) is not None
+    assert engine.evaluate(rule, ledger, event) is not None
     assert runtime.compilers == ["paw-ft-bs48"]

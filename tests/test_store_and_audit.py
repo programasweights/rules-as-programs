@@ -13,7 +13,7 @@ from rules_as_programs.core.store import (
 
 def _evaluation(name: str = "Verify claims") -> dict:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "rule": {
             "id": "verify",
             "name": name,
@@ -72,7 +72,7 @@ def test_group_projects_only_latest_occurrence(tmp_path):
     assert group["id"] == second
     assert group["id"] != first
     assert "occurrences" not in group
-    assert group["evaluation"]["schema_version"] == 3
+    assert group["evaluation"]["schema_version"] == 4
 
 
 def test_suppressed_findings_stay_out_of_inbox_but_in_history(tmp_path):
@@ -123,7 +123,7 @@ def test_audit_preserves_large_exact_input(monkeypatch, tmp_path):
         evaluation=evaluation)
 
     recorded = audit.read_finding(str(project), 7)["evaluation"]
-    assert recorded["schema_version"] == 3
+    assert recorded["schema_version"] == 4
     assert recorded["input"]["text"] == "😀" * 70000
 
 
@@ -163,4 +163,4 @@ def test_development_reset_removes_db_ledgers_and_audits(monkeypatch, tmp_path):
     assert not (state / "verdicts.db").exists()
     assert not ledgers.exists()
     assert not (log / "audit.jsonl").exists()
-    assert (state / "finding-schema").read_text().strip() == "3"
+    assert (state / "finding-schema").read_text().strip() == "4"

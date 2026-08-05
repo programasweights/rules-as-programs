@@ -10,6 +10,7 @@ examples, runs ``rap rules test``, and enables it.
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 
 from . import config
@@ -24,6 +25,36 @@ def builtin_rules() -> list[Path]:
 
 def builtin_ids() -> list[str]:
     return [p.stem for p in builtin_rules()]
+
+
+def prune_obsolete_managed_rules(
+    project_roots: list[str] | None = None,
+) -> list[str]:
+    """Remove pre-V4 managed rules during development-schema replacement."""
+    roots = [config.global_rules_dir()]
+    roots.extend(
+        config.project_rules_dir(project)
+        for project in (project_roots or []))
+    removed = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.glob("*/rule.py"):
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not any(
+                marker in source
+                for marker in (
+                    "# RAP_MANAGED_FUZZY_V2",
+                    "# RAP_MANAGED_FUZZY_V3",
+                )
+            ):
+                continue
+            shutil.rmtree(path.parent, ignore_errors=True)
+            removed.append(str(path))
+    return removed
 
 
 def rules_dir_for(scope: str, project_root: str | None) -> Path:
@@ -135,9 +166,7 @@ def draft_rule_py(name: str, prose: str) -> tuple[str, str]:
         rule_id,
         title,
         f"Decide whether the agent violated this project rule: {prose_compact}",
-        severity="warn",
-        on=["message", "session_stop"],
-        inputs=["message", "thought", "shell_exec", "file_edit", "tool_result"],
+        trigger="afterAgentResponse",
         cases=[],
     )
     return f"{rule_id}/rule.py", src

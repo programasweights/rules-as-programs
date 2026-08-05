@@ -6,21 +6,20 @@ A rule is ONE decorated function per file:
 
     SPEC = '''Decide ...\nReturn ONLY one of: OK, INFO, WARNING, CRITICAL\n...'''
 
-    @rule(severity="warn", on=["session_stop"],
-          inputs=["file_edit", "shell_exec"], spec=SPEC)
-    def github_sync(ctx):
-        "Use GitHub to synchronize code."          # title (from docstring)
-        decision = ctx.paw(SPEC)(ctx.input())
+    @rule(trigger="afterShellExecution", spec=SPEC)
+    def no_rsync(ctx):
+        "Do not use rsync."                        # title (from docstring)
+        decision = ctx.paw(SPEC)(ctx.input)
         return ctx.result(decision)
 
 Finding rules return ``ctx.result("OK"|"INFO"|"WARNING"|"CRITICAL")``. ``OK``
 returns ``None``; the other labels create one strict severity result.
 
 The ``ctx`` argument is handed to the function by the engine (the author never
-constructs it). ``inputs=[...]`` configures ``ctx.input()``. It also exposes:
-``ctx.evidence(...)``, ``ctx.events(*kinds)``,
-``ctx.latest(kind)``, ``ctx.run(cmd)``, ``ctx.paw(spec, compiler=None)``, and
-``ctx.project_root`` / ``ctx.conversation_id``.
+constructs it). ``trigger=...`` selects one predefined Cursor input field.
+``ctx.input`` is the exact mapped Cursor field. Advanced rules can override the
+registry mapping with ``input_pointer=...``. The context also exposes
+``ctx.paw(spec, compiler=None)`` and project/conversation identifiers.
 
 PAW is the default judge and runs locally (private, offline after first
 compile). A rule can equally be plain Python -- no PAW at all.
@@ -44,6 +43,9 @@ class RuleDef:
     """Internal metadata attached to a decorated rule function."""
     id: str
     title: str
+    trigger: str
+    input_pointer: str
+    max_input_bytes: int
     severity: str
     on: list[str]
     inputs: list[str]
@@ -54,7 +56,9 @@ class RuleDef:
     examples: list[tuple[str, str]] = field(default_factory=list)
 
 
-def rule(*, severity: str = "warn", on: list[str] | None = None,
+def rule(*, trigger: str = "", input_pointer: str = "",
+         max_input_bytes: int = 65536,
+         severity: str = "warn", on: list[str] | None = None,
          inputs: list[str] | None = None,
          probes: dict[str, str] | None = None,
          channel: str = "finding",
@@ -66,7 +70,7 @@ def rule(*, severity: str = "warn", on: list[str] | None = None,
 
     New managed rules persist an immutable 16-character ``id`` and mutable
     ``name``. Legacy files are migrated by the loader/editor. ``title`` is
-    retained as a compatibility alias for ``name``. ``inputs`` configures ``ctx.input()``.
+    retained as a compatibility alias for ``name``.
     ``spec``/``examples`` are optional PAW metadata; Input/Output cases embedded
     directly in ``spec`` are preferred over a duplicate examples list.
     """
@@ -80,7 +84,10 @@ def rule(*, severity: str = "warn", on: list[str] | None = None,
             else fn.__name__.replace("_", " ").title()
         )
         setattr(fn, RULE_ATTR, RuleDef(
-            id=rid, title=ttl, severity=severity, on=list(on or []),
+            id=rid, title=ttl, trigger=trigger,
+            input_pointer=input_pointer,
+            max_input_bytes=int(max_input_bytes),
+            severity=severity, on=list(on or []),
             inputs=list(inputs or []),
             probes=dict(probes or {}),
             channel=channel,
