@@ -27,12 +27,16 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
+
 from . import __version__, config, paw_runtime, rules_api, scaffold
 from .adapters.cursor import projects as cursor_projects
 from .core import audit
 from .core.attention import AttentionStore
 from .core.engine import Engine, RuleContext
-from .core.evaluation import normalize_evaluation
 from .core.events import (
     Event, MESSAGE, QUESTION_REQUEST, SESSION_START, SESSION_STOP, USER_PROMPT,
 )
@@ -43,7 +47,7 @@ from .core.rule import (
     LoadedRule, RuleLoadError, load_rule_file, load_rules_with_errors,
     new_rule_id, rule_paths,
 )
-from .core.store import VerdictStore
+from .core.store import VerdictStore, reset_development_finding_history
 from .ipc import PROTOCOL_VERSION
 from .sdk import RULE_ATTR, RuleDef
 
@@ -122,6 +126,7 @@ class Daemon:
     def __init__(self) -> None:
         self.started_at = time.time()
         self.runtime = paw_runtime.shared()
+        reset_development_finding_history()
         self.store = VerdictStore()
         self.attention = AttentionStore()
         self.incidents = IncidentStore()
@@ -360,7 +365,7 @@ class Daemon:
     def _on_verdict(self, verdict) -> None:
         with self._state_lock:
             self._last_successful_audit = verdict.ts
-        _log(f"verdict [{verdict.severity}] {verdict.rule_id}: {verdict.message}")
+        _log(f"verdict [{verdict.severity}] {verdict.rule_id}")
 
     def _on_rule_error(
         self, rule: LoadedRule, project_root: str, message: str
@@ -1139,19 +1144,20 @@ class Daemon:
             entry = audit.read_finding(
                 finding["project_root"],
                 finding_id,
-                rule_id=finding.get("rule_id"),
-                ts=finding.get("ts"),
             )
             current_rule = rules_api.get_rule(
                 finding["rule_id"], finding["project_root"]) or {}
             current_source = str(current_rule.get("source", ""))
-            recorded_source = str((entry or {}).get("rule_source", ""))
+            evaluation = dict(finding.get("evaluation") or {})
+            if evaluation.get("schema_version") != 3:
+                return {"ok": False, "error": "unsupported finding schema"}
+            recorded_source = str(
+                (evaluation.get("rule") or {}).get("source", ""))
             working_hash = (
                 hashlib.sha256(current_source.encode("utf-8")).hexdigest()
                 if current_source else ""
             )
             current_hash = current_rule.get("active_hash") or working_hash
-            evaluation = normalize_evaluation(finding, entry)
             ledger = self.ledgers.get(
                 finding.get("conversation_id", ""), finding["project_root"])
             ledger_window = ledger.context_window(
@@ -1179,10 +1185,6 @@ class Daemon:
                     entry and entry.get("rule_source_hash")
                     and current_hash
                     and entry.get("rule_source_hash") != current_hash),
-                "occurrences": self.store.occurrences(
-                    finding.get("fingerprint", ""), limit=100),
-                "occurrence_count": self.store.occurrence_count(
-                    finding.get("fingerprint", "")),
             }
         if rtype == "ledger_window":
             finding = self.store.get(int(req.get("id", 0)))
@@ -1190,13 +1192,9 @@ class Daemon:
                 return {"ok": False, "error": "finding not found"}
             ledger = self.ledgers.get(
                 finding.get("conversation_id", ""), finding["project_root"])
-            entry = audit.read_finding(
-                finding["project_root"],
-                int(finding["id"]),
-                rule_id=finding.get("rule_id"),
-                ts=finding.get("ts"),
-            )
-            evaluation = normalize_evaluation(finding, entry)
+            evaluation = dict(finding.get("evaluation") or {})
+            if evaluation.get("schema_version") != 3:
+                return {"ok": False, "error": "unsupported finding schema"}
             start_value = req.get("start")
             return {
                 "ok": True,
@@ -1693,7 +1691,20 @@ class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     allow_reuse_address = True
 
 
+_daemon_lock_handle = None
+
+
 def _single_instance_or_exit() -> None:
+    global _daemon_lock_handle
+    lock = config.state_dir() / "daemon.lock"
+    handle = lock.open("a+")
+    if fcntl is not None:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("daemon already starting or running", file=sys.stderr)
+            sys.exit(0)
+    _daemon_lock_handle = handle
     from . import ipc
     if ipc.ping():
         print("daemon already running", file=sys.stderr)

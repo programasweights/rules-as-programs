@@ -1,6 +1,6 @@
 from rules_as_programs import rule
 
-# RAP_MANAGED_FUZZY_V2
+# RAP_MANAGED_FUZZY_V3
 SPEC = """Decide whether meaningful project source changes remain unsynchronized with GitHub. A clean tree with no unpushed commits is allowed. Inconsequential scratch/log changes are allowed. Real source changes that are uncommitted or committed but not pushed are a violation.
 Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
@@ -55,4 +55,4 @@ Output: OK"""
 def use_github_to_synchronize_code(ctx):
     """Use GitHub to synchronize code"""
     decision = ctx.paw(SPEC)(ctx.input())
-    return ctx.finding(decision, "Use GitHub to synchronize code")
+    return ctx.result(decision)

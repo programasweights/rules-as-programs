@@ -19,8 +19,6 @@ from .. import config
 _lock = threading.Lock()
 MAX_FIELD = 4000  # cap any single captured string so files stay sane
 MAX_RULE_SOURCE = 30000
-MAX_EVALUATED_INPUT = 65536
-MAX_EVALUATED_OUTPUT = 65536
 
 
 def _cap(text: str) -> str:
@@ -43,39 +41,7 @@ def _cap_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _cap_evaluation(evaluation: dict[str, Any] | None) -> dict[str, Any]:
-    value = dict(evaluation or {})
-    input_data = dict(value.get("input") or {})
-    text = str(input_data.get("text", ""))
-    if len(text) > MAX_EVALUATED_INPUT:
-        input_data["text"] = text[:MAX_EVALUATED_INPUT]
-        input_data["recording_complete"] = False
-        input_data["truncation_reason"] = "audit_input_limit"
-        input_data["recorded_char_count"] = MAX_EVALUATED_INPUT
-    else:
-        input_data["recorded_char_count"] = len(text)
-    value["input"] = input_data
-    output = dict(value.get("output") or {})
-    raw_output = str(output.get("raw", ""))
-    if len(raw_output) > MAX_EVALUATED_OUTPUT:
-        output["raw"] = raw_output[:MAX_EVALUATED_OUTPUT]
-        output["recording_complete"] = False
-        output["truncation_reason"] = "audit_output_limit"
-        output["recorded_char_count"] = MAX_EVALUATED_OUTPUT
-    else:
-        output["raw"] = raw_output
-        output["recorded_char_count"] = len(raw_output)
-    output["message"] = _cap(str(output.get("message", "")))
-    value["output"] = output
-    value["calls"] = [
-        {
-            "input": _cap(str(item.get("input", ""))),
-            "output": _cap(str(item.get("output", ""))),
-        }
-        for item in list(value.get("calls") or [])[:20]
-    ]
-    if value.get("trigger"):
-        value["trigger"] = _cap_value(value["trigger"])
-    return value
+    return dict(evaluation or {})
 
 
 def read_recent(project_root: str, rule_id: str | None = None,
@@ -114,15 +80,8 @@ def read_recent(project_root: str, rule_id: str | None = None,
 def read_finding(
     project_root: str,
     finding_id: int,
-    *,
-    rule_id: str | None = None,
-    ts: float | None = None,
 ) -> dict[str, Any] | None:
-    """Read the exact audit entry associated with a verdict.
-
-    Old audit files did not carry ``finding_id``.  For those entries only, use
-    the nearest same-rule timestamp as a conservative compatibility fallback.
-    """
+    """Read the exact audit entry associated with a verdict."""
     path = config.project_log_file(project_root)
     if not path.exists():
         return None
@@ -130,7 +89,6 @@ def read_finding(
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
-    legacy_candidates: list[dict[str, Any]] = []
     for raw in reversed(lines):
         try:
             entry = json.loads(raw)
@@ -138,18 +96,6 @@ def read_finding(
             continue
         if entry.get("finding_id") == finding_id:
             return entry
-        if (
-            rule_id
-            and entry.get("finding_id") is None
-            and entry.get("rule_id") == rule_id
-        ):
-            legacy_candidates.append(entry)
-    if rule_id and ts is not None:
-        if legacy_candidates:
-            return min(
-                legacy_candidates,
-                key=lambda entry: abs(float(entry.get("ts", 0)) - ts),
-            )
     return None
 
 

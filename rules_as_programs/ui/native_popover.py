@@ -877,28 +877,17 @@ class PersistentPopoverRenderer:
                 cell.addSubview_(self._label(
                     "!", (PAD, 15, 16, 18), size=11, bold=True))
             title = str(value.get("rule_title") or value.get("rule_id", "Rule"))
-            if value.get("stale"):
-                title += " · changed"
-            elif value.get("review_reason") == "rule_deleted":
-                title += " · deleted"
             title_field = self._label(
                 title, (42, 14, 200, 20), size=ROW_TITLE_SIZE,
                 weight=NSFontWeightMedium)
             cell.addSubview_(title_field)
-            occurrences = int(value.get("occurrences", 1) or 1)
-            occurrence_field = self._label(
-                f"×{occurrences}" if occurrences > 1 else "",
-                (246, 15, 30, 18), size=META_SIZE,
-                color=NSColor.secondaryLabelColor())
-            cell.addSubview_(occurrence_field)
             age_field = self._label(
                 _relative_time(value.get("last_seen") or value.get("ts", 0)),
                 (278, 15, 38, 18), size=META_SIZE,
                 color=NSColor.secondaryLabelColor())
             cell.addSubview_(age_field)
             for field, leading, width in (
-                (title_field, 42, 200),
-                (occurrence_field, 246, 30),
+                (title_field, 42, 232),
                 (age_field, 278, 38),
             ):
                 field.setTranslatesAutoresizingMaskIntoConstraints_(False)
@@ -910,8 +899,6 @@ class PersistentPopoverRenderer:
             NSLayoutConstraint.activateConstraints_([
                 title_field.centerYAnchor().constraintEqualToAnchor_(
                     cell.centerYAnchor()),
-                occurrence_field.firstBaselineAnchor().constraintEqualToAnchor_(
-                    title_field.firstBaselineAnchor()),
                 age_field.firstBaselineAnchor().constraintEqualToAnchor_(
                     title_field.firstBaselineAnchor()),
             ])
@@ -941,8 +928,7 @@ class PersistentPopoverRenderer:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
             cell.setAccessibilityLabel_(
-                f"{severity_label}, {title}, {occurrences} occurrence"
-                f"{'s' if occurrences != 1 else ''}, "
+                f"{severity_label}, {title}, "
                 f"{_relative_time(value.get('last_seen') or value.get('ts', 0))}")
         elif kind == "issue":
             cell.addSubview_(self._label(

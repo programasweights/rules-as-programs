@@ -31,7 +31,7 @@ class FakeRuntime:
         return self.output
 
 
-def test_exact_evaluated_input_survives_audit_above_legacy_cap(
+def test_exact_evaluated_input_survives_audit_without_trace_cap(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
@@ -54,8 +54,7 @@ def test_exact_evaluated_input_survives_audit_above_legacy_cap(
         severity="warn",
         on=[MESSAGE],
         inputs=[MESSAGE],
-        fn=lambda ctx: ctx.finding(
-            ctx.paw("spec")(ctx.input()), "finding"),
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input())),
         spec="spec",
         scope="project",
         source_path=str(rule_path),
@@ -72,7 +71,7 @@ def test_exact_evaluated_input_survives_audit_above_legacy_cap(
 
     assert len(evaluated["text"]) > 4000
     assert evaluated["text"].endswith(text)
-    assert evaluated["recording_complete"]
+    assert entry["evaluation"]["schema_version"] == 3
     assert evaluated["event_ids"] == [event.id]
     assert entry["evaluation"]["trigger"]["included_in_input"] is True
     assert evaluated["sha256"] == hashlib.sha256(
@@ -118,7 +117,7 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
 
     def evaluate(ctx):
         ledger.append(late)
-        return ctx.finding(ctx.paw("spec")(ctx.input()), "finding")
+        return ctx.result(ctx.paw("spec")(ctx.input()))
 
     rule = LoadedRule(
         id=new_rule_id(), title="Frozen", severity="warn",
@@ -139,7 +138,7 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
     assert entry["evaluation"]["context_through_seq"] == 10
 
 
-def test_custom_paw_and_deterministic_inputs_are_described_truthfully(
+def test_custom_and_deterministic_rules_use_strict_severity_results(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
@@ -159,8 +158,7 @@ def test_custom_paw_and_deterministic_inputs_are_described_truthfully(
     custom = LoadedRule(
         id=new_rule_id(), title="Custom", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE],
-        fn=lambda ctx: ctx.finding(
-            ctx.paw("spec")("custom input"), "custom"),
+        fn=lambda ctx: ctx.result(ctx.paw("spec")("custom input")),
         spec="spec", scope="project", source_path=str(rule_path))
     engine = Engine(
         FakeRuntime(output="WARNING"), store, lambda _project: [custom],
@@ -169,52 +167,28 @@ def test_custom_paw_and_deterministic_inputs_are_described_truthfully(
     custom_evaluation = audit.read_finding(
         str(project), custom_verdict.id)["evaluation"]
     assert custom_evaluation["input"]["text"] == "custom input"
-    assert not custom_evaluation["input"]["source_mapping_available"]
     assert custom_evaluation["trigger"]["included_in_input"] is None
+
+    def deterministic_result(ctx):
+        ctx.input()
+        return ctx.result("WARNING")
 
     deterministic = LoadedRule(
         id=new_rule_id(), title="Deterministic", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE],
-        fn=lambda _ctx: ("warn", "deterministic"),
+        fn=deterministic_result,
         scope="project", source_path=str(rule_path))
     deterministic_verdict = engine.evaluate(deterministic, ledger, event)
     deterministic_evaluation = audit.read_finding(
         str(project), deterministic_verdict.id)["evaluation"]
-    assert deterministic_evaluation["kind"] == "deterministic"
-    assert not deterministic_evaluation["input"]["recording_complete"]
-    assert deterministic_evaluation["input"]["truncation_reason"] == (
-        "no_universal_deterministic_input")
-    assert deterministic_evaluation["output"]["raw"] == (
-        '["warn", "deterministic"]')
-    assert deterministic_evaluation["output"]["recording_complete"]
+    assert deterministic_evaluation["severity"] == "warn"
+    assert "ledger text" in deterministic_evaluation["input"]["text"]
 
-    def composite_result(ctx):
-        ctx.paw("spec")("auxiliary input")
-        return "deterministic finding"
-
-    composite = LoadedRule(
-        id=new_rule_id(), title="Composite", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE], fn=composite_result,
+    invalid = LoadedRule(
+        id=new_rule_id(), title="Invalid", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE], fn=lambda _ctx: "warning",
         scope="project", source_path=str(rule_path))
-    composite_verdict = engine.evaluate(composite, ledger, event)
-    composite_evaluation = audit.read_finding(
-        str(project), composite_verdict.id)["evaluation"]
-    assert composite_evaluation["kind"] == "composite"
-    assert composite_evaluation["input"]["role"] == "unattributed_paw_call"
-    assert composite_evaluation["output"]["raw"] == "deterministic finding"
-
-    untraced = LoadedRule(
-        id=new_rule_id(), title="Untraced fuzzy", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE],
-        fn=lambda _ctx: "untraced fuzzy finding",
-        spec="external paw_function spec",
-        scope="project", source_path=str(rule_path))
-    untraced_verdict = engine.evaluate(untraced, ledger, event)
-    untraced_evaluation = audit.read_finding(
-        str(project), untraced_verdict.id)["evaluation"]
-    assert untraced_evaluation["kind"] == "untraced_fuzzy"
-    assert untraced_evaluation["input"]["truncation_reason"] == (
-        "untraced_fuzzy_input")
+    assert engine.evaluate(invalid, ledger, event) is None
 
 
 def test_finding_result_links_to_its_specific_paw_call(
@@ -233,9 +207,9 @@ def test_finding_result_links_to_its_specific_paw_call(
 
     def evaluate(ctx):
         selected = ctx.paw("spec")("selected input")
-        selected_result = ctx.finding(selected, "finding")
+        selected_result = ctx.result(selected)
         unrelated = ctx.paw("spec")("unrelated later input")
-        ctx.finding(unrelated, "unrelated finding")
+        ctx.result(unrelated)
         return selected_result
 
     rule = LoadedRule(
@@ -250,8 +224,7 @@ def test_finding_result_links_to_its_specific_paw_call(
     evaluation = audit.read_finding(str(project), verdict.id)["evaluation"]
 
     assert evaluation["input"]["text"] == "selected input"
-    assert evaluation["output"]["raw"] == "WARNING"
-    assert len(evaluation["calls"]) == 2
+    assert evaluation["severity"] == "warn"
 
 
 def test_orphaned_findings_archive_but_fallback_findings_remain(
@@ -264,8 +237,15 @@ def test_orphaned_findings_archive_but_fallback_findings_remain(
         rule_id="rule",
         rule_title="Rule",
         severity="warn",
-        message="violation",
         conversation_id="conversation",
+        evaluation={
+            "schema_version": 3,
+            "rule": {"id": "rule", "name": "Rule", "source": ""},
+            "input": {"text": "", "format": "plain", "event_ids": []},
+            "severity": "warn",
+            "trigger": {},
+            "context_through_seq": 0,
+        },
     )
     store.record(Verdict(project_root=missing_project, **common))
     store.record(Verdict(project_root=fallback_project, **common))
@@ -307,7 +287,7 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         on=[MESSAGE],
         fn=lambda ctx: (
             ctx.evidence(latest=[MESSAGE]),
-            "violation",
+            ctx.result("WARNING"),
         )[1],
         scope="project",
         source_path=str(rule_path),
@@ -456,10 +436,10 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
     project.mkdir()
     ledger = Ledger("conversation", str(project))
     context = RuleContext(ledger, FakeRuntime())
-    assert context.finding("OK", "Rule") is None
-    assert context.finding("INFO", "Rule") == ("info", "Rule")
-    assert context.finding("WARNING", "Rule") == ("warn", "Rule")
-    assert context.finding("CRITICAL", "Rule") == ("critical", "Rule")
+    assert context.result("OK") is None
+    assert context.result("INFO") == ("info",)
+    assert context.result("WARNING") == ("warn",)
+    assert context.result("CRITICAL") == ("critical",)
 
     errors = []
     store = VerdictStore(tmp_path / "verdicts.db")
@@ -468,7 +448,7 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
         title="Rule",
         severity="warn",
         on=[MESSAGE],
-        fn=lambda ctx: ctx.finding("HIGH", "Rule"),
+        fn=lambda ctx: ctx.result("HIGH"),
     )
     engine = Engine(
         FakeRuntime(), store, lambda _project: [invalid],
@@ -509,8 +489,7 @@ def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
         severity="warn",
         on=[MESSAGE],
         inputs=[MESSAGE],
-        fn=lambda ctx: ctx.finding(
-            ctx.paw("spec")(ctx.input()), "finding"),
+        fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input())),
         spec="spec",
         compiler="paw-ft-bs48",
     )

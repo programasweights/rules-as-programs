@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import sys
 
 import pytest
@@ -131,6 +130,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         NSScrollView,
         NSStatusBar,
         NSTableView,
+        NSTextField,
     )
     from rules_as_programs.ui.macos_app import MacOSController, _paw_template_image
     from rules_as_programs.ui.model import demo_snapshot
@@ -185,6 +185,12 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert hover_row.hovered()
     assert rendered_png(hover_row) != resting
     finding_cell = controller.renderer.row_view(finding_model)
+    finding_text = [
+        str(control.stringValue())
+        for control in _walk(finding_cell)
+        if isinstance(control, NSTextField)
+    ]
+    assert not any(text.startswith("×") for text in finding_text)
     finding_cell.layoutSubtreeIfNeeded()
     finding_buttons = [
         control for control in _walk(finding_cell)
@@ -335,12 +341,12 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     controller.detail_loading = False
     controller.finding_detail = {
         "finding": group,
-        "occurrences": [group],
         "current_rule": {
             "source": "from rules_as_programs import rule\n",
             "scope": "project",
             "on": ["message"],
             "inputs": ["message"],
+            "definition": {"source_path": "/tmp/rule.py"},
         },
         "audit": {"rule_source": "from rules_as_programs import rule\n"},
         "recorded_rule_projection": {
@@ -348,21 +354,21 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
                     "Return ONLY one of: OK, INFO, WARNING, CRITICAL",
         },
         "evaluation": {
-            "schema_version": 2,
-            "kind": "paw",
+            "schema_version": 3,
+            "rule": {
+                "id": group["rule_id"],
+                "name": group["rule_title"],
+                "source": "from rules_as_programs import rule\n",
+                "source_hash": "sourcehash",
+            },
             "input": {
                 "text": "## Latest message\nAgent response",
                 "sha256": "inputhash",
                 "char_count": 32,
-                "recording_complete": True,
                 "format": "rap-evidence-v1",
                 "event_ids": ["event"],
             },
-            "output": {
-                "raw": "WARNING",
-                "severity": "warn",
-                "message": "Evidence was insufficient.",
-            },
+            "severity": "warn",
             "trigger": {
                 "event_id": "event",
                 "kind": "message",
@@ -396,64 +402,53 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert controller.content_controller.view() is root_identity
     assert controller.renderer.table is table_identity
     assert controller.popover.contentSize().height < 600
-    from rules_as_programs.ui.simplified_inspector import FindingInspectorManager
+    from rules_as_programs.ui.finding_inspector import FindingInspectorManager
     inspectors = FindingInspectorManager(controller.model, lambda _rule: None)
     inspectors.open(controller.finding_detail)
     inspector = next(iter(inspectors.inspectors.values()))
     assert str(inspector.rule_button.title()) == group["rule_title"]
+    assert str(inspector.window.title()) == ""
+    assert not hasattr(inspector, "finding_label")
+    assert not hasattr(inspector, "output_label")
+    assert not hasattr(inspector, "copy_input_button")
+    inspector_text = [
+        str(control.stringValue())
+        for control in _walk(inspector.window.contentView())
+        if isinstance(control, NSTextField)
+    ]
+    assert "Evidence was insufficient." not in inspector_text
+    assert not any("changed" in text.lower() for text in inspector_text)
+    assert not inspector.detail_page.isHidden()
+    assert inspector.context_page.isHidden()
     assert len([
         control for control in _walk(inspector.window.contentView())
         if isinstance(control, NSScrollView)
-    ]) == 1
-    assert "Evidence was insufficient" in str(inspector.finding_label.stringValue())
-    assert "WARNING" in str(inspector.output_label.stringValue())
-    assert "Complete recorded input" in str(inspector.input_status.stringValue())
-    assert "Included in evaluation" in str(inspector.input_view.string())
+    ]) == 2
+    assert "Latest message" in str(inspector.input_view.string())
     inspector.set_input_mode(1)
     assert str(inspector.input_view.string()) == (
         "## Latest message\nAgent response")
-    inspector.presentation["input"]["recording_complete"] = False
-    inspector.copy_exact_input()
-    assert "fragment" in str(inspector.input_status.stringValue())
-    inspector.presentation["input"]["recording_complete"] = True
-    assert inspector.context_stack.isHidden()
-    assert len(inspector.context_stack.arrangedSubviews()) == 0
-    assert inspector.rule_button.nextKeyView() == inspector.artifacts_button
-    inspector.toggle_context()
-    assert not inspector.context_stack.isHidden()
-    assert inspector.context_button.nextKeyView() == inspector.context_earlier
-    assert len(inspector.context_stack.arrangedSubviews()) == 1
-    assert str(inspector.input_view.accessibilityLabel()) == "Evaluated input"
+    inspector.show_context()
+    assert inspector.detail_page.isHidden()
+    assert not inspector.context_page.isHidden()
+    assert inspector.context_table.numberOfRows() == 1
+    inspector.window.contentView().layoutSubtreeIfNeeded()
+    assert inspector.context_scroll.frame().size.width >= (
+        inspector.context_page.frame().size.width - 1)
+    inspector.show_detail()
+    assert not inspector.detail_page.isHidden()
+    assert str(inspector.input_view.accessibilityLabel()) == "Exact rule input"
     inspector.window.setContentSize_((650, 520))
     inspector.window.contentView().layoutSubtreeIfNeeded()
     assert inspector.review_button.frame().origin.x >= 0
+    assert inspector.input_scroll.frame().size.width > 600
+    assert inspector.input_view.frame().size.width > 600
     edit_payloads = []
     edit_manager = FindingInspectorManager(
         controller.model, lambda payload: edit_payloads.append(payload))
     edit_manager.edit_rule(controller.finding_detail)
-    assert edit_payloads[0]["_recorded_source"] == (
-        "from rules_as_programs import rule\n")
-    assert edit_payloads[0]["_finding_context"]["evaluation"]["output"][
-        "raw"] == "WARNING"
-    unavailable_detail = copy.deepcopy(controller.finding_detail)
-    unavailable_detail["current_rule"] = {}
-    unavailable_detail["audit"]["rule_source"] = (
-        "partial source ...[truncated]")
-    edit_manager.edit_rule(unavailable_detail)
-    assert len(edit_payloads) == 1
+    assert edit_payloads[0]["_finding_context"]["evaluation"]["severity"] == "warn"
     inspector.window.close()
-    long_detail = copy.deepcopy(controller.finding_detail)
-    long_detail["finding"]["id"] = 999
-    long_detail["finding"]["rule_title"] = "Long rule " + "x" * 5000
-    dense_input = "\n".join(f"line {index}" for index in range(300))
-    long_detail["evaluation"]["input"]["text"] = dense_input
-    long_detail["evaluation"]["input"]["char_count"] = len(dense_input)
-    inspectors.open(long_detail)
-    long_inspector = inspectors.inspectors[999]
-    long_inspector.window.contentView().layoutSubtreeIfNeeded()
-    assert long_inspector.window.frame().size.width <= 900
-    assert long_inspector.input_height_constraint.constant() > 4000
-    long_inspector.window.close()
     controller.request_confirmation(
         "Disable?", "Stops evaluation.", "Disable", lambda: None)
     assert controller.confirmation
@@ -627,14 +622,13 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
             "finding": {
                 "id": 42,
                 "severity": "warn",
-                "message": "Observed finding",
             },
             "evaluation": {
+                    "schema_version": 3,
                 "input": {
                     "text": "exact finding input",
-                    "recording_complete": True,
                 },
-                "output": {"raw": "WARNING"},
+                    "severity": "warn",
             },
             "rule_changed": True,
         },
@@ -645,17 +639,7 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     document.window.contentView().layoutSubtreeIfNeeded()
     assert document.window.frame().size.width <= 1000
     document.name_field.setStringValue_("Project convention")
-    incomplete_context = copy.deepcopy(document.finding_context)
-    incomplete_context["evaluation"]["input"]["recording_complete"] = False
-    document.update_finding_context(incomplete_context)
-    assert not document.finding_case_button.isEnabled()
-    incomplete_context["evaluation"]["input"]["recording_complete"] = True
-    document.update_finding_context(incomplete_context)
-    incomplete_context["evaluation"]["output"]["recording_complete"] = False
-    document.update_finding_context(incomplete_context)
-    assert not document.finding_case_button.isEnabled()
-    incomplete_context["evaluation"]["output"]["recording_complete"] = True
-    document.update_finding_context(incomplete_context)
+    assert document.finding_case_button.isEnabled()
     document.window.contentView().layoutSubtreeIfNeeded()
     toolbar_ids = {
         str(item.itemIdentifier()) for item in document.toolbar.items()}

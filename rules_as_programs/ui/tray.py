@@ -87,8 +87,8 @@ def _run_pystray() -> int:
         value = state.get("snapshot")
         return value if isinstance(value, dict) else {}
 
-    def review(ids: list[int]) -> None:
-        ipc.send_request({"type": "review", "ids": ids})
+    def review(fingerprint: str) -> None:
+        ipc.send_request({"type": "review", "fingerprint": fingerprint})
 
     def build_menu():
         data = snapshot()
@@ -123,12 +123,11 @@ def _run_pystray() -> int:
             sub: list[Any] = []
             for group in groups[:12]:
                 title = group.get("rule_title") or group.get("rule_id", "Rule")
-                message = str(group.get("message", "")).replace("\n", " ")
-                label = f"{title}: {message[:80]}"
-                ids = [int(value) for value in group.get("ids", [group.get("id")]) if value]
+                label = str(title)
                 sub.append(pystray.MenuItem(
                     label,
-                    lambda _icon, _item, values=ids: review(values),
+                    lambda _icon, _item, value=str(
+                        group.get("fingerprint", "")): review(value),
                 ))
             sub.append(pystray.Menu.SEPARATOR)
             sub.append(pystray.MenuItem(

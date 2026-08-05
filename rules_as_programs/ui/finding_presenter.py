@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -99,8 +100,9 @@ def evidence_sections(text: str) -> list[dict[str, Any]]:
 def present_finding(detail: dict[str, Any]) -> dict[str, Any]:
     finding = dict(detail.get("finding") or {})
     evaluation = dict(detail.get("evaluation") or {})
+    if evaluation.get("schema_version") != 3:
+        raise ValueError("unsupported finding schema")
     input_data = dict(evaluation.get("input") or {})
-    output = dict(evaluation.get("output") or {})
     input_text = str(input_data.get("text", ""))
     text = classify_text(input_text)
     if (
@@ -122,10 +124,7 @@ def present_finding(detail: dict[str, Any]) -> dict[str, Any]:
             "from_snapshot": True,
         }]
     current_rule = dict(detail.get("current_rule") or {})
-    recorded_source = str((detail.get("audit") or {}).get("rule_source", ""))
-    recorded_source_complete = bool(
-        recorded_source
-        and not recorded_source.endswith(" ...[truncated]"))
+    recorded_source = str((evaluation.get("rule") or {}).get("source", ""))
     trigger_index = next(
         (index for index, event in enumerate(events) if event.get("is_trigger")),
         -1,
@@ -140,35 +139,36 @@ def present_finding(detail: dict[str, Any]) -> dict[str, Any]:
             or (evaluation.get("rule") or {}).get("name")
             or finding.get("rule_id", "Rule")),
         "severity": str(
-            output.get("severity") or finding.get("severity", "info")),
-        "finding_message": str(
-            output.get("message") or finding.get("message", "")),
+            evaluation.get("severity") or finding.get("severity", "info")),
         "project_root": str(finding.get("project_root", "")),
         "occurred_at": float(finding.get("ts", 0) or 0),
-        "occurrences": int(
-            detail.get("occurrence_count")
-            or finding.get("occurrences")
-            or len(detail.get("occurrences") or [])
-            or 1),
-        "evaluation_kind": str(evaluation.get("kind", "deterministic")),
+        "relative_time": relative_time(float(finding.get("ts", 0) or 0)),
         "input": input_data,
         "input_text": input_text,
         "input_presentation": text,
         "input_sections": (
             evidence_sections(input_text)
             if text.format == "rap-evidence-v1" else []),
-        "output_raw": str(output.get("raw", "")),
-        "output_severity": str(
-            output.get("severity") or finding.get("severity", "")),
         "trigger": trigger,
         "context_preview": preview,
         "context_events": events,
-        "rule_changed": bool(detail.get("rule_changed")),
         "rule_deleted": bool(
             finding.get("review_reason") == "rule_deleted"
             or recorded_source and not current_rule),
         "rule_editable": bool(current_rule),
-        "recorded_source_complete": recorded_source_complete,
+        "recorded_source_complete": bool(recorded_source),
         "recorded_rule_projection": dict(
             detail.get("recorded_rule_projection") or {}),
+        "evaluation": evaluation,
     }
+
+
+def relative_time(timestamp: float, now: float | None = None) -> str:
+    seconds = max(0, int((now or time.time()) - float(timestamp or 0)))
+    if seconds < 60:
+        return "now" if seconds < 10 else f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"

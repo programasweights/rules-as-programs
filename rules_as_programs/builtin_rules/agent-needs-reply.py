@@ -1,6 +1,6 @@
 from rules_as_programs import rule
 
-# RAP_MANAGED_FUZZY_V2
+# RAP_MANAGED_FUZZY_V3
 SPEC = """Decide whether the agent's completed response directly requires the user to answer before useful progress can continue. Required choices, missing information, requested confirmation, and blocking clarification are violations. Rhetorical questions, optional offers, and ordinary conclusions are allowed.
 Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
@@ -33,4 +33,4 @@ Output: OK"""
 def detect_when_an_agent_needs_a_reply(ctx):
     """Detect when an agent needs a reply"""
     decision = ctx.paw(SPEC)(ctx.input())
-    return ctx.finding(decision, "Detect when an agent needs a reply")
+    return ctx.result(decision)

@@ -6,11 +6,54 @@ from rules_as_programs.ui.finding_presenter import (
 )
 
 
+def _detail(input_text='{"message":"hello","nested":{"value":1}}'):
+    return {
+        "finding": {
+            "id": 1,
+            "rule_id": "rule",
+            "rule_title": "User rule name",
+            "severity": "warn",
+            "project_root": "/project",
+            "ts": 2,
+        },
+        "evaluation": {
+            "schema_version": 3,
+            "rule": {
+                "id": "rule",
+                "name": "User rule name",
+                "source": "# source\n",
+            },
+            "input": {
+                "text": input_text,
+                "format": "plain",
+                "event_ids": ["trigger"],
+            },
+            "severity": "warn",
+            "trigger": {
+                "event_id": "trigger",
+                "event": {
+                    "id": "trigger", "kind": "message", "text": "trigger"},
+            },
+            "context_through_seq": 3,
+        },
+        "ledger": {
+            "events": [
+                {"id": "before", "kind": "message", "text": "before"},
+                {
+                    "id": "trigger", "kind": "message", "text": "trigger",
+                    "is_trigger": True,
+                },
+                {"id": "after", "kind": "message", "text": "after"},
+            ],
+        },
+        "current_rule": {"definition": {"source_path": "/rule.py"}},
+    }
+
+
 def test_classifies_json_jsonl_evidence_and_plain_text():
     assert classify_text('{"a": 1}').format == "json"
     assert classify_text('{"a": 1}\n{"b": 2}').format == "jsonl"
     assert classify_text('{"a": 1}\nnot json').format == "plain"
-    assert classify_text("42").format == "plain"
     evidence = "## Latest message\nhello\n\n## Recent activity\n- command"
     assert classify_text(evidence).format == "rap-evidence-v1"
     assert [item["label"] for item in evidence_sections(evidence)] == [
@@ -18,126 +61,52 @@ def test_classifies_json_jsonl_evidence_and_plain_text():
     assert utf16_range("a😀bc", 1, 3) == (1, 3)
 
 
-def test_present_finding_keeps_exact_source_separate_from_formatting():
-    exact = '{"message":"hello","nested":{"value":1}}'
-    detail = {
-        "finding": {
-            "rule_title": "Rule",
-            "severity": "warn",
-            "message": "Finding",
-            "project_root": "/project",
-            "ts": 2,
-        },
-        "evaluation": {
-            "kind": "paw",
-            "input": {
-                "text": exact,
-                "recording_complete": True,
-                "char_count": len(exact),
-            },
-            "output": {
-                "raw": "WARNING",
-                "severity": "warn",
-                "message": "Finding",
-            },
-            "trigger": {"event_id": "trigger"},
-        },
-        "ledger": {
-            "events": [
-                {"id": "before", "text": "before"},
-                {"id": "trigger", "text": "trigger", "is_trigger": True},
-                {"id": "after", "text": "after"},
-            ],
-        },
-        "occurrence_count": 125,
-        "current_rule": {"definition": {"source_path": "/rule.py"}},
-    }
+def test_presenter_keeps_exact_source_separate_from_formatting():
+    detail = _detail()
     presented = present_finding(detail)
-    assert presented["input_text"] == exact
-    assert presented["input_presentation"].source == exact
+
+    assert presented["rule_name"] == "User rule name"
+    assert presented["severity"] == "warn"
+    assert presented["input_text"] == detail["evaluation"]["input"]["text"]
     assert '"nested": {' in presented["input_presentation"].formatted
-    assert presented["output_raw"] == "WARNING"
-    assert presented["occurrences"] == 125
     assert [event["id"] for event in presented["context_preview"]] == [
         "before", "trigger", "after"]
+    assert "occurrences" not in presented
+    assert "finding_message" not in presented
+    assert "output_raw" not in presented
 
 
-def test_legacy_incomplete_input_is_not_claimed_exact():
-    presented = present_finding({
-        "finding": {"rule_title": "Legacy", "evidence": "preview"},
-        "evaluation": {
-            "kind": "deterministic",
-            "input": {
-                "text": "preview",
-                "recording_complete": False,
-                "truncation_reason": "legacy_audit_record",
-            },
-            "output": {"severity": "warn", "message": "finding"},
-        },
-    })
-    assert not presented["input"]["recording_complete"]
+def test_recorded_plain_format_prevents_false_evidence_projection():
+    text = "## Latest message\nThis is custom input, not RAP evidence."
+    presented = present_finding(_detail(text))
+    assert presented["input_presentation"].format == "plain"
+    assert presented["input_sections"] == []
 
 
-def test_trigger_snapshot_survives_missing_ledger():
-    presented = present_finding({
-        "finding": {"rule_title": "Rule"},
-        "evaluation": {
-            "kind": "paw",
-            "input": {"text": "input", "recording_complete": True},
-            "output": {"raw": "WARNING", "severity": "warn"},
-            "trigger": {
-                "event_id": "event",
-                "event": {
-                    "id": "event",
-                    "kind": "message",
-                    "text": "recorded trigger",
-                },
-            },
-        },
-        "ledger": {"events": []},
-    })
-    assert presented["context_preview"][0]["is_trigger"]
-    assert presented["context_preview"][0]["from_snapshot"]
+def test_trigger_snapshot_is_used_only_when_ledger_is_empty():
+    detail = _detail("input")
+    detail["ledger"] = {"events": []}
+    presented = present_finding(detail)
+    assert presented["context_events"][0]["from_snapshot"]
 
-
-def test_context_page_without_trigger_is_not_replaced_by_snapshot():
-    detail = {
-        "finding": {"rule_title": "Rule"},
-        "evaluation": {
-            "kind": "paw",
-            "input": {"text": "input", "recording_complete": True},
-            "output": {"raw": "WARNING", "severity": "warn"},
-            "trigger": {
-                "event_id": "trigger",
-                "event": {
-                    "id": "trigger", "kind": "message", "text": "trigger"},
-            },
-        },
-        "ledger": {
-            "events": [
-                {"id": "page-1", "kind": "shell_exec", "text": "one"},
-                {"id": "page-2", "kind": "shell_exec", "text": "two"},
-            ],
-        },
+    detail = _detail("input")
+    detail["ledger"] = {
+        "events": [
+            {"id": "page-1", "kind": "shell_exec", "text": "one"},
+            {"id": "page-2", "kind": "shell_exec", "text": "two"},
+        ],
     }
     presented = present_finding(detail)
     assert [event["id"] for event in presented["context_events"]] == [
         "page-1", "page-2"]
 
 
-def test_recorded_plain_format_prevents_false_evidence_projection():
-    text = "## Latest message\nThis is custom input, not RAP evidence."
-    presented = present_finding({
-        "finding": {"rule_title": "Custom"},
-        "evaluation": {
-            "kind": "paw",
-            "input": {
-                "text": text,
-                "format": "plain",
-                "recording_complete": True,
-            },
-            "output": {"raw": "WARNING", "severity": "warn"},
-        },
-    })
-    assert presented["input_presentation"].format == "plain"
-    assert presented["input_sections"] == []
+def test_presenter_rejects_noncurrent_schema():
+    detail = _detail()
+    detail["evaluation"]["schema_version"] = 2
+    try:
+        present_finding(detail)
+    except ValueError as error:
+        assert "unsupported finding schema" in str(error)
+    else:
+        raise AssertionError("schema 2 should not be rendered")

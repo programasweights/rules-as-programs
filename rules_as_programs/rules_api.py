@@ -603,7 +603,7 @@ def source_projection(source: str) -> dict[str, Any]:
         and isinstance(function.body[0].value, ast.Constant)
         and isinstance(function.body[0].value.value, str)
     ) else function.body
-    managed_v2_shape = False
+    managed_v3_shape = False
     if (
         len(executable_body) == 2
         and isinstance(executable_body[0], ast.Assign)
@@ -614,14 +614,14 @@ def source_projection(source: str) -> dict[str, Any]:
             return_source = ast.unparse(executable_body[1].value)
         except Exception:
             assignment_source = return_source = ""
-        managed_v2_shape = (
+        managed_v3_shape = (
             assignment_source == "ctx.paw(SPEC)(ctx.input())"
-            and return_source.startswith("ctx.finding(")
+            and return_source == "ctx.result(decision)"
         )
     managed_fuzzy = (
         MANAGED_FUZZY_MARKER in source
         and bool(spec)
-        and managed_v2_shape
+        and managed_v3_shape
     )
     description = ""
     output_labels: list[str] = []
@@ -1110,7 +1110,7 @@ def rename_rule(
     }
 
 
-MANAGED_FUZZY_MARKER = "# RAP_MANAGED_FUZZY_V2"
+MANAGED_FUZZY_MARKER = "# RAP_MANAGED_FUZZY_V3"
 
 DEFAULT_FUZZY_DESCRIPTION = (
     "Decide whether rsync or scp was used to synchronize project source code "
@@ -1180,7 +1180,7 @@ def generate_managed_fuzzy_source(
         f"def {function_name}(ctx):\n"
         f'    """{safe_name}"""\n'
         "    decision = ctx.paw(SPEC)(ctx.input())\n"
-        f"    return ctx.finding(decision, {name!r})\n"
+        "    return ctx.result(decision)\n"
     )
 
 
@@ -1207,7 +1207,7 @@ PLAIN_RULE_TEMPLATE = '''from rules_as_programs import rule
 def {func}(ctx):
     """{title}"""
     if "unsafe phrase" in ctx.input().lower():
-        return "The agent used the unsafe phrase."
+        return ctx.result("WARNING")
 '''
 
 

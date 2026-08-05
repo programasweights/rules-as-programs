@@ -4,19 +4,17 @@ A rule is ONE decorated function per file:
 
     from rules_as_programs import rule
 
-    SPEC = '''Decide ...\nReturn ONLY one of: SYNCED, UNSYNCED, TRIVIAL\n...'''
+    SPEC = '''Decide ...\nReturn ONLY one of: OK, INFO, WARNING, CRITICAL\n...'''
 
     @rule(severity="warn", on=["session_stop"],
           inputs=["file_edit", "shell_exec"], spec=SPEC)
     def github_sync(ctx):
         "Use GitHub to synchronize code."          # title (from docstring)
-        evidence = ctx.input()
-        if ctx.paw(SPEC)(evidence) == "UNSYNCED":
-            return "Meaningful local changes are not committed/pushed to GitHub."
+        decision = ctx.paw(SPEC)(ctx.input())
+        return ctx.result(decision)
 
-Return ``None`` for "all good", or a message string for a finding (at the
-decorator's ``severity``). Return ``("critical", "message")`` to override severity
-for that one finding.
+Finding rules return ``ctx.result("OK"|"INFO"|"WARNING"|"CRITICAL")``. ``OK``
+returns ``None``; the other labels create one strict severity result.
 
 The ``ctx`` argument is handed to the function by the engine (the author never
 constructs it). ``inputs=[...]`` configures ``ctx.input()``. It also exposes:

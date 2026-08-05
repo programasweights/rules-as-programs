@@ -17,7 +17,7 @@ from typing import Any
 
 from . import config
 
-PROTOCOL_VERSION = 10
+PROTOCOL_VERSION = 11
 
 
 def send_request(obj: dict[str, Any], timeout: float = 2.0) -> dict[str, Any] | None:

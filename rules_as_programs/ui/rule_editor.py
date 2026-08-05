@@ -1003,11 +1003,6 @@ class RAPRuleEditorDocument(NSObject):
         finding = context.get("finding") or {}
         evaluation = context.get("evaluation") or {}
         input_text = str((evaluation.get("input") or {}).get("text", ""))
-        input_complete = bool(
-            (evaluation.get("input") or {}).get("recording_complete"))
-        output_complete = bool(
-            (evaluation.get("output") or {}).get(
-                "recording_complete", True))
         safe_case = not any(
             line.startswith(("Input:", "Output:"))
             for line in input_text.splitlines())
@@ -1018,14 +1013,11 @@ class RAPRuleEditorDocument(NSObject):
             " · This finding used an older rule revision."
             if context.get("rule_changed") else "")
         self.finding_label.setStringValue_(
-            f"{finding.get('severity', '').title()} · "
-            f"{finding.get('message', '')}{warning}\n"
-            f"Input: {preview or '(not recorded)'}")
+            f"{finding.get('severity', '').title()} finding{warning}\n"
+            f"Input: {preview or '(no input)'}")
         self.finding_callout.setHidden_(not bool(context))
         self.finding_case_button.setEnabled_(
             bool(input_text)
-            and input_complete
-            and output_complete
             and safe_case
             and self.managed_fuzzy
             and not self.custom
@@ -1050,25 +1042,16 @@ class RAPRuleEditorDocument(NSObject):
         context = self.finding_context or {}
         evaluation = context.get("evaluation") or {}
         input_text = str((evaluation.get("input") or {}).get("text", ""))
-        output_data = evaluation.get("output") or {}
-        output = str(output_data.get("raw", "")).strip().upper()
-        if output not in {"OK", "INFO", "WARNING", "CRITICAL"}:
-            output = {
-                "info": "INFO",
-                "warn": "WARNING",
-                "warning": "WARNING",
-                "critical": "CRITICAL",
-            }.get(str(output_data.get("severity", "")).lower(), "WARNING")
-        complete = bool(
-            (evaluation.get("input") or {}).get("recording_complete"))
-        output_complete = bool(output_data.get("recording_complete", True))
+        output = {
+            "info": "INFO",
+            "warn": "WARNING",
+            "critical": "CRITICAL",
+        }.get(str(evaluation.get("severity", "")).lower(), "WARNING")
         safe_case = not any(
             line.startswith(("Input:", "Output:"))
             for line in input_text.splitlines())
         if (
             not input_text
-            or not complete
-            or not output_complete
             or not safe_case
             or self.custom
             or self._advanced_window is not None

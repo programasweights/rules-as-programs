@@ -13,7 +13,6 @@ concurrent workers and trivially testable.
 from __future__ import annotations
 
 import hashlib
-import json
 import subprocess
 import threading
 from pathlib import Path
@@ -45,12 +44,10 @@ class PawDecision(str):
 
 
 class FindingResult(tuple):
-    """Tuple-compatible finding result linked to its trace entry."""
+    """Strict severity result linked to its trace entry."""
 
-    def __new__(
-        cls, severity: str, message: str, trace_index: int
-    ):
-        instance = tuple.__new__(cls, (severity, message))
+    def __new__(cls, severity: str, trace_index: int):
+        instance = tuple.__new__(cls, (severity,))
         instance.trace_index = trace_index
         return instance
 
@@ -204,8 +201,8 @@ class RuleContext:
             return PawDecision(str(label), trace_index)
         return call
 
-    def finding(self, level: str, message: str):
-        """Map a managed fuzzy output label to an engine finding result."""
+    def result(self, level: str):
+        """Return one strict severity result, or ``None`` for OK."""
         label = str(level or "").strip().upper()
         if label == "OK":
             return None
@@ -222,11 +219,9 @@ class RuleContext:
         self.trace.append({
             "type": "finding_result",
             "level": label,
-            "message": str(message).strip(),
             "paw_trace_index": getattr(level, "trace_index", None),
         })
-        return FindingResult(
-            severity, str(message).strip(), trace_index)
+        return FindingResult(severity, trace_index)
 
 
 class Engine:
@@ -265,26 +260,16 @@ class Engine:
 
     # --- evaluation -----------------------------------------------------
     @staticmethod
-    def _parse_result(rule: LoadedRule, result: Any) -> tuple[str, str] | None:
+    def _parse_result(_rule: LoadedRule, result: Any) -> str | None:
         if result is None:
             return None
-        if isinstance(result, str):
-            msg = result.strip()
-            severity = SEVERITY_ALIASES.get(rule.severity.lower())
-            if not severity:
-                raise ValueError(f"invalid rule severity {rule.severity!r}")
-            return (severity, msg) if msg else None
-        if isinstance(result, (tuple, list)) and len(result) == 2:
-            raw_severity, msg = str(result[0]).strip().lower(), str(result[1]).strip()
-            severity = SEVERITY_ALIASES.get(raw_severity)
-            if not severity:
-                raise ValueError(f"invalid rule severity {result[0]!r}")
-            return (severity, msg) if msg else None
-        text = str(result).strip()
-        severity = SEVERITY_ALIASES.get(rule.severity.lower())
+        if not isinstance(result, FindingResult):
+            raise ValueError(
+                "finding rules must return ctx.result(INFO|WARNING|CRITICAL)")
+        severity = SEVERITY_ALIASES.get(str(result[0]).lower())
         if not severity:
-            raise ValueError(f"invalid rule severity {rule.severity!r}")
-        return (severity, text) if text else None
+            raise ValueError(f"invalid rule severity {result[0]!r}")
+        return severity
 
     def evaluate(
         self, rule: LoadedRule, ledger: Ledger, trigger_event: Event | None = None
@@ -319,7 +304,7 @@ class Engine:
                 pass
         if parsed is None:
             return None
-        severity, message = parsed
+        severity = parsed
         suppressed = False
         if self.is_muted:
             try:
@@ -337,24 +322,30 @@ class Engine:
             hashlib.sha256(rule_source.encode("utf-8")).hexdigest()
             if rule_source else ""
         )
-        sig = (
-            f"{severity}|{message}|source={rule_hash}|"
-            f"suppressed={int(suppressed)}"
-        )
+        sig = f"{severity}|source={rule_hash}|suppressed={int(suppressed)}"
         dedup_key = f"{ledger.conversation_id}:{rule.id}"
         with self._lock:
             if self._last_sig.get(dedup_key) == sig:
                 return None
             self._last_sig[dedup_key] = sig
 
+        evaluation = _evaluation_snapshot(
+            rule,
+            ctx.trace,
+            severity=severity,
+            ledger=ledger,
+            trigger_event=trigger_event,
+            context_through_seq=through_seq,
+            rule_result=result,
+            rule_source=rule_source,
+            rule_source_hash=rule_hash,
+        )
         verdict = Verdict(
             rule_id=rule.id, rule_title=rule.title, severity=severity,
-            message=message, conversation_id=ledger.conversation_id,
-            project_root=ledger.project_root, label=_trace_label(ctx.trace),
-            evidence=_snippet(_trace_input(ctx.trace)),
-            fuzzy=bool(rule.spec),
+            conversation_id=ledger.conversation_id,
+            project_root=ledger.project_root, evaluation=evaluation,
             fingerprint=finding_fingerprint(
-                ledger.project_root, rule.id, message, rule_hash),
+                ledger.project_root, rule.id, severity, rule_hash),
             trigger_event_id=trigger_event.id if trigger_event else "",
             trigger_kind=trigger_event.kind if trigger_event else "",
             source_hash=rule_hash,
@@ -362,23 +353,13 @@ class Engine:
             suppression_reason="rule muted" if suppressed else "",
         )
         verdict.id = self.store.record(verdict)
-        evaluation = _evaluation_snapshot(
-            rule,
-            ctx.trace,
-            severity=severity,
-            message=message,
-            ledger=ledger,
-            trigger_event=trigger_event,
-            context_through_seq=through_seq,
-            rule_result=result,
-        )
         audit.log_violation(
             ledger.project_root,
             verdict.id,
             rule.id,
             rule.title,
             severity,
-            message,
+            "",
             ctx.trace,
             conversation_id=ledger.conversation_id,
             trigger_event_id=verdict.trigger_event_id,
@@ -469,14 +450,13 @@ def _evaluation_snapshot(
     trace: list[dict[str, Any]],
     *,
     severity: str,
-    message: str,
     ledger: Ledger,
     trigger_event: Event | None,
     context_through_seq: int,
     rule_result: Any,
+    rule_source: str,
+    rule_source_hash: str,
 ) -> dict[str, Any]:
-    paw_entries = [
-        item for item in trace if item.get("type") == "paw"]
     evidence_entries = [
         item for item in trace if item.get("type") == "evidence"]
     result_trace_index = getattr(rule_result, "trace_index", None)
@@ -497,15 +477,7 @@ def _evaluation_snapshot(
     )
     evidence = evidence_entries[-1] if evidence_entries else {}
     input_text = str(
-        paw.get("input")
-        if paw else
-        paw_entries[-1].get("input", "")
-        if paw_entries else evidence.get("text", ""))
-    raw_output = (
-        str(paw.get("output", "")) if paw
-        else _raw_rule_result(rule_result)
-    )
-    raw_output_bytes = raw_output.encode("utf-8")
+        paw.get("input") if paw else evidence.get("text", ""))
     standard_input = bool(
         paw and evidence and input_text == str(evidence.get("text", "")))
     included_ids = (
@@ -530,48 +502,20 @@ def _evaluation_snapshot(
     )
     through_seq = min(len(events), max(0, int(context_through_seq)))
     return {
-        "schema_version": 2,
-        "kind": (
-            "paw" if paw
-            else "composite" if paw_entries
-            else "untraced_fuzzy" if rule.spec
-            else "deterministic"
-        ),
-        "calls": [
-            {
-                "input": str(item.get("input", "")),
-                "output": str(item.get("output", "")),
-            }
-            for item in paw_entries
-        ],
+        "schema_version": 3,
         "rule": {
             "id": rule.id,
             "name": rule.title,
             "compiler": rule.compiler,
             "program_id": rule.program_id,
+            "source_hash": rule_source_hash,
+            "source": rule_source,
         },
         "input": {
             "text": input_text,
             "sha256": hashlib.sha256(input_bytes).hexdigest(),
             "char_count": len(input_text),
             "byte_count": len(input_bytes),
-            "recording_complete": bool(paw_entries or evidence),
-            "truncation_reason": (
-                "no_universal_deterministic_input"
-                if not paw_entries and not evidence and not rule.spec else
-                "untraced_fuzzy_input"
-                if not paw_entries and not evidence and rule.spec else
-                "unattributed_paw_call"
-                if paw_entries and not paw else
-                "rule_input_limit"
-                if input_text.startswith("...\n") else ""
-            ),
-            "role": (
-                "evaluated_input" if paw
-                else "unattributed_paw_call" if paw_entries
-                else "recorded_evidence" if evidence
-                else "unavailable"
-            ),
             "format": (
                 "rap-evidence-v1" if standard_input else "plain"),
             "segments": (
@@ -590,17 +534,8 @@ def _evaluation_snapshot(
                 ]
                 if standard_input and item.get("id") and item.get("input_span")
             ],
-            "source_mapping_available": standard_input,
         },
-        "output": {
-            "raw": raw_output,
-            "sha256": hashlib.sha256(raw_output_bytes).hexdigest(),
-            "char_count": len(raw_output),
-            "byte_count": len(raw_output_bytes),
-            "recording_complete": True,
-            "severity": severity,
-            "message": message,
-        },
+        "severity": severity,
         "trigger": {
             "event_id": trigger_event.id if trigger_event else "",
             "kind": trigger_event.kind if trigger_event else "",
@@ -617,14 +552,4 @@ def _evaluation_snapshot(
             ),
         },
         "context_through_seq": through_seq,
-        "trace_call_count": len(trace),
     }
-
-
-def _raw_rule_result(result: Any) -> str:
-    if isinstance(result, str):
-        return result
-    try:
-        return json.dumps(result, ensure_ascii=False, sort_keys=True)
-    except (TypeError, ValueError):
-        return repr(result)

@@ -7,8 +7,9 @@ rule program's judgment about one conversation at one point in time.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
-import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -23,12 +24,9 @@ class Verdict:
     rule_id: str
     rule_title: str
     severity: str
-    message: str
     conversation_id: str
     project_root: str
-    label: str = ""
-    evidence: str = ""
-    fuzzy: bool = True  # whether a PAW judgment (vs deterministic) produced it
+    evaluation: dict[str, Any]
     fingerprint: str = ""
     trigger_event_id: str = ""
     trigger_kind: str = ""
@@ -43,12 +41,9 @@ class Verdict:
             "rule_id": self.rule_id,
             "rule_title": self.rule_title,
             "severity": self.severity,
-            "message": self.message,
             "conversation_id": self.conversation_id,
             "project_root": self.project_root,
-            "label": self.label,
-            "evidence": self.evidence,
-            "fuzzy": self.fuzzy,
+            "evaluation": self.evaluation,
             "fingerprint": self.fingerprint,
             "trigger_event_id": self.trigger_event_id,
             "trigger_kind": self.trigger_kind,
@@ -66,12 +61,9 @@ CREATE TABLE IF NOT EXISTS verdicts (
     rule_id TEXT NOT NULL,
     rule_title TEXT NOT NULL,
     severity TEXT NOT NULL,
-    message TEXT NOT NULL,
     conversation_id TEXT NOT NULL,
     project_root TEXT NOT NULL,
-    label TEXT,
-    evidence TEXT,
-    fuzzy INTEGER DEFAULT 1,
+    evaluation_json TEXT NOT NULL,
     acknowledged INTEGER DEFAULT 0,
     reviewed_at REAL,
     review_reason TEXT,
@@ -86,28 +78,53 @@ CREATE TABLE IF NOT EXISTS verdicts (
 CREATE INDEX IF NOT EXISTS idx_verdicts_project ON verdicts(project_root);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ts ON verdicts(ts);
 """
-
-_MIGRATION_COLUMNS = {
-    "acknowledged": "INTEGER DEFAULT 0",
-    "reviewed_at": "REAL",
-    "review_reason": "TEXT",
-    "suppressed": "INTEGER DEFAULT 0",
-    "suppression_reason": "TEXT",
-    "fingerprint": "TEXT",
-    "trigger_event_id": "TEXT",
-    "trigger_kind": "TEXT",
-    "source_hash": "TEXT",
-}
+FINDING_SCHEMA_VERSION = 3
 
 
 def finding_fingerprint(
-    project_root: str, rule_id: str, message: str, source_hash: str = ""
+    project_root: str, rule_id: str, severity: str, source_hash: str = ""
 ) -> str:
     """Stable issue-like identity for repeated occurrences of one problem."""
-    normalized = re.sub(r"\s+", " ", (message or "").strip().lower())
     raw = "\x00".join((
-        project_root or "", rule_id or "", source_hash or "legacy", normalized))
+        project_root or "", rule_id or "", source_hash or "no-source",
+        str(severity or "").lower()))
     return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:24]
+
+
+def reset_development_finding_history() -> None:
+    """One-time destructive reset for the strict finding schema."""
+    marker = config.state_dir() / "finding-schema"
+    expected = str(FINDING_SCHEMA_VERSION)
+    try:
+        if marker.read_text(encoding="utf-8").strip() == expected:
+            return
+    except OSError:
+        pass
+    db_path = config.db_path()
+    project_roots: list[str] = []
+    if db_path.exists():
+        try:
+            with sqlite3.connect(str(db_path)) as conn:
+                project_roots = [
+                    str(row[0]) for row in conn.execute(
+                        "SELECT DISTINCT project_root FROM verdicts")
+                    if row[0]
+                ]
+        except sqlite3.Error:
+            project_roots = []
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            (db_path.parent / f"{db_path.name}{suffix}").unlink()
+        except OSError:
+            pass
+    shutil.rmtree(config.state_dir() / "ledgers", ignore_errors=True)
+    for project_root in project_roots:
+        try:
+            config.project_log_file(project_root).unlink()
+        except OSError:
+            pass
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(expected + "\n", encoding="utf-8")
 
 
 class VerdictStore:
@@ -121,28 +138,29 @@ class VerdictStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _decode(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+        value = dict(row)
+        raw = value.pop("evaluation_json", "{}")
+        try:
+            value["evaluation"] = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            value["evaluation"] = {}
+        return value
+
     def _init(self) -> None:
         with self._lock, self._connect() as conn:
-            conn.executescript(_SCHEMA)
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(verdicts)")}
-            for name, sql_type in _MIGRATION_COLUMNS.items():
-                if name not in cols:
-                    conn.execute(f"ALTER TABLE verdicts ADD COLUMN {name} {sql_type}")
-            # Existing rows predate fingerprints. Populate them once so old
-            # findings group and resolve exactly like new occurrences.
-            rows = conn.execute(
-                """SELECT id, project_root, rule_id, message FROM verdicts
-                   WHERE fingerprint IS NULL OR fingerprint = ''"""
-            ).fetchall()
-            for row in rows:
-                conn.execute(
-                    "UPDATE verdicts SET fingerprint=? WHERE id=?",
-                    (
-                        finding_fingerprint(
-                            row["project_root"], row["rule_id"], row["message"]),
-                        row["id"],
-                    ),
+            current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if current != FINDING_SCHEMA_VERSION:
+                conn.executescript(
+                    "DROP TABLE IF EXISTS verdicts;"
+                    "DROP INDEX IF EXISTS idx_verdicts_project;"
+                    "DROP INDEX IF EXISTS idx_verdicts_ts;"
+                    "DROP INDEX IF EXISTS idx_verdicts_fingerprint;"
+                    "DROP INDEX IF EXISTS idx_verdicts_open;"
                 )
+            conn.executescript(_SCHEMA)
+            conn.execute(f"PRAGMA user_version={FINDING_SCHEMA_VERSION}")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_verdicts_fingerprint "
                 "ON verdicts(fingerprint)")
@@ -152,19 +170,20 @@ class VerdictStore:
 
     def record(self, v: Verdict) -> int:
         fingerprint = v.fingerprint or finding_fingerprint(
-            v.project_root, v.rule_id, v.message, v.source_hash)
+            v.project_root, v.rule_id, v.severity, v.source_hash)
         with self._lock, self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO verdicts
-                   (rule_id, rule_title, severity, message, conversation_id,
-                    project_root, label, evidence, fuzzy, fingerprint,
+                   (rule_id, rule_title, severity, conversation_id,
+                    project_root, evaluation_json, fingerprint,
                     trigger_event_id, trigger_kind, suppressed,
                     suppression_reason, source_hash, ts)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    v.rule_id, v.rule_title, v.severity, v.message,
-                    v.conversation_id, v.project_root, v.label, v.evidence,
-                    1 if v.fuzzy else 0, fingerprint, v.trigger_event_id,
+                    v.rule_id, v.rule_title, v.severity,
+                    v.conversation_id, v.project_root,
+                    json.dumps(v.evaluation, ensure_ascii=False),
+                    fingerprint, v.trigger_event_id,
                     v.trigger_kind, 1 if v.suppressed else 0,
                     v.suppression_reason, v.source_hash, v.ts,
                 ),
@@ -190,7 +209,7 @@ class VerdictStore:
         params.append(limit)
         with self._lock, self._connect() as conn:
             rows = conn.execute(q, params).fetchall()
-        return [dict(r) for r in rows]
+        return [self._decode(r) for r in rows]
 
     @staticmethod
     def _group_rows(rows: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
@@ -199,7 +218,7 @@ class VerdictStore:
         for row in rows:
             fingerprint = row.get("fingerprint") or finding_fingerprint(
                 row.get("project_root", ""), row.get("rule_id", ""),
-                row.get("message", ""))
+                row.get("severity", ""), row.get("source_hash", ""))
             if fingerprint not in grouped:
                 grouped[fingerprint] = []
                 order.append(fingerprint)
@@ -218,9 +237,6 @@ class VerdictStore:
             latest["severity"] = (
                 "warn" if highest == "warning" else highest)
             latest["fingerprint"] = fingerprint
-            latest["ids"] = [int(row["id"]) for row in occurrences]
-            latest["occurrences"] = len(occurrences)
-            latest["first_seen"] = min(float(row.get("ts", 0)) for row in occurrences)
             latest["last_seen"] = max(float(row.get("ts", 0)) for row in occurrences)
             out.append(latest)
             if limit is not None and len(out) >= limit:
@@ -256,20 +272,28 @@ class VerdictStore:
             + " ORDER BY ts DESC LIMIT ?"
         )
         with self._lock, self._connect() as conn:
-            rows = [dict(row) for row in conn.execute(query, params).fetchall()]
+            rows = [
+                self._decode(row)
+                for row in conn.execute(query, params).fetchall()]
         return self._group_rows(rows)
 
     def by_project(
         self, limit_per_project: int | None = None
     ) -> dict[str, list[dict[str, Any]]]:
-        """Actionable finding groups by project (not raw occurrence rows)."""
+        """Latest actionable occurrence per fingerprint, grouped by project."""
         out: dict[str, list[dict[str, Any]]] = {}
         with self._lock, self._connect() as conn:
             rows = [
-                dict(row) for row in conn.execute(
-                    """SELECT * FROM verdicts
-                       WHERE acknowledged=0 AND suppressed=0
-                       ORDER BY ts DESC"""
+                self._decode(row) for row in conn.execute(
+                    """SELECT verdicts.*
+                       FROM verdicts
+                       JOIN (
+                           SELECT fingerprint, MAX(id) AS latest_id
+                           FROM verdicts
+                           WHERE acknowledged=0 AND suppressed=0
+                           GROUP BY fingerprint
+                       ) latest ON latest.latest_id = verdicts.id
+                       ORDER BY verdicts.ts DESC"""
                 ).fetchall()
             ]
         per_project: dict[str, list[dict[str, Any]]] = {}
@@ -277,7 +301,9 @@ class VerdictStore:
             proj = row["project_root"] or "(unknown)"
             per_project.setdefault(proj, []).append(row)
         for proj, project_rows in per_project.items():
-            out[proj] = self._group_rows(project_rows, limit_per_project)
+            out[proj] = (
+                project_rows[:limit_per_project]
+                if limit_per_project is not None else project_rows)
         return out
 
     def acknowledge(self, ids: list[int] | None = None,
@@ -352,14 +378,14 @@ class VerdictStore:
         with self._lock, self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM verdicts WHERE id=?", (finding_id,)).fetchone()
-        return dict(row) if row else None
+        return self._decode(row) if row else None
 
     def occurrences(self, fingerprint: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 """SELECT * FROM verdicts WHERE fingerprint=?
                    ORDER BY ts DESC LIMIT ?""", (fingerprint, limit)).fetchall()
-        return [dict(row) for row in rows]
+        return [self._decode(row) for row in rows]
 
     def occurrence_count(self, fingerprint: str) -> int:
         with self._lock, self._connect() as conn:

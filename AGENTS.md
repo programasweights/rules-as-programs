@@ -69,7 +69,7 @@ Output: WARNING"""
 def my_rule(ctx):
     "One-line title from the docstring."
     decision = ctx.paw(SPEC)(ctx.input())
-    return ctx.finding(decision, "My project rule")
+    return ctx.result(decision)
 ```
 
 For each rule:
@@ -110,10 +110,9 @@ plus any you converted.
   Retry/Test/Details actions. A purple `?` separately indicates that an agent
   likely needs a reply.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
-  finding opens the evidence-first Inspector with recorded rule name, exact
-  evaluated input, raw output, surfaced severity, and separately expandable
-  surrounding context. Legacy input recordings are labelled incomplete.
-  **Edit Rule…** retains that finding as tuning/test-case context.
+  finding opens the latest occurrence as an expanded tray row with the exact
+  evaluated input. Context replaces Detail at full width. **Edit Rule…** retains
+  that strict finding record as tuning/test-case context.
 - Rule source opens in the intent-first **Rule Editor**: Name, Rule spec,
   Runs in, Runs when, and Reads. **Deploy** validates, tests, compiles,
   activates, and applies All Projects or Selected Projects coverage; failure

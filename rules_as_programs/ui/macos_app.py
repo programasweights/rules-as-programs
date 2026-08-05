@@ -591,6 +591,7 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def open_finding(self, group: dict[str, Any]) -> None:
+        requested_id = int(group.get("id", 0))
         self.selected_finding = group
         self.finding_detail = None
         self.detail_loading = True
@@ -600,10 +601,14 @@ class MacOSController(NSObject):
 
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
+                selected_id = int(
+                    (self.selected_finding or {}).get("id", 0))
+                if selected_id != requested_id:
+                    return
                 self.detail_loading = False
                 if result.get("ok"):
                     self.finding_detail = result
-                    from .simplified_inspector import FindingInspectorManager
+                    from .finding_inspector import FindingInspectorManager
                     if self._inspector is None:
                         self._inspector = FindingInspectorManager(
                             self.model, self.edit_rule)
@@ -617,7 +622,7 @@ class MacOSController(NSObject):
             _on_main(apply)
 
         self.model.query(
-            {"type": "finding_detail", "id": group.get("id")}, complete)
+            {"type": "finding_detail", "id": requested_id}, complete)
 
     @objc.python_method
     def close_finding(self) -> None:
@@ -636,8 +641,6 @@ class MacOSController(NSObject):
     # --- finding actions ------------------------------------------------
     @objc.python_method
     def done_group(self, group: dict[str, Any]) -> None:
-        ids = [int(value) for value in (group.get("ids") or [group.get("id")]) if value]
-
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
                 if result.get("ok"):
@@ -648,7 +651,13 @@ class MacOSController(NSObject):
                     self._render()
             _on_main(apply)
 
-        self.model.done(ids, complete)
+        self.model.perform(
+            {
+                "type": "review",
+                "fingerprint": group.get("fingerprint", ""),
+            },
+            complete,
+        )
 
     @objc.python_method
     def done_project(self, project_root: str) -> None:
@@ -697,9 +706,12 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def _review_with_reason(self, group: dict[str, Any], reason: str) -> None:
-        ids = [int(value) for value in (group.get("ids") or [group.get("id")]) if value]
         self.model.perform(
-            {"type": "review", "ids": ids, "reason": reason},
+            {
+                "type": "review",
+                "fingerprint": group.get("fingerprint", ""),
+                "reason": reason,
+            },
             lambda result: _on_main(lambda: (
                 self.close_finding() if result.get("ok") and self.route == "finding"
                 else self.model.refresh() if result.get("ok")

@@ -76,11 +76,9 @@ Click it to open the native macOS popover:
   and switch between **Needs Review** and **Reviewed**.
 - **Needs reply** appears above findings with the agent’s question and clears
   automatically when you submit the next prompt (or manually with Not waiting).
-- Clicking a finding opens an evidence-first **Finding Inspector** showing the
-  recorded rule name, exact evaluated input, raw rule output, surfaced severity,
-  and a clearly separate expandable context window. Structured and Exact Text
-  modes never change what Copy Input returns. Legacy/truncated records are
-  labelled incomplete rather than presented as exact.
+- Clicking a finding opens the latest occurrence as an expanded tray row: one
+  rule name, its severity, the exact input, and a full-width Context destination.
+  Context replaces the input view instead of expanding into a narrow timeline.
 - **Edit Rule…** keeps the finding available as tuning context and can add the
   exact recorded input as an explicit test case without auto-deploying it.
 - Findings record immutable compact rule ID, Name at the time, and active source hash.
@@ -230,7 +228,7 @@ Output: OK"""
 def use_git_for_source_sync(ctx):
     """Use Git—not direct source copying—to synchronize code."""
     decision = ctx.paw(SPEC)(ctx.input())
-    return ctx.finding(decision, "Use Git for source synchronization")
+    return ctx.result(decision)
 ```
 
 `ctx` gives you `ctx.input()`, `ctx.evidence(probes=, include=, latest=)`,

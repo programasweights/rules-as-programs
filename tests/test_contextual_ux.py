@@ -99,7 +99,7 @@ def test_source_projection_round_trips_and_custom_metadata_falls_back():
         inputs=["message"],
         severity="critical",
         function_source=projection["function_source"].replace(
-            "ctx.finding(decision", "ctx.finding(decision", 1),
+            "ctx.result(decision)", "ctx.result(decision)", 1),
         spec=projection["spec"],
     )
     assert ok, error
@@ -117,13 +117,13 @@ def test_source_projection_round_trips_and_custom_metadata_falls_back():
     )
     assert not rules_api.source_projection(structurally_custom)["managed_fuzzy"]
 
-    legacy = """from rules_as_programs import rule
+    custom_source = """from rules_as_programs import rule
 @rule(on=["message"], severity="warn")
-def legacy_rule(ctx):
+def custom_rule(ctx):
     evidence = ctx.evidence(latest=["message"], include=["shell_exec", "file_edit"])
     return None
 """
-    inferred = rules_api.source_projection(legacy)
+    inferred = rules_api.source_projection(custom_source)
     assert inferred["inputs_inferred"]
     assert inferred["inputs"] == ["message", "shell_exec", "file_edit"]
 
@@ -135,6 +135,13 @@ def legacy_rule(ctx):
     assert builtin_projection["simple_fuzzy"]
     assert builtin_projection["managed_fuzzy"]
     assert builtin_projection["allowed_label"] == "OK"
+
+
+def test_plain_python_draft_uses_strict_result_contract():
+    source = rules_api.draft_plain_rule_source(
+        new_rule_id(), "Flag unsafe phrase")
+    assert 'ctx.result("WARNING")' in source
+    assert "return \"The agent used" not in source
 
 
 def test_compact_identity_uses_stable_folder_and_safe_name_updates(
