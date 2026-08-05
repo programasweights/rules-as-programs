@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import threading
 
 from rules_as_programs import rules_api
@@ -28,6 +29,229 @@ class FakeRuntime:
 
     def run(self, _program_id, _text):
         return self.output
+
+
+def test_exact_evaluated_input_survives_audit_above_legacy_cap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    project.mkdir()
+    ledger = Ledger("long-input", str(project))
+    text = "x" * 5000
+    event = Event(
+        kind=MESSAGE,
+        conversation_id="long-input",
+        project_root=str(project),
+        payload={"text": text},
+    )
+    ledger.append(event)
+    rule_path = project / "rule.py"
+    rule_path.write_text("# long input\n")
+    rule = LoadedRule(
+        id=new_rule_id(),
+        title="Long input",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
+        fn=lambda ctx: ctx.finding(
+            ctx.paw("spec")(ctx.input()), "finding"),
+        spec="spec",
+        scope="project",
+        source_path=str(rule_path),
+    )
+    engine = Engine(
+        FakeRuntime(output="WARNING"),
+        VerdictStore(tmp_path / "verdicts.db"),
+        lambda _project: [rule],
+        is_enabled=lambda *_args: True,
+    )
+    verdict = engine.evaluate(rule, ledger, event)
+    entry = audit.read_finding(str(project), verdict.id)
+    evaluated = entry["evaluation"]["input"]
+
+    assert len(evaluated["text"]) > 4000
+    assert evaluated["text"].endswith(text)
+    assert evaluated["recording_complete"]
+    assert evaluated["event_ids"] == [event.id]
+    assert entry["evaluation"]["trigger"]["included_in_input"] is True
+    assert evaluated["sha256"] == hashlib.sha256(
+        evaluated["text"].encode()).hexdigest()
+
+
+def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    project.mkdir()
+    ledger = Ledger("frozen", str(project))
+    for index in range(9):
+        ledger.append(Event(
+            kind="shell_exec",
+            conversation_id="frozen",
+            project_root=str(project),
+            payload={"command": f"echo {index}"},
+        ))
+    trigger = Event(
+        kind=MESSAGE,
+        conversation_id="frozen",
+        project_root=str(project),
+        payload={"text": "trigger input"},
+    )
+    ledger.append(trigger)
+    late = Event(
+        kind=MESSAGE,
+        conversation_id="frozen",
+        project_root=str(project),
+        payload={"text": "late input"},
+    )
+    queued_late = Event(
+        kind=MESSAGE,
+        conversation_id="frozen",
+        project_root=str(project),
+        payload={"text": "queued after trigger"},
+    )
+    ledger.append(queued_late)
+    rule_path = project / "rule.py"
+    rule_path.write_text("# frozen\n")
+
+    def evaluate(ctx):
+        ledger.append(late)
+        return ctx.finding(ctx.paw("spec")(ctx.input()), "finding")
+
+    rule = LoadedRule(
+        id=new_rule_id(), title="Frozen", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
+        scope="project", source_path=str(rule_path))
+    engine = Engine(
+        FakeRuntime(output="WARNING"),
+        VerdictStore(tmp_path / "verdicts.db"),
+        lambda _project: [rule],
+        is_enabled=lambda *_args: True,
+    )
+    verdict = engine.evaluate(rule, ledger, trigger)
+    entry = audit.read_finding(str(project), verdict.id)
+
+    assert "trigger input" in entry["evaluation"]["input"]["text"]
+    assert "late input" not in entry["evaluation"]["input"]["text"]
+    assert "queued after trigger" not in entry["evaluation"]["input"]["text"]
+    assert entry["evaluation"]["context_through_seq"] == 10
+
+
+def test_custom_paw_and_deterministic_inputs_are_described_truthfully(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    project.mkdir()
+    ledger = Ledger("input-kinds", str(project))
+    event = Event(
+        kind=MESSAGE,
+        conversation_id="input-kinds",
+        project_root=str(project),
+        payload={"text": "ledger text"},
+    )
+    ledger.append(event)
+    rule_path = project / "rule.py"
+    rule_path.write_text("# input kinds\n")
+    store = VerdictStore(tmp_path / "verdicts.db")
+    custom = LoadedRule(
+        id=new_rule_id(), title="Custom", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE],
+        fn=lambda ctx: ctx.finding(
+            ctx.paw("spec")("custom input"), "custom"),
+        spec="spec", scope="project", source_path=str(rule_path))
+    engine = Engine(
+        FakeRuntime(output="WARNING"), store, lambda _project: [custom],
+        is_enabled=lambda *_args: True)
+    custom_verdict = engine.evaluate(custom, ledger, event)
+    custom_evaluation = audit.read_finding(
+        str(project), custom_verdict.id)["evaluation"]
+    assert custom_evaluation["input"]["text"] == "custom input"
+    assert not custom_evaluation["input"]["source_mapping_available"]
+    assert custom_evaluation["trigger"]["included_in_input"] is None
+
+    deterministic = LoadedRule(
+        id=new_rule_id(), title="Deterministic", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE],
+        fn=lambda _ctx: ("warn", "deterministic"),
+        scope="project", source_path=str(rule_path))
+    deterministic_verdict = engine.evaluate(deterministic, ledger, event)
+    deterministic_evaluation = audit.read_finding(
+        str(project), deterministic_verdict.id)["evaluation"]
+    assert deterministic_evaluation["kind"] == "deterministic"
+    assert not deterministic_evaluation["input"]["recording_complete"]
+    assert deterministic_evaluation["input"]["truncation_reason"] == (
+        "no_universal_deterministic_input")
+    assert deterministic_evaluation["output"]["raw"] == (
+        '["warn", "deterministic"]')
+    assert deterministic_evaluation["output"]["recording_complete"]
+
+    def composite_result(ctx):
+        ctx.paw("spec")("auxiliary input")
+        return "deterministic finding"
+
+    composite = LoadedRule(
+        id=new_rule_id(), title="Composite", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE], fn=composite_result,
+        scope="project", source_path=str(rule_path))
+    composite_verdict = engine.evaluate(composite, ledger, event)
+    composite_evaluation = audit.read_finding(
+        str(project), composite_verdict.id)["evaluation"]
+    assert composite_evaluation["kind"] == "composite"
+    assert composite_evaluation["input"]["role"] == "unattributed_paw_call"
+    assert composite_evaluation["output"]["raw"] == "deterministic finding"
+
+    untraced = LoadedRule(
+        id=new_rule_id(), title="Untraced fuzzy", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE],
+        fn=lambda _ctx: "untraced fuzzy finding",
+        spec="external paw_function spec",
+        scope="project", source_path=str(rule_path))
+    untraced_verdict = engine.evaluate(untraced, ledger, event)
+    untraced_evaluation = audit.read_finding(
+        str(project), untraced_verdict.id)["evaluation"]
+    assert untraced_evaluation["kind"] == "untraced_fuzzy"
+    assert untraced_evaluation["input"]["truncation_reason"] == (
+        "untraced_fuzzy_input")
+
+
+def test_finding_result_links_to_its_specific_paw_call(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    project.mkdir()
+    ledger = Ledger("multi-paw", str(project))
+    event = Event(
+        kind=MESSAGE, conversation_id="multi-paw",
+        project_root=str(project), payload={"text": "message"})
+    ledger.append(event)
+    path = project / "rule.py"
+    path.write_text("# multi\n")
+
+    def evaluate(ctx):
+        selected = ctx.paw("spec")("selected input")
+        selected_result = ctx.finding(selected, "finding")
+        unrelated = ctx.paw("spec")("unrelated later input")
+        ctx.finding(unrelated, "unrelated finding")
+        return selected_result
+
+    rule = LoadedRule(
+        id=new_rule_id(), title="Multi", severity="warn",
+        on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
+        scope="project", source_path=str(path))
+    engine = Engine(
+        FakeRuntime(output="WARNING"),
+        VerdictStore(tmp_path / "verdicts.db"),
+        lambda _project: [rule], is_enabled=lambda *_args: True)
+    verdict = engine.evaluate(rule, ledger, event)
+    evaluation = audit.read_finding(str(project), verdict.id)["evaluation"]
+
+    assert evaluation["input"]["text"] == "selected input"
+    assert evaluation["output"]["raw"] == "WARNING"
+    assert len(evaluation["calls"]) == 2
 
 
 def test_orphaned_findings_archive_but_fallback_findings_remain(

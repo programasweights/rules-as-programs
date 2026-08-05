@@ -110,9 +110,10 @@ plus any you converted.
   Retry/Test/Details actions. A purple `?` separately indicates that an agent
   likely needs a reply.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
-  finding opens the native Inspector with the exact rule snapshot, surrounding
-  agent timeline, probes, and raw event log. Persistent native table views keep
-  selection, search, keyboard focus, and scroll position stable across polling.
+  finding opens the evidence-first Inspector with recorded rule name, exact
+  evaluated input, raw output, surfaced severity, and separately expandable
+  surrounding context. Legacy input recordings are labelled incomplete.
+  **Edit Rule…** retains that finding as tuning/test-case context.
 - Rule source opens in the intent-first **Rule Editor**: Name, Rule spec,
   Runs in, Runs when, and Reads. **Deploy** validates, tests, compiles,
   activates, and applies All Projects or Selected Projects coverage; failure

@@ -1,0 +1,14 @@
+---
+description: Finish requested work without endless review loops
+alwaysApply: true
+---
+
+# Finish the Job
+
+- After implementing the requested scope, run proportionate tests and at most
+  one focused review pass unless the user explicitly asks for more.
+- Fix concrete blockers and high-severity defects. Do not start repeated
+  speculative review/refinement loops after tests pass.
+- When the user requested commit, push, restart, or deployment, perform those
+  handoff steps promptly once verification succeeds.
+- Stop expanding the task when the requested outcome is complete.

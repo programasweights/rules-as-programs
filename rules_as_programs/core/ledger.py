@@ -64,9 +64,12 @@ class Ledger:
         after: int = 30,
         start: int | None = None,
         limit: int = 60,
+        through_seq: int | None = None,
     ) -> dict[str, Any]:
         """Return a bounded, scrollable event slice around one trigger."""
         events = self.events()
+        if through_seq is not None:
+            events = events[:max(0, int(through_seq))]
         total = len(events)
         center_index = next(
             (index for index, event in enumerate(events)
@@ -89,6 +92,7 @@ class Ledger:
             data = event.to_dict()
             data["text"] = event.text()
             data["index"] = index
+            data["seq"] = index + 1
             data["is_trigger"] = index == center_index
             rows.append(data)
         return {
@@ -100,6 +104,7 @@ class Ledger:
             "has_earlier": window_start > 0,
             "has_later": window_end < total,
             "path": str(self.path),
+            "through_seq": total,
         }
 
 

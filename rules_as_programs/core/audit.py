@@ -19,6 +19,8 @@ from .. import config
 _lock = threading.Lock()
 MAX_FIELD = 4000  # cap any single captured string so files stay sane
 MAX_RULE_SOURCE = 30000
+MAX_EVALUATED_INPUT = 65536
+MAX_EVALUATED_OUTPUT = 65536
 
 
 def _cap(text: str) -> str:
@@ -38,6 +40,42 @@ def _cap_value(value: Any) -> Any:
 
 def _cap_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [_cap_value(item) for item in (trace or [])[:100]]
+
+
+def _cap_evaluation(evaluation: dict[str, Any] | None) -> dict[str, Any]:
+    value = dict(evaluation or {})
+    input_data = dict(value.get("input") or {})
+    text = str(input_data.get("text", ""))
+    if len(text) > MAX_EVALUATED_INPUT:
+        input_data["text"] = text[:MAX_EVALUATED_INPUT]
+        input_data["recording_complete"] = False
+        input_data["truncation_reason"] = "audit_input_limit"
+        input_data["recorded_char_count"] = MAX_EVALUATED_INPUT
+    else:
+        input_data["recorded_char_count"] = len(text)
+    value["input"] = input_data
+    output = dict(value.get("output") or {})
+    raw_output = str(output.get("raw", ""))
+    if len(raw_output) > MAX_EVALUATED_OUTPUT:
+        output["raw"] = raw_output[:MAX_EVALUATED_OUTPUT]
+        output["recording_complete"] = False
+        output["truncation_reason"] = "audit_output_limit"
+        output["recorded_char_count"] = MAX_EVALUATED_OUTPUT
+    else:
+        output["raw"] = raw_output
+        output["recorded_char_count"] = len(raw_output)
+    output["message"] = _cap(str(output.get("message", "")))
+    value["output"] = output
+    value["calls"] = [
+        {
+            "input": _cap(str(item.get("input", ""))),
+            "output": _cap(str(item.get("output", ""))),
+        }
+        for item in list(value.get("calls") or [])[:20]
+    ]
+    if value.get("trigger"):
+        value["trigger"] = _cap_value(value["trigger"])
+    return value
 
 
 def read_recent(project_root: str, rule_id: str | None = None,
@@ -135,6 +173,7 @@ def log_violation(
     rule_path: str = "",
     rule_source_hash: str = "",
     rule_source: str = "",
+    evaluation: dict[str, Any] | None = None,
 ) -> None:
     if not project_root:
         return
@@ -165,6 +204,7 @@ def log_violation(
             else rule_source[:MAX_RULE_SOURCE] + " ...[truncated]"
         ),
         "trace": _cap_trace(trace),
+        "evaluation": _cap_evaluation(evaluation),
     }
     try:
         log_dir = config.project_log_dir(project_root)

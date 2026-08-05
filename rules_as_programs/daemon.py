@@ -32,6 +32,7 @@ from .adapters.cursor import projects as cursor_projects
 from .core import audit
 from .core.attention import AttentionStore
 from .core.engine import Engine, RuleContext
+from .core.evaluation import normalize_evaluation
 from .core.events import (
     Event, MESSAGE, QUESTION_REQUEST, SESSION_START, SESSION_STOP, USER_PROMPT,
 )
@@ -1150,6 +1151,7 @@ class Daemon:
                 if current_source else ""
             )
             current_hash = current_rule.get("active_hash") or working_hash
+            evaluation = normalize_evaluation(finding, entry)
             ledger = self.ledgers.get(
                 finding.get("conversation_id", ""), finding["project_root"])
             ledger_window = ledger.context_window(
@@ -1157,12 +1159,14 @@ class Daemon:
                 center_ts=finding.get("ts"),
                 before=30,
                 after=30,
+                through_seq=evaluation.get("context_through_seq"),
             )
             return {
                 "ok": True,
                 "finding": finding,
                 "trace": (entry or {}).get("trace", []),
                 "audit": entry,
+                "evaluation": evaluation,
                 "ledger": ledger_window,
                 "current_rule": current_rule,
                 "current_rule_projection": rules_api.source_projection(
@@ -1177,6 +1181,8 @@ class Daemon:
                     and entry.get("rule_source_hash") != current_hash),
                 "occurrences": self.store.occurrences(
                     finding.get("fingerprint", ""), limit=100),
+                "occurrence_count": self.store.occurrence_count(
+                    finding.get("fingerprint", "")),
             }
         if rtype == "ledger_window":
             finding = self.store.get(int(req.get("id", 0)))
@@ -1184,13 +1190,24 @@ class Daemon:
                 return {"ok": False, "error": "finding not found"}
             ledger = self.ledgers.get(
                 finding.get("conversation_id", ""), finding["project_root"])
+            entry = audit.read_finding(
+                finding["project_root"],
+                int(finding["id"]),
+                rule_id=finding.get("rule_id"),
+                ts=finding.get("ts"),
+            )
+            evaluation = normalize_evaluation(finding, entry)
+            start_value = req.get("start")
             return {
                 "ok": True,
                 "ledger": ledger.context_window(
                     finding.get("trigger_event_id", ""),
                     center_ts=finding.get("ts"),
-                    start=int(req.get("start", 0)),
-                    limit=int(req.get("limit", 60)),
+                    start=(
+                        int(start_value)
+                        if start_value is not None else None),
+                    limit=max(1, min(100, int(req.get("limit", 60)))),
+                    through_seq=evaluation.get("context_through_seq"),
                 ),
             }
         if rtype == "by_project":

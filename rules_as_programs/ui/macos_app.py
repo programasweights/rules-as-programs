@@ -603,7 +603,7 @@ class MacOSController(NSObject):
                 self.detail_loading = False
                 if result.get("ok"):
                     self.finding_detail = result
-                    from .finding_inspector import FindingInspectorManager
+                    from .simplified_inspector import FindingInspectorManager
                     if self._inspector is None:
                         self._inspector = FindingInspectorManager(
                             self.model, self.edit_rule)
@@ -616,7 +616,7 @@ class MacOSController(NSObject):
                     self._set_banner(self.detail_error)
             _on_main(apply)
 
-        self.model.perform(
+        self.model.query(
             {"type": "finding_detail", "id": group.get("id")}, complete)
 
     @objc.python_method
@@ -1095,7 +1095,7 @@ class MacOSController(NSObject):
                 "project_root": self.selected_project,
             }, saved)
 
-        self.model.perform({
+        self.model.query({
             "type": "rule_get",
             "rule_id": rule_id,
             "project_root": self.selected_project,
@@ -1229,6 +1229,41 @@ class MacOSController(NSObject):
         finding_context = rule.get("_finding_context")
         if not rule_id:
             return
+        recorded_source = str(rule.get("_recorded_source", ""))
+        if recorded_source:
+            def planned(result: dict[str, Any]) -> None:
+                def apply() -> None:
+                    deployment = (
+                        result if result.get("ok") else {
+                            "coverage": {
+                                "mode": "selected",
+                                "selected_projects": [project_root],
+                            },
+                            "projects": [{
+                                "path": project_root,
+                                "name": Path(project_root).name,
+                            }] if project_root else [],
+                        }
+                    )
+                    self._open_rule_document({
+                        "id": rule_id,
+                        "scope": "global",
+                        "source": recorded_source,
+                        "projection": rules_api.source_projection(
+                            recorded_source),
+                        "path": "",
+                        "new_draft": True,
+                        "deployment": deployment,
+                        "_finding_context": finding_context,
+                    }, project_root)
+                _on_main(apply)
+
+            self.model.query({
+                "type": "deployment_plan",
+                "rule_id": rule_id,
+                "project_root": project_root,
+            }, planned)
+            return
 
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
@@ -1241,7 +1276,7 @@ class MacOSController(NSObject):
                 self._open_rule_document(info, project_root)
             _on_main(apply)
 
-        self.model.perform({
+        self.model.query({
             "type": "rule_get",
             "rule_id": rule_id,
             "project_root": project_root,
@@ -1259,7 +1294,10 @@ class MacOSController(NSObject):
             rule["new_draft"] = True
         if self._studio is None:
             self._studio = RuleEditorManager(
-                self.model, self._rule_document_changed)
+                self.model,
+                self._rule_document_changed,
+                lambda finding_id: self.open_finding({"id": finding_id}),
+            )
         self._studio.open(rule, project_root)
 
     @objc.python_method

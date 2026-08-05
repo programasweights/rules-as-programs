@@ -76,9 +76,13 @@ Click it to open the native macOS popover:
   and switch between **Needs Review** and **Reviewed**.
 - **Needs reply** appears above findings with the agent’s question and clears
   automatically when you submit the next prompt (or manually with Not waiting).
-- Clicking a finding opens a resizable **Finding Inspector** with the exact rule
-  snapshot, decision, triggering event, surrounding agent timeline, probes, and
-  a selectable raw JSONL view centered on the trigger.
+- Clicking a finding opens an evidence-first **Finding Inspector** showing the
+  recorded rule name, exact evaluated input, raw rule output, surfaced severity,
+  and a clearly separate expandable context window. Structured and Exact Text
+  modes never change what Copy Input returns. Legacy/truncated records are
+  labelled incomplete rather than presented as exact.
+- **Edit Rule…** keeps the finding available as tuning context and can add the
+  exact recorded input as an explicit test case without auto-deploying it.
 - Findings record immutable compact rule ID, Name at the time, and active source hash.
   After a different source revision is activated, older open findings remain
   visible as **Rule changed — needs recheck** and stop contributing to severity

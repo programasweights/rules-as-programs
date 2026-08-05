@@ -83,3 +83,18 @@ def test_ui_model_surfaces_action_failure():
     assert result_box["ok"] is False
     assert "respond" in result_box["error"]
     model.stop()
+
+
+def test_ui_model_query_does_not_refresh_snapshot():
+    completed = threading.Event()
+    model = UIModel(
+        send=lambda _request, timeout=2: {"ok": True, "value": 1},
+        ensure=lambda **_kwargs: True,
+    )
+    model.query(
+        {"type": "finding_detail", "id": 1},
+        lambda _result: completed.set(),
+    )
+    assert completed.wait(2)
+    assert not model._refresh.is_set()
+    model.stop()

@@ -200,6 +200,11 @@ def test_ledger_window_centers_trigger(monkeypatch, tmp_path):
         "message 2", "message 3", "message 4", "message 5", "message 6"]
     assert window["events"][2]["is_trigger"]
     assert window["has_earlier"] and window["has_later"]
+    frozen = ledger.context_window(
+        events[2].id, before=10, after=10, through_seq=4)
+    assert frozen["total"] == 4
+    assert frozen["through_seq"] == 4
+    assert [row["seq"] for row in frozen["events"]] == [1, 2, 3, 4]
 
 
 def test_attention_lifecycle_and_cursor_prompt_events(monkeypatch, tmp_path):

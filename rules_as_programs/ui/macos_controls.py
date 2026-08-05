@@ -26,10 +26,16 @@ from AppKit import (
     NSTrackingArea,
     NSTrackingInVisibleRect,
     NSTrackingMouseEnteredAndExited,
+    NSView,
     NSWindow,
 )
 
 ButtonRole = Literal["primary", "secondary", "flat", "icon", "destructive"]
+
+
+class RAPFlippedView(NSView):
+    def isFlipped(self):
+        return True
 
 
 def appkit_text_length(value) -> int:

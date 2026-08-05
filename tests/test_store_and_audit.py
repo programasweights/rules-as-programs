@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 
 from rules_as_programs.core import audit
@@ -126,6 +127,35 @@ def test_audit_lookup_uses_exact_finding_id(monkeypatch, tmp_path):
     assert entry["trace"][0]["input"] == "old"
 
 
+def test_audit_marks_over_limit_evaluation_input_incomplete(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    project = tmp_path / "project"
+    project.mkdir()
+    text = "😀" * 70000
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    audit.log_violation(
+        str(project), 7, "rule", "Rule", "warn", "message", [],
+        evaluation={
+            "schema_version": 2,
+            "input": {
+                "text": text,
+                "sha256": digest,
+                "char_count": len(text),
+                "byte_count": len(text.encode("utf-8")),
+                "recording_complete": True,
+            },
+            "output": {"raw": "WARNING", "recording_complete": True},
+        },
+    )
+    recorded = audit.read_finding(str(project), 7)["evaluation"]["input"]
+    assert len(recorded["text"]) == audit.MAX_EVALUATED_INPUT
+    assert not recorded["recording_complete"]
+    assert recorded["sha256"] == digest
+    assert recorded["char_count"] == 70000
+
+
 def test_group_uses_highest_open_severity_not_latest(tmp_path):
     store = VerdictStore(tmp_path / "verdicts.db")
     base = dict(
@@ -141,3 +171,16 @@ def test_group_uses_highest_open_severity_not_latest(tmp_path):
     group = store.by_project()["/project"][0]
     assert group["severity"] == "critical"
     assert group["latest_severity"] == "info"
+
+
+def test_review_by_fingerprint_handles_more_than_occurrence_page(tmp_path):
+    store = VerdictStore(tmp_path / "verdicts.db")
+    project = str(tmp_path)
+    for _ in range(125):
+        store.record(_verdict(project))
+    group = store.by_project()[project][0]
+
+    assert store.occurrence_count(group["fingerprint"]) == 125
+    assert store.acknowledge(
+        fingerprint=group["fingerprint"], reason="reviewed") == 125
+    assert store.by_project() == {}

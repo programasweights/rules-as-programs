@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 from typing import Any, Callable
 
@@ -71,10 +72,10 @@ from .layout import fit_rule_editor_layout
 from .macos_controls import (
     ButtonRole,
     RAPCommandWindow,
+    RAPFlippedView,
     set_button_symbol,
     style_button,
 )
-from .macos_views import RAPFlippedView
 from .model import UIModel
 
 RUN_OPTIONS = [
@@ -84,6 +85,44 @@ RUN_OPTIONS = [
     ("tool_result", "Tool result", "Runs after a non-shell tool responds. Example: validate a browser or API result."),
     ("session_stop", "Turn ends", "Runs when the agent finishes its turn. Example: check the completed work as a whole."),
 ]
+
+
+def _upsert_test_case(spec: str, input_text: str, wanted: str) -> str:
+    lines = str(spec or "").splitlines()
+    out: list[str] = []
+    replaced = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith("Input:"):
+            out.append(line)
+            index += 1
+            continue
+        end = index + 1
+        collected = [line[len("Input:"):].lstrip()]
+        while end < len(lines) and not lines[end].startswith("Output:"):
+            collected.append(lines[end])
+            end += 1
+        if end >= len(lines):
+            out.extend(lines[index:])
+            break
+        if "\n".join(collected) == input_text:
+            if not replaced:
+                out.extend(
+                    [f"Input: {input_text}", f"Output: {wanted}"])
+                replaced = True
+            index = end + 1
+            continue
+        out.extend(lines[index:end + 1])
+        index = end + 1
+    updated = "\n".join(out).rstrip()
+    if not replaced:
+        updated += (
+            ("\n\n" if updated else "")
+            + f"Input: {input_text}\nOutput: {wanted}")
+    return updated
+
+
 READ_OPTIONS = [
     ("message", "Latest reply", "Reads assistant messages, such as the final claim or explanation."),
     ("thought", "Thoughts", "Reads captured agent reasoning when Cursor exposes it."),
@@ -401,6 +440,11 @@ class RAPRuleEditorDocument(NSObject):
         if lines != 1:
             label.cell().setWraps_(True)
             label.cell().setScrollable_(False)
+            label.setPreferredMaxLayoutWidth_(680)
+            label.setContentCompressionResistancePriority_forOrientation_(
+                1, NSUserInterfaceLayoutOrientationHorizontal)
+            label.setContentHuggingPriority_forOrientation_(
+                1, NSUserInterfaceLayoutOrientationHorizontal)
         return label
 
     @staticmethod
@@ -580,13 +624,29 @@ class RAPRuleEditorDocument(NSObject):
             "Draft", size=10, bold=True, color=NSColor.controlAccentColor())
         content.addArrangedSubview_(self.state_label)
 
-        if self.finding_context:
-            finding = (self.finding_context or {}).get("finding", {})
-            self.finding_label = self._label(
-                "Tuning from finding: "
-                + str(finding.get("message", "")).replace("\n", " "),
-                size=10, color=NSColor.secondaryLabelColor(), lines=2)
-            content.addArrangedSubview_(self.finding_label)
+        self.finding_label = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=3)
+        self.finding_copy_button = self._button(
+            "Copy Input", lambda _sender: self.copy_finding_input(),
+            role="flat")
+        self.finding_show_button = self._button(
+            "Show Finding", lambda _sender: self.show_finding(),
+            role="flat")
+        self.finding_case_button = self._button(
+            "Add as Test Case…", lambda _sender: self.add_finding_test_case(),
+            role="flat")
+        self.finding_callout = self._stack([
+            self._label("Tuning from finding", size=11, bold=True),
+            self.finding_label,
+            self._stack([
+                self.finding_show_button,
+                self.finding_copy_button,
+                self.finding_case_button,
+                self._spacer(),
+            ], vertical=False, spacing=8),
+        ], vertical=True, spacing=4)
+        content.addArrangedSubview_(self.finding_callout)
+        self._refresh_finding_context()
 
         spec_heading = self._heading(
             "Rule spec",
@@ -697,6 +757,9 @@ class RAPRuleEditorDocument(NSObject):
             self.selected_projects_radio,
             self.edit_projects_button,
             self.advanced_button,
+            self.finding_show_button,
+            self.finding_copy_button,
+            self.finding_case_button,
             self.footer_advanced,
             self.deploy_button,
             self.rule_actions_button,
@@ -719,6 +782,9 @@ class RAPRuleEditorDocument(NSObject):
 
         ordered = [
             self.name_field,
+            self.finding_show_button,
+            self.finding_copy_button,
+            self.finding_case_button,
             self.description_editor,
             self.all_projects_radio,
             self.selected_projects_radio,
@@ -922,6 +988,126 @@ class RAPRuleEditorDocument(NSObject):
             "Deploy" if deploy_needed else "Deployed")
         self._recalculate_key_loop()
         self._programmatic = False
+
+    @objc.python_method
+    def update_finding_context(self, context: dict[str, Any] | None) -> None:
+        self.finding_context = context
+        self._refresh_finding_context()
+        self._recalculate_key_loop()
+
+    @objc.python_method
+    def _refresh_finding_context(self) -> None:
+        if not hasattr(self, "finding_callout"):
+            return
+        context = self.finding_context or {}
+        finding = context.get("finding") or {}
+        evaluation = context.get("evaluation") or {}
+        input_text = str((evaluation.get("input") or {}).get("text", ""))
+        input_complete = bool(
+            (evaluation.get("input") or {}).get("recording_complete"))
+        output_complete = bool(
+            (evaluation.get("output") or {}).get(
+                "recording_complete", True))
+        safe_case = not any(
+            line.startswith(("Input:", "Output:"))
+            for line in input_text.splitlines())
+        preview = input_text[:320]
+        if len(input_text) > len(preview):
+            preview += "…"
+        warning = (
+            " · This finding used an older rule revision."
+            if context.get("rule_changed") else "")
+        self.finding_label.setStringValue_(
+            f"{finding.get('severity', '').title()} · "
+            f"{finding.get('message', '')}{warning}\n"
+            f"Input: {preview or '(not recorded)'}")
+        self.finding_callout.setHidden_(not bool(context))
+        self.finding_case_button.setEnabled_(
+            bool(input_text)
+            and input_complete
+            and output_complete
+            and safe_case
+            and self.managed_fuzzy
+            and not self.custom
+            and self._advanced_window is None)
+
+    @objc.python_method
+    def copy_finding_input(self) -> None:
+        evaluation = (self.finding_context or {}).get("evaluation") or {}
+        text = str((evaluation.get("input") or {}).get("text", ""))
+        board = NSPasteboard.generalPasteboard()
+        board.clearContents()
+        board.setString_forType_(text, NSPasteboardTypeString)
+
+    @objc.python_method
+    def show_finding(self) -> None:
+        finding = (self.finding_context or {}).get("finding") or {}
+        if self.manager and finding.get("id"):
+            self.manager.show_finding(int(finding["id"]))
+
+    @objc.python_method
+    def add_finding_test_case(self) -> None:
+        context = self.finding_context or {}
+        evaluation = context.get("evaluation") or {}
+        input_text = str((evaluation.get("input") or {}).get("text", ""))
+        output_data = evaluation.get("output") or {}
+        output = str(output_data.get("raw", "")).strip().upper()
+        if output not in {"OK", "INFO", "WARNING", "CRITICAL"}:
+            output = {
+                "info": "INFO",
+                "warn": "WARNING",
+                "warning": "WARNING",
+                "critical": "CRITICAL",
+            }.get(str(output_data.get("severity", "")).lower(), "WARNING")
+        complete = bool(
+            (evaluation.get("input") or {}).get("recording_complete"))
+        output_complete = bool(output_data.get("recording_complete", True))
+        safe_case = not any(
+            line.startswith(("Input:", "Output:"))
+            for line in input_text.splitlines())
+        if (
+            not input_text
+            or not complete
+            or not output_complete
+            or not safe_case
+            or self.custom
+            or self._advanced_window is not None
+        ):
+            return
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Add this finding as a test case?")
+        alert.setInformativeText_(
+            "Choose the output this exact recorded input should produce.\n\n"
+            + "\n".join(textwrap.wrap(
+                input_text[:500], width=80,
+                replace_whitespace=False, drop_whitespace=False)))
+        alert.addButtonWithTitle_("Expect OK")
+        alert.addButtonWithTitle_(f"Expect {output or 'WARNING'}")
+        alert.addButtonWithTitle_("Cancel")
+
+        def completed(response):
+            if response not in (
+                NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
+            ):
+                return
+            wanted = "OK" if response == NSAlertFirstButtonReturn else (
+                output or "WARNING")
+            self._append_finding_test_case(input_text, wanted)
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def _append_finding_test_case(
+        self, input_text: str, wanted: str
+    ) -> None:
+        if wanted not in {"OK", "INFO", "WARNING", "CRITICAL"}:
+            return
+        updated = _upsert_test_case(self.spec, input_text, wanted)
+        if updated != self.spec:
+            self.spec = updated
+            self.description_editor.setString_(self.spec)
+            self.editor_changed()
 
     @objc.python_method
     def editor_changed(self) -> None:
@@ -1170,6 +1356,7 @@ class RAPRuleEditorDocument(NSObject):
         self._advanced_window = window
         self._advanced_editor = editor
         self._advanced_apply = apply
+        self._refresh_finding_context()
         window.center()
         window.makeKeyAndOrderFront_(None)
 
@@ -1556,6 +1743,7 @@ class RAPRuleEditorDocument(NSObject):
             self._advanced_window = None
             self._advanced_editor = None
             self._advanced_apply = None
+            self._refresh_finding_context()
             return
         if self._advanced_window:
             advanced = self._advanced_window
@@ -1573,9 +1761,11 @@ class RuleEditorManager:
         self,
         model: UIModel,
         on_changed: Callable[[dict[str, Any]], None] | None = None,
+        on_show_finding: Callable[[int], None] | None = None,
     ) -> None:
         self.model = model
         self.on_changed = on_changed
+        self.on_show_finding = on_show_finding
         self.documents: dict[tuple[str, str], RAPRuleEditorDocument] = {}
         self._pending_sources: set[str] = set()
 
@@ -1586,11 +1776,17 @@ class RuleEditorManager:
             document = RAPRuleEditorDocument.alloc().init()
             document.configure(self, self.model, rule, project_root)
             self.documents[key] = document
+        elif rule.get("_finding_context"):
+            document.update_finding_context(rule.get("_finding_context"))
         source_path = str(
             (document.rule.get("definition") or {}).get("source_path", ""))
         if source_path in self._pending_sources:
             document.set_external_lifecycle_pending(True)
         document.show()
+
+    def show_finding(self, finding_id: int) -> None:
+        if self.on_show_finding:
+            self.on_show_finding(finding_id)
 
     def closed(self, document: RAPRuleEditorDocument) -> None:
         for key, value in list(self.documents.items()):

@@ -361,6 +361,14 @@ class VerdictStore:
                    ORDER BY ts DESC LIMIT ?""", (fingerprint, limit)).fetchall()
         return [dict(row) for row in rows]
 
+    def occurrence_count(self, fingerprint: str) -> int:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM verdicts WHERE fingerprint=?",
+                (fingerprint,),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def clear(self, project_root: str | None = None) -> None:
         with self._lock, self._connect() as conn:
             if project_root:

@@ -180,6 +180,29 @@ class UIModel:
 
         self._work.submit(work)
 
+    def query(
+        self,
+        request: dict[str, Any],
+        callback: ActionCallback | None = None,
+        timeout: float = 4.0,
+    ) -> None:
+        """Execute a read-only request without refreshing the tray snapshot."""
+
+        def work() -> None:
+            try:
+                response = self._send(request, timeout=timeout)
+                result = response or {
+                    "ok": False, "error": "The daemon did not respond."}
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc)}
+            if callback:
+                try:
+                    callback(result)
+                except Exception:
+                    pass
+
+        self._work.submit(work)
+
     # Convenience commands keep action semantics consistent across AppKit and
     # the simpler cross-platform tray.
     def done(self, ids: list[int], callback: ActionCallback | None = None) -> None:
