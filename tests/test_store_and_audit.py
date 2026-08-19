@@ -40,6 +40,7 @@ def _verdict(project: str, *, suppressed: bool = False) -> Verdict:
         project_root=project,
         evaluation=_evaluation(),
         source_hash="revision",
+        behavior_hash="behavior",
         suppressed=suppressed,
         suppression_reason="rule muted" if suppressed else "",
     )
@@ -82,6 +83,21 @@ def test_suppressed_findings_stay_out_of_inbox_but_in_history(tmp_path):
     history = store.history_grouped()
     assert history[0]["id"] == finding_id
     assert history[0]["suppressed"] == 1
+    assert history[0]["behavior_hash"] == "behavior"
+
+
+def test_legacy_findings_backfill_behavior_identity(tmp_path):
+    path = tmp_path / "verdicts.db"
+    store = VerdictStore(path)
+    verdict = _verdict(str(tmp_path))
+    verdict.behavior_hash = ""
+    store.record(verdict)
+
+    reopened = VerdictStore(path)
+    group = reopened.by_project()[str(tmp_path)][0]
+
+    assert group["behavior_hash"]
+    assert group["fingerprint"] != ""
 
 
 def test_deleted_rule_findings_move_to_reviewed_history(tmp_path):
@@ -134,6 +150,7 @@ def test_review_by_fingerprint_handles_all_hidden_occurrences(tmp_path):
         store.record(_verdict(project))
     group = store.by_project()[project][0]
 
+    assert group["occurrence_count"] == 125
     assert store.occurrence_count(group["fingerprint"]) == 125
     assert store.acknowledge(
         fingerprint=group["fingerprint"], reason="reviewed") == 125
@@ -157,10 +174,12 @@ def test_development_reset_removes_db_ledgers_and_audits(monkeypatch, tmp_path):
     log = project / ".cursor/rules-as-programs/log"
     log.mkdir(parents=True)
     (log / "audit.jsonl").write_text("{}\n")
+    (log / "evaluations.jsonl").write_text("{}\n")
 
     reset_development_finding_history()
 
     assert not (state / "verdicts.db").exists()
     assert not ledgers.exists()
     assert not (log / "audit.jsonl").exists()
+    assert not (log / "evaluations.jsonl").exists()
     assert (state / "finding-schema").read_text().strip() == "4"

@@ -38,6 +38,14 @@ def db_path() -> Path:
     return state_dir() / "verdicts.db"
 
 
+def validation_db_path() -> Path:
+    return state_dir() / "validation-results.db"
+
+
+def deployment_queue_path() -> Path:
+    return state_dir() / "deployment-queue.json"
+
+
 def ledger_dir() -> Path:
     d = state_dir() / "ledgers"
     d.mkdir(parents=True, exist_ok=True)
@@ -46,6 +54,10 @@ def ledger_dir() -> Path:
 
 def log_path() -> Path:
     return state_dir() / "daemon.log"
+
+
+def daemon_stderr_path() -> Path:
+    return state_dir() / "daemon-stderr.log"
 
 
 def tray_log_path() -> Path:
@@ -63,6 +75,10 @@ def pid_path() -> Path:
 def paw_cache_path() -> Path:
     """Where we remember compiled PAW program ids keyed by spec hash."""
     return state_dir() / "paw_programs.json"
+
+
+def compiler_catalog_path() -> Path:
+    return state_dir() / "compiler_catalog.json"
 
 
 def mutes_path() -> Path:
@@ -113,6 +129,12 @@ def project_log_dir(project_root: str | os.PathLike[str]) -> Path:
 
 def project_log_file(project_root: str | os.PathLike[str]) -> Path:
     return project_log_dir(project_root) / "audit.jsonl"
+
+
+def project_evaluation_log_file(
+    project_root: str | os.PathLike[str],
+) -> Path:
+    return project_log_dir(project_root) / "evaluations.jsonl"
 
 
 def project_rules_config_path(project_root: str | os.PathLike[str]) -> Path:

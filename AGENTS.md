@@ -80,7 +80,8 @@ For each rule:
 3. Test and iterate until it passes: `rap rules test <id>`. Adjust the SPEC
    wording/examples, re-test. This is the PAW spec-engineering loop.
 4. When it behaves well, enable it: `rap rules enable <id>`.
-5. (Optional) Finalize for higher accuracy: `rap rules test <id> --compiler paw-ft-bs48`.
+5. (Optional) Use `paw.list_compilers()` to discover a current
+   higher-accuracy compiler, then pass its name with `--compiler`.
 
 Keep each rule simple and single-purpose; several small rules beat one vague one.
 
@@ -108,12 +109,35 @@ plus any you converted.
   finding opens the latest occurrence as an expanded tray row with the exact
   evaluated input. Session Activity is separate and never silently evaluated. **Edit Rule…** retains
   that strict finding record as tuning/test-case context.
-- Rule source opens in the intent-first **Rule Editor**: Name, Rule spec, one
-  Trigger, and its derived Input. **Deploy** validates, tests, compiles,
+- **All Projects → + Rule** creates an all-project draft directly; when one
+  project is selected, the same action creates a confirmed project-scoped
+  draft. Project-header **… → Add Rule…** always targets that project.
+- The Findings list keeps older-revision findings beneath their project and
+  matching current rule, with a preview, occurrence count, and consistent
+  review control. Project and advanced finding actions live in `…` menus.
+- The finding Inspector wraps prose by default and leaves structured
+  commands/code/JSON unwrapped. **… → Line Wrapping** persists an Auto,
+  Always, or Never override without changing copied raw input.
+- Rule source opens in the intent-first **Rule Editor**: Name, one Trigger, its
+  derived Input, and the exact PAW `SPEC`. RAP never appends or rewrites the
+  specification; it warns if `OK` plus a finding level are missing. **Deploy**
+  validates, tests, compiles,
   activates, and applies All Projects or Selected Projects coverage; failure
   leaves the previous deployment running. **View Python…** exposes the
   underlying program. Standard `Command-A` and `Control-A` select all text in
   the active field; `Command-S` saves a local draft.
+- **Compilation…** distinguishes the deployed compiler from the editor draft's
+  compiler and groups compatible options by runtime family. Builds always use
+  the exact current draft. **Deploy** is the only activation action and commits
+  the draft, compiler snapshot, and program together.
+- **Deploy When Ready** persists the exact draft/compiler/test/scope intent
+  while a long compiler builds. Tests never run implicitly: missing results
+  require an explicit Run Tests or Deploy Without Testing choice. Any
+  subsequent draft edit cancels the queue; accepted queues dismiss the editor.
+- All deployments use persistent idempotency IDs. A disconnected editor checks
+  status after reconnecting and retries only an unchanged draft. Daemon
+  stdout/stderr and worker tracebacks are retained in
+  `~/.cache/rules-as-programs/daemon-stderr.log`.
 - **Rules for Project** is a shareable checklist stored in
   `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay
   local. Every rule row has a labelled **Actions…** menu, and the Rule Editor
@@ -122,7 +146,19 @@ plus any you converted.
   **Reviewed** as **Rule deleted**, while keeping their recorded source and
   audit history.
 - Rules live at `.cursor/rules-as-programs/rules/<id>/rule.py`; per-project
-  violation logs are at `.cursor/rules-as-programs/log/audit.jsonl`.
+  violation logs are at `.cursor/rules-as-programs/log/audit.jsonl`; all
+  invocation outcomes are at `evaluations.jsonl` and in Evaluation History.
+- Rule names are mutable display metadata. Rename operations must not stale
+  findings, invalidate compiler candidates, or require new PAW programs;
+  behavior identity comes from the canonical metadata-neutral behavior hash.
+- Optional validation inputs live beside the rule in `tests.json`; they are
+  never added to the PAW `SPEC`. Per-case results persist locally in
+  `~/.cache/rules-as-programs/validation-results.db`, keyed by exact spec,
+  compiler snapshot, and case content.
+- Local PAW/llama.cpp function creation, warmup, and inference are strictly
+  serialized through one supervised process-global subprocess. A native timeout
+  kills and replaces that worker. Compilation uses a separate executor; never
+  increase local inference concurrency.
 
 ## Notes
 

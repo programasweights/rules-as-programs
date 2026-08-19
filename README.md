@@ -80,6 +80,16 @@ Click it to open the native macOS popover:
   rule name, its severity, and the exact predefined Cursor field sent to PAW.
   Session Activity appears only when additional events exist and is never
   silently included in Basic rule input.
+- Findings stay grouped by project. Older rule revisions appear directly below
+  the matching current rule as **Older revision · Needs recheck**, with the
+  evaluated-input preview, occurrence count, and the same review action.
+- Project-level actions live under the project `…` menu. Finding `…` menus
+  group review reasons and developer artifacts, and muting names the exact rule
+  and project before confirmation.
+- The finding Inspector wraps prose inputs to the available width and keeps
+  commands, paths, code, and JSON unwrapped with horizontal scrolling. The
+  `… → Line Wrapping` menu provides a persistent Auto/Always/Never override;
+  wrapping never changes copied raw input.
 - **Edit Rule…** keeps the finding available as tuning context and can add the
   exact recorded input as an explicit test case without auto-deploying it.
 - Findings record immutable compact rule ID, Name at the time, and active source hash.
@@ -89,12 +99,32 @@ Click it to open the native macOS popover:
 - **Rule Editor** is organized around Name, Rule spec, one Trigger, and its
   derived read-only Input. Common triggers are ranked; More actions is
   searchable. Advanced input mapping can override the trigger’s default JSON
-  Pointer for one rule.
+  Pointer for one rule. Basic mode edits the exact PAW `SPEC`; RAP never appends
+  or rewrites it. A simple warning checks for `OK` plus one finding level.
+- **Compilation…** separates the deployed compiler from the compiler selected
+  for the editor draft. Builds always fingerprint the current draft. **Deploy**
+  is the only action that changes the running rule: it commits the exact draft,
+  compiler snapshot, and compiled program together.
+- While a long compiler is building, **Deploy When Ready** persists an immutable
+  deployment intent. Validation cases never run implicitly: when results are
+  missing, the user chooses Run Tests or Deploy Without Testing before queuing.
+  Editing the draft, tests, compiler, or project scope cancels the queue;
+  **Use & Deploy…** can switch to PAW's default compiler without stopping the
+  background build. Once accepted, the editor dismisses and the tray monitors
+  completion.
+- Every Deploy uses an idempotent persisted intent. If the daemon disconnects,
+  the editor reconnects, checks that intent, and retries only when the exact
+  draft fingerprint is unchanged. Daemon stderr and tracebacks are retained in
+  `~/.cache/rules-as-programs/daemon-stderr.log`.
 - **Deploy** is the single primary lifecycle action. New rules choose All
   projects or Selected projects; existing rules deploy directly. A clean rule
   shows a disabled **Deployed** button.
-- Project headers expose **+ Rule** and **Manage Rules**; Projects remains the
-  setup/monitoring-health view.
+- Project headers expose Add/Manage/Review actions under `…`; Projects remains
+  the setup/monitoring-health view.
+- The top **+ Rule** follows the project filter: **All Projects** creates a
+  confirmed all-project rule directly, while a selected project creates a
+  confirmed project-scoped draft. Project `… → Add Rule…` is always
+  project-specific.
 - **Rules for Project** is a labelled checklist of Project, Shared, and Built-in
   rules. Selections are stored in `.cursor/rules-as-programs/config.json` so
   they follow the repository; personal hidden-finding choices stay local.
@@ -145,6 +175,13 @@ trigger payload, and rule output. The log folder is
 auto-`.gitignore`d. Open it from the popover, or use
 `rap status` in the terminal.
 
+Every rule invocation—including `OK`, findings, input-contract failures, and
+runtime errors—is journaled separately in `evaluations.jsonl`. Each invocation
+has append-only started and completed/failed records with exact mapped input,
+compiler/program/source provenance, result, latency, and linked finding ID.
+Open **Evaluation History…** from a rule or finding for native filtering and
+exact-record inspection.
+
 Operational diagnostics are local too:
 `~/.cache/rules-as-programs/daemon.log` and `tray.log`.
 
@@ -194,16 +231,36 @@ Cursor hooks ──stdin JSON──▶ rap-hook (thin, instant, fail-open)
 
 ## Writing and customizing rules
 
-The normal UI requires no Python: edit Name, Rule spec, choose one Trigger, and
-Deploy. Input is derived from the trigger’s documented JSON Pointer. Python remains canonical underneath at `rules/<id>/rule.py`;
+The normal UI requires no Python: edit Name and the exact PAW specification,
+choose one Trigger, and Deploy. Input is derived from the trigger’s documented
+JSON Pointer. The specification editor is the exact string passed to
+`paw.compile()`. Python remains
+canonical underneath at `rules/<id>/rule.py`;
 **View Python…** opens the underlying program and advanced diagnostics.
+
+Optional Validation Cases are stored beside the rule in `tests.json`. They are
+never included in the PAW specification. Results are stored locally in
+`~/.cache/rules-as-programs/validation-results.db`, keyed by the exact spec,
+compiler snapshot, and individual case. Matching results therefore survive
+reopening the editor, while editing one case invalidates only that case.
+Only **Run Tests** executes cases. Deploy reuses exact matching results; known
+failures require Deploy Anyway, while missing/stale results prompt Run Tests or
+Deploy Without Testing. Observed Runs can be labelled and added as validation
+cases.
+
+Local PAW inference runs through one supervised subprocess. Calls are strictly
+serialized; a native timeout kills and replaces the worker so llama.cpp cannot
+leave the daemon spinning or crash the tray. Remote compilation uses a separate
+executor and never overlaps local inference.
 
 Every rule has:
 
 - immutable 16-character `id`, used by projects, findings, state, and history;
-- mutable `name`, recorded with each finding;
+- mutable `name`; lists show the current name while the recorded name remains
+  available in immutable finding/evaluation history. Renaming never marks a
+  finding or compiler candidate stale;
 - one editable working source and one last successfully checked active source
-  hash.
+  hash, plus a canonical behavior hash that ignores display metadata.
 
 The generated Python remains a single `@rule` function:
 
@@ -261,9 +318,8 @@ rap rules convert                  # draft .py rules from existing prose rules
 **Writing good specs** (per the PAW docs): put realistic `Input:`/`Output:`
 cases directly in `SPEC`, run `rap rules test <id>`, and iterate. The test
 command parses those cases automatically; a duplicate Python `EXAMPLES` list is
-not needed. Once stable, finalize with
-`rap rules test <id> --compiler paw-ft-bs48`, or use **Deploy** in Rule
-Editor.
+not needed. Use `paw.list_compilers()` to discover current compiler names, or
+choose a compatible option from **Compilation…** in Rule Editor.
 
 ---
 

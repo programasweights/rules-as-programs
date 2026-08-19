@@ -4,7 +4,8 @@ import hashlib
 import threading
 
 from rules_as_programs import rules_api
-from rules_as_programs.core import audit
+from rules_as_programs.core import audit, evaluation_log
+from rules_as_programs.core import revisions
 from rules_as_programs.core.attention import AttentionStore
 from rules_as_programs.core.engine import Engine, RuleContext
 from rules_as_programs.core.events import Event, MESSAGE, SESSION_STOP
@@ -21,14 +22,53 @@ class FakeRuntime:
         self.output = output
         self.warm_result = warm
 
-    def program_id_for_spec(self, _spec, _compiler=None):
+    def program_id_for_spec(self, _spec, _compiler=None, timeout=None):
         return "program"
+
+    def compiler_info(self, name=""):
+        return {
+            "name": name or "future-standard",
+            "description": name or "Future Standard",
+            "compiler_kind": (
+                "finetune_lora" if name else "mapper_lora"),
+            "supports_local_sdk": True,
+            "latest_snapshot": "snapshot",
+        }
+
+    def compatible_finetune_compiler(self, _active_compiler=""):
+        return self.compiler_info("future-finetune")
 
     def warm(self, _program_id):
         return self.warm_result
 
     def run(self, _program_id, _text):
         return self.output
+
+
+def test_name_change_updates_display_without_staling_finding():
+    source = rules_api.draft_rule_source(
+        new_rule_id(), "Original rule name")
+    projection = rules_api.source_projection(source)
+    ok, renamed, error = rules_api.patch_rule_identity(
+        source, projection["id"], "Current rule name")
+    assert ok, error
+    behavior = revisions.behavior_hash(source)
+    group = {
+        "rule_id": projection["id"],
+        "rule_title": "Original rule name",
+        "behavior_hash": behavior,
+        "evaluation": {"rule": {"source": source}},
+    }
+
+    stale = Daemon._decorate_finding_group(group, {
+        "name": "Current rule name",
+        "active_hash": revisions.hash_source(source),
+        "active_behavior_hash": revisions.behavior_hash(renamed),
+    })
+
+    assert not stale
+    assert group["rule_title"] == "Current rule name"
+    assert group["recorded_rule_title"] == "Original rule name"
 
 
 def test_exact_evaluated_input_survives_audit_without_trace_cap(
@@ -84,6 +124,10 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
     assert "raw_payload" not in entry["evaluation"]["trigger"]
     assert evaluated["sha256"] == hashlib.sha256(
         evaluated["text"].encode()).hexdigest()
+    history = evaluation_log.history(str(project), rule_id=rule.id)
+    assert history[0]["evaluation_id"] == entry["evaluation"]["evaluation_id"]
+    assert history[0]["result"] == "WARNING"
+    assert history[0]["finding_id"] == verdict.id
 
 
 def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
@@ -197,6 +241,15 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
         str(project), deterministic_verdict.id)["evaluation"]
     assert deterministic_evaluation["severity"] == "warn"
     assert "ledger text" in deterministic_evaluation["input"]["text"]
+
+    ok_rule = LoadedRule(
+        id=new_rule_id(), title="OK rule", severity="warn",
+        on=[MESSAGE], trigger="afterAgentResponse",
+        fn=lambda ctx: ctx.result("OK"),
+        scope="project", source_path=str(rule_path))
+    assert engine.evaluate(ok_rule, ledger, event) is None
+    assert evaluation_log.history(
+        str(project), rule_id=ok_rule.id)[0]["result"] == "OK"
 
     invalid = LoadedRule(
         id=new_rule_id(), title="Invalid", severity="warn",

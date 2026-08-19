@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -18,6 +19,46 @@ _VERSION = 1
 
 def hash_source(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def behavior_hash(source: str) -> str:
+    """Hash executable rule behavior while excluding mutable display identity."""
+    try:
+        tree = ast.parse(source, filename="<rule>")
+    except SyntaxError:
+        return hash_source(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        rule_decorators = [
+            decorator for decorator in node.decorator_list
+            if (
+                isinstance(decorator, ast.Call)
+                and (
+                    isinstance(decorator.func, ast.Name)
+                    and decorator.func.id == "rule"
+                    or isinstance(decorator.func, ast.Attribute)
+                    and decorator.func.attr == "rule"
+                )
+            )
+        ]
+        if not rule_decorators:
+            continue
+        node.name = "__rule__"
+        if (
+            node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        ):
+            node.body[0].value.value = "__doc__"
+        for decorator in rule_decorators:
+            for keyword in decorator.keywords:
+                if keyword.arg in ("name", "title"):
+                    keyword.value = ast.Constant(value="__name__")
+    canonical = ast.dump(
+        tree, annotate_fields=True, include_attributes=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _load() -> dict[str, Any]:
@@ -62,6 +103,8 @@ def activate(
     *,
     compiler: str | None = None,
     program_id: str | None = None,
+    warnings: list[str] | None = None,
+    compiler_snapshot: str | None = None,
 ) -> dict[str, Any]:
     digest = hash_source(source)
     cache_dir = config.revision_dir() / rule_id
@@ -79,10 +122,13 @@ def activate(
         "id": rule_id,
         "source_path": key,
         "source_hash": digest,
+        "behavior_hash": behavior_hash(source),
         "cache_path": str(cache_path),
         "activated_at": time.time(),
         "compiler": compiler or "",
         "program_id": program_id or "",
+        "warnings": list(warnings or []),
+        "compiler_snapshot": compiler_snapshot or "",
     }
     with _lock:
         state = _load()
@@ -113,13 +159,26 @@ def working_status(
     rule_id: str, source_path: str | os.PathLike[str], source: str
 ) -> dict[str, Any]:
     working_hash = hash_source(source)
+    working_behavior_hash = behavior_hash(source)
     active = active_info(rule_id, source_path)
+    active_behavior_hash = str((active or {}).get("behavior_hash", ""))
+    if active and not active_behavior_hash:
+        try:
+            active_behavior_hash = behavior_hash(
+                Path(str(active.get("cache_path", ""))).read_text(
+                    encoding="utf-8"))
+        except OSError:
+            active_behavior_hash = str(active.get("source_hash", ""))
+        active["behavior_hash"] = active_behavior_hash
     return {
         "working_hash": working_hash,
+        "working_behavior_hash": working_behavior_hash,
         "active_hash": (active or {}).get("source_hash", ""),
+        "active_behavior_hash": active_behavior_hash,
         "active": active,
         "has_active": bool(active),
-        "draft_changes": bool(active and active.get("source_hash") != working_hash),
+        "draft_changes": bool(
+            active and active_behavior_hash != working_behavior_hash),
     }
 
 

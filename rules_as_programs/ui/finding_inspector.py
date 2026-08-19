@@ -12,6 +12,8 @@ from AppKit import (
     NSBackingStoreBuffered,
     NSButton,
     NSColor,
+    NSControlStateValueOff,
+    NSControlStateValueOn,
     NSFont,
     NSImageView,
     NSLayoutConstraint,
@@ -26,9 +28,11 @@ from AppKit import (
     NSTableView,
     NSTextField,
     NSTextView,
+    NSScreen,
     NSUserInterfaceLayoutOrientationHorizontal,
     NSUserInterfaceLayoutOrientationVertical,
     NSView,
+    NSViewHeightSizable,
     NSViewWidthSizable,
     NSWindow,
     NSWindowStyleMaskClosable,
@@ -38,7 +42,7 @@ from AppKit import (
     NSWindowTitleHidden,
     NSWorkspace,
 )
-from Foundation import NSMakeRect, NSMakeSize, NSObject
+from Foundation import NSMakeRect, NSMakeSize, NSObject, NSUserDefaults
 from PyObjCTools import AppHelper
 
 from .. import config
@@ -59,6 +63,10 @@ def _on_main(callback: Callable[[], None]) -> None:
 def _activate(*constraints) -> None:
     NSLayoutConstraint.activateConstraints_(
         [constraint for constraint in constraints if constraint])
+
+
+WRAP_MODE_KEY = "RulesAsPrograms.FindingInspector.WrapMode"
+WRAP_MODES = {"auto", "wrap", "nowrap"}
 
 
 class RAPInspectorTarget(NSObject):
@@ -151,6 +159,11 @@ class RAPFindingInspector(NSObject):
         self.page = "detail"
         self.expanded_event_id = ""
         self.included_event_ids: set[str] = set()
+        saved_wrap_mode = str(
+            NSUserDefaults.standardUserDefaults().stringForKey_(
+                WRAP_MODE_KEY) or "auto")
+        self.wrap_mode = (
+            saved_wrap_mode if saved_wrap_mode in WRAP_MODES else "auto")
         return self
 
     @objc.python_method
@@ -289,9 +302,12 @@ class RAPFindingInspector(NSObject):
 
     @objc.python_method
     def _build_header(self) -> None:
-        self.project_label = self.label(
-            "", size=10, color=NSColor.secondaryLabelColor())
-        self.project_label.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        self.project_button = self.button(
+            "", lambda _sender: self.open_project(),
+            accessibility="Open project in Cursor")
+        self.project_button.setFont_(NSFont.systemFontOfSize_(10))
+        self.project_button.setToolTip_("Open project in Cursor")
+        self.project_button.setTranslatesAutoresizingMaskIntoConstraints_(False)
         self.severity_image = NSImageView.alloc().init()
         self.severity_image.setTranslatesAutoresizingMaskIntoConstraints_(False)
         self.rule_button = self.button(
@@ -317,17 +333,17 @@ class RAPFindingInspector(NSObject):
             self.review_button,
             self.more_button,
         ], spacing=7)
-        self.header.addSubview_(self.project_label)
+        self.header.addSubview_(self.project_button)
         self.header.addSubview_(row)
         _activate(
-            self.project_label.topAnchor().constraintEqualToAnchor_constant_(
+            self.project_button.topAnchor().constraintEqualToAnchor_constant_(
                 self.header.topAnchor(), 12),
-            self.project_label.leadingAnchor().constraintEqualToAnchor_constant_(
+            self.project_button.leadingAnchor().constraintEqualToAnchor_constant_(
                 self.header.leadingAnchor(), 18),
-            self.project_label.trailingAnchor().constraintLessThanOrEqualToAnchor_(
+            self.project_button.trailingAnchor().constraintLessThanOrEqualToAnchor_(
                 self.header.trailingAnchor()),
             row.topAnchor().constraintEqualToAnchor_constant_(
-                self.project_label.bottomAnchor(), 5),
+                self.project_button.bottomAnchor(), 5),
             row.leadingAnchor().constraintEqualToAnchor_constant_(
                 self.header.leadingAnchor(), 18),
             row.trailingAnchor().constraintEqualToAnchor_constant_(
@@ -360,6 +376,7 @@ class RAPFindingInspector(NSObject):
             self.input_heading, NSView.alloc().init()])
         scroll = NSScrollView.alloc().init()
         scroll.setHasVerticalScroller_(True)
+        scroll.setHasHorizontalScroller_(False)
         scroll.setAutohidesScrollers_(True)
         scroll.setDrawsBackground_(False)
         scroll.setBorderType_(0)
@@ -375,8 +392,10 @@ class RAPFindingInspector(NSObject):
         editor.setTextContainerInset_((12, 12))
         editor.setHorizontallyResizable_(False)
         editor.setVerticallyResizable_(True)
-        editor.setAutoresizingMask_(NSViewWidthSizable)
+        editor.setAutoresizingMask_(
+            NSViewWidthSizable | NSViewHeightSizable)
         editor.setMinSize_(NSMakeSize(0, 0))
+        editor.setMaxSize_(NSMakeSize(10_000_000, 10_000_000))
         editor.textContainer().setWidthTracksTextView_(True)
         editor.setAccessibilityLabel_("Exact rule input")
         scroll.setDocumentView_(editor)
@@ -493,6 +512,8 @@ class RAPFindingInspector(NSObject):
             self.earlier_button, NSView.alloc().init(),
             self.page_label, NSView.alloc().init(), self.later_button])
         self.context_pager = pager
+        self.pager_height = (
+            pager.heightAnchor().constraintEqualToConstant_(32))
         page.addSubview_(navigation)
         page.addSubview_(self.context_explanation)
         page.addSubview_(context_scroll)
@@ -526,7 +547,7 @@ class RAPFindingInspector(NSObject):
                 page.trailingAnchor(), -12),
             pager.bottomAnchor().constraintEqualToAnchor_constant_(
                 page.bottomAnchor(), -6),
-            pager.heightAnchor().constraintEqualToConstant_(32),
+            self.pager_height,
         )
         page.setHidden_(True)
 
@@ -534,8 +555,8 @@ class RAPFindingInspector(NSObject):
     def _refresh(self) -> None:
         self.presentation = present_finding(self.detail)
         p = self.presentation
-        self.project_label.setStringValue_(
-            Path(p["project_root"]).name or p["project_root"])
+        project_name = Path(p["project_root"]).name or p["project_root"]
+        self.project_button.setTitle_(f"{project_name} ↗")
         self.rule_button.setTitle_(p["rule_name"])
         self.age_label.setStringValue_(p["relative_time"])
         severity = p["severity"]
@@ -574,14 +595,75 @@ class RAPFindingInspector(NSObject):
                 NSFont.monospacedSystemFontOfSize_weight_(11, 0))
         else:
             self.input_view.setFont_(NSFont.systemFontOfSize_(12))
-        lines = max(1, rendered.count("\n") + len(rendered) // 88 + 1)
-        input_height = max(70, min(320, lines * 17 + 24))
+        self.window.contentView().layoutSubtreeIfNeeded()
+        input_height = max(
+            70, min(320, self._sync_input_text_layout()))
         activity_height = 40 if p.get("additional_activity_count") else 0
         self._detail_height = 82 + 42 + input_height + activity_height + 24
         if self.page == "detail":
             self.window.setContentSize_(NSMakeSize(
                 max(640, self.window.contentView().frame().size.width),
                 self._detail_height))
+            self.window.contentView().layoutSubtreeIfNeeded()
+            self._sync_input_text_layout()
+
+    @objc.python_method
+    def input_should_wrap(self) -> bool:
+        if self.wrap_mode == "wrap":
+            return True
+        if self.wrap_mode == "nowrap":
+            return False
+        return self.presentation.get(
+            "input_typography", "proportional"
+        ) not in ("monospace", "path")
+
+    @objc.python_method
+    def _sync_input_text_layout(self) -> float:
+        scroll = self.input_scroll
+        editor = self.input_view
+        container = editor.textContainer()
+        viewport = scroll.contentSize()
+        width = max(120.0, float(viewport.width))
+        height = max(1.0, float(viewport.height))
+        wrap = self.input_should_wrap()
+        scroll.setHasHorizontalScroller_(not wrap)
+        editor.setHorizontallyResizable_(not wrap)
+        container.setWidthTracksTextView_(wrap)
+        container.setContainerSize_(NSMakeSize(
+            width if wrap else 10_000_000,
+            10_000_000,
+        ))
+        if wrap:
+            editor.setFrameSize_(NSMakeSize(width, height))
+        else:
+            editor.setFrameSize_(NSMakeSize(
+                max(width, float(editor.frame().size.width)), height))
+        layout = editor.layoutManager()
+        layout.ensureLayoutForTextContainer_(container)
+        glyph_range = layout.glyphRangeForTextContainer_(container)
+        used = layout.boundingRectForGlyphRange_inTextContainer_(
+            glyph_range, container)
+        inset = editor.textContainerInset()
+        measured_height = max(
+            24.0, float(used.size.height) + float(inset.height) * 2 + 4)
+        document_width = width
+        if not wrap:
+            document_width = max(
+                width,
+                float(used.size.width) + float(inset.width) * 2 + 8,
+            )
+        editor.setFrameSize_(NSMakeSize(
+            document_width, max(height, measured_height)))
+        return measured_height
+
+    @objc.python_method
+    def set_wrap_mode(self, mode: str) -> None:
+        if mode not in WRAP_MODES:
+            return
+        self.wrap_mode = mode
+        defaults = NSUserDefaults.standardUserDefaults()
+        defaults.setObject_forKey_(mode, WRAP_MODE_KEY)
+        self._refresh_input()
 
     @objc.python_method
     def _show_page(self, page: str) -> None:
@@ -592,9 +674,8 @@ class RAPFindingInspector(NSObject):
     @objc.python_method
     def show_context(self) -> None:
         self._show_page("context")
-        self.window.setContentSize_(NSMakeSize(
-            max(640, self.window.contentView().frame().size.width), 640))
         self.context_table.reloadData()
+        self._fit_context_window()
 
     @objc.python_method
     def show_detail(self) -> None:
@@ -630,11 +711,34 @@ class RAPFindingInspector(NSObject):
         total = int(ledger.get("total", 0))
         paged = bool(ledger.get("has_earlier") or ledger.get("has_later"))
         self.context_pager.setHidden_(not paged)
+        self.pager_height.setConstant_(32 if paged else 0)
         self.page_label.setStringValue_(
             f"{start + 1 if total else 0}–{end} of {total}")
         self.earlier_button.setEnabled_(bool(ledger.get("has_earlier")))
         self.later_button.setEnabled_(bool(ledger.get("has_later")))
         self.context_table.reloadData()
+        if self.page == "context":
+            self._fit_context_window()
+
+    @objc.python_method
+    def _fit_context_window(self) -> None:
+        events = self.filtered_context_events()
+        rows_height = sum(
+            float(self.context_adapter.tableView_heightOfRow_(
+                self.context_table, index))
+            for index in range(len(events))
+        )
+        pager = 38 if not self.context_pager.isHidden() else 0
+        fixed = 82 + 62 + pager + 8
+        screen = self.window.screen() or NSScreen.mainScreen()
+        available = (
+            float(screen.visibleFrame().size.height) - 80
+            if screen else 680)
+        maximum = max(360, min(680, available))
+        desired = max(300, min(maximum, fixed + max(72, rows_height)))
+        self.window.setContentSize_(NSMakeSize(
+            max(640, self.window.contentView().frame().size.width),
+            desired))
 
     @staticmethod
     def event_time(event: dict[str, Any]) -> str:
@@ -691,6 +795,10 @@ class RAPFindingInspector(NSObject):
         self.manager.edit_rule(self.detail)
 
     @objc.python_method
+    def open_project(self) -> None:
+        self.manager.open_project(self.presentation.get("project_root", ""))
+
+    @objc.python_method
     def mark_reviewed(self) -> None:
         finding = self.detail.get("finding", {})
 
@@ -708,6 +816,8 @@ class RAPFindingInspector(NSObject):
         menu = NSMenu.alloc().initWithTitle_("Finding actions")
         self._menus.append(menu)
         for title, callback in (
+            ("Open Project in Cursor", self.open_project),
+            ("Evaluation History…", self.show_evaluation_history),
             ("Evaluation Details", self.show_evaluation_details),
             ("Recorded Rule", self.show_recorded_rule),
             ("Copy Audit JSON", self.copy_audit_json),
@@ -719,8 +829,39 @@ class RAPFindingInspector(NSObject):
                 title, "invoke:", "")
             self._wire(item, lambda _sender, fn=callback: fn())
             menu.addItem_(item)
+        menu.addItem_(NSMenuItem.separatorItem())
+        wrapping = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Line Wrapping", None, "")
+        wrapping_menu = NSMenu.alloc().initWithTitle_("Line Wrapping")
+        self._menus.append(wrapping_menu)
+        for title, mode in (
+            ("Automatic (Recommended)", "auto"),
+            ("Always Wrap", "wrap"),
+            ("Never Wrap", "nowrap"),
+        ):
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, "invoke:", "")
+            item.setState_(
+                NSControlStateValueOn
+                if self.wrap_mode == mode else NSControlStateValueOff)
+            self._wire(
+                item,
+                lambda _sender, selected=mode:
+                self.set_wrap_mode(selected),
+            )
+            wrapping_menu.addItem_(item)
+        wrapping.setSubmenu_(wrapping_menu)
+        menu.addItem_(wrapping)
         menu.popUpMenuPositioningItem_atLocation_inView_(
             None, (0, sender.bounds().size.height), sender)
+
+    @objc.python_method
+    def show_evaluation_history(self) -> None:
+        self.manager.open_evaluation_history(
+            str((self.detail.get("finding") or {}).get("rule_id", "")),
+            self.presentation.get("rule_name", ""),
+            self.presentation.get("project_root", ""),
+        )
 
     @objc.python_method
     def _show_text_window(self, title: str, text: str) -> None:
@@ -795,6 +936,10 @@ class RAPFindingInspector(NSObject):
         self.window.makeKeyAndOrderFront_(None)
         self.window.center()
 
+    def windowDidResize_(self, _notification):
+        if self.page == "detail" and self.input_view is not None:
+            self._sync_input_text_layout()
+
     def windowWillClose_(self, _notification):
         if self.manager:
             self.manager.closed(self)
@@ -805,10 +950,17 @@ class FindingInspectorManager:
         self,
         model: UIModel,
         edit_rule: Callable[[dict[str, Any]], None],
+        open_project: Callable[[str], None],
+        open_finding: Callable[[int], None] | None = None,
+        on_case_added: Callable[[str, str], None] | None = None,
     ) -> None:
         self.model = model
         self._edit_rule = edit_rule
+        self._open_project = open_project
+        self._open_finding = open_finding
+        self._on_case_added = on_case_added
         self.inspectors: dict[int, RAPFindingInspector] = {}
+        self._evaluation_history_manager = None
 
     def open(self, detail: dict[str, Any]) -> None:
         finding_id = int((detail.get("finding") or {}).get("id", 0))
@@ -841,6 +993,19 @@ class FindingInspectorManager:
                 return
             payload["_recorded_source"] = source
         self._edit_rule(payload)
+
+    def open_project(self, project_root: str) -> None:
+        self._open_project(project_root)
+
+    def open_evaluation_history(
+        self, rule_id: str, rule_name: str, project_root: str
+    ) -> None:
+        from .evaluation_history import EvaluationHistoryManager
+        if self._evaluation_history_manager is None:
+            self._evaluation_history_manager = EvaluationHistoryManager(
+                self.model, self._open_finding, self._on_case_added)
+        self._evaluation_history_manager.open(
+            rule_id, rule_name, project_root)
 
     def closed(self, inspector: RAPFindingInspector) -> None:
         for finding_id, value in list(self.inspectors.items()):

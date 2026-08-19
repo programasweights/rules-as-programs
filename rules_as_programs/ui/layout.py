@@ -49,8 +49,8 @@ def fit_rule_editor_layout(
 ) -> RuleEditorLayout:
     """Choose an initial content size without overriding later user resizing."""
     preferred_width = 900.0 if advanced else 760.0
-    preferred_height = (680.0 if advanced else 600.0) + max(
+    preferred_height = (680.0 if advanced else 440.0) + max(
         0.0, optional_height)
     width = max(680.0, min(preferred_width, available_width - 40.0))
-    height = max(520.0, min(preferred_height, available_height - 80.0))
+    height = max(420.0, min(preferred_height, available_height - 80.0))
     return RuleEditorLayout(width, height, width < 720.0)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from rules_as_programs import config, rules_api
@@ -10,7 +11,7 @@ from rules_as_programs.core import attention as attention_module
 from rules_as_programs.core.events import (
     Event, MESSAGE, QUESTION_REQUEST, USER_PROMPT,
 )
-from rules_as_programs.core.ledger import Ledger
+from rules_as_programs.core.ledger import Ledger, LedgerStore
 from rules_as_programs.core.rule import (
     RULE_ID_ALPHABET, is_rule_id, new_rule_id,
 )
@@ -22,6 +23,7 @@ from rules_as_programs.ui.layout import (
     fit_popover_layout,
     fit_rule_editor_layout,
 )
+from rules_as_programs.daemon import Daemon
 
 
 def _snapshot(*, findings=None, attention=None, status="ready", health="ready"):
@@ -75,19 +77,30 @@ def test_status_presentation_prioritizes_operations_then_severity_and_attention(
     assert many.badge_text == "99+"
 
 
-def test_paw_draft_is_in_memory_and_examples_are_parsed(monkeypatch, tmp_path):
+def test_paw_draft_uses_visible_exact_starter_spec(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     project.mkdir()
     rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id)
-    assert "WARNING" in source
-    assert "public/logo.png" in source
+    assert "Untitled rule" in source
+    assert rules_api.DEFAULT_FUZZY_SPEC in source
     assert "EXAMPLES =" not in source
     projection = rules_api.source_projection(source)
     assert projection["trigger"] == "afterShellExecution"
     assert projection["inputs"] == []
-    assert len(rules_api.spec_examples(projection["spec"])) == 3
+    assert rules_api.spec_examples(projection["spec"]) == []
+    assert projection["spec"] == rules_api.DEFAULT_FUZZY_SPEC
+    assert rules_api.inspect_spec_levels(projection["spec"]) == {
+        "ok": True,
+        "levels": ["OK", "WARNING"],
+        "warning": "",
+    }
+    warning = rules_api.inspect_spec_levels("Return WARNING")
+    assert not warning["ok"]
+    assert "Include OK" in warning["warning"]
     assert not config.project_rules_dir(project).exists()
 
 
@@ -245,6 +258,15 @@ def test_attention_lifecycle_and_cursor_prompt_events(monkeypatch, tmp_path):
         source="agent-needs-reply",
     )
     assert store.active()[0]["id"] == attention_id
+    replacement_id = store.set(
+        project_root="/project",
+        conversation_id="conversation",
+        generation_id="generation-2",
+        message="Which environment?",
+        confidence="explicit",
+        source="ask_question_tool",
+    )
+    assert [item["id"] for item in store.active()] == [replacement_id]
     assert store.clear(conversation_id="conversation") == 1
     assert store.active() == []
 
@@ -269,6 +291,40 @@ def test_attention_lifecycle_and_cursor_prompt_events(monkeypatch, tmp_path):
     question = next(
         event for event in question_events if event.kind == QUESTION_REQUEST)
     assert question.kind == QUESTION_REQUEST
+
+
+def test_user_reply_clears_only_same_conversation_attention(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(rules_api, "monitoring_paused", lambda: True)
+    daemon = Daemon.__new__(Daemon)
+    daemon._state_lock = threading.Lock()
+    daemon.known_projects = set()
+    daemon._project_activity = {}
+    daemon.ledgers = LedgerStore()
+    daemon.attention = AttentionStore()
+    for conversation in ("answered", "other"):
+        daemon.attention.set(
+            project_root="/project",
+            conversation_id=conversation,
+            generation_id="generation",
+            message="Need input",
+            confidence="explicit",
+            source="ask_question_tool",
+        )
+    prompt = Event(
+        kind=USER_PROMPT,
+        conversation_id="answered",
+        project_root="/project",
+        generation_id="next-generation",
+        payload={"text": "Use staging."},
+    )
+
+    daemon.handle_event(prompt.to_dict())
+
+    active = daemon.attention.active()
+    assert [item["conversation_id"] for item in active] == ["other"]
 
 
 def test_attention_expires(monkeypatch, tmp_path):
@@ -411,11 +467,11 @@ def test_rule_editor_layout_fits_mode_and_visible_screen():
         advanced=False, optional_height=72,
         available_width=1400, available_height=900)
 
-    assert (managed.width, managed.height) == (760, 600)
+    assert (managed.width, managed.height) == (760, 440)
     assert advanced.width > managed.width
     assert advanced.height > managed.height
     assert compact.width == 680
-    assert compact.height == 520
+    assert compact.height == 440
     assert compact.stacked_metadata
     assert with_callout.height > managed.height
 

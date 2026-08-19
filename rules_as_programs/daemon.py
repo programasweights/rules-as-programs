@@ -23,6 +23,7 @@ import socketserver
 import sys
 import threading
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ except ImportError:  # pragma: no cover - Windows
 
 from . import __version__, config, paw_runtime, rules_api, scaffold
 from .adapters.cursor import projects as cursor_projects
-from .core import audit
+from .core import audit, evaluation_log
 from .core.attention import AttentionStore
 from .core.engine import Engine, RuleContext
 from .core.events import (
@@ -42,7 +43,7 @@ from .core.events import (
 )
 from .core.ledger import LedgerStore
 from .core.incidents import IncidentStore
-from .core import revisions
+from .core import deployment_queue, revisions, validation_store
 from .core.rule import (
     LoadedRule, RuleLoadError, load_rule_file, load_rules_with_errors,
     new_rule_id, rule_paths,
@@ -103,6 +104,8 @@ class _RulesCache:
                     active_rule.source_path = info["cache_path"]
                     active_rule.working_source_path = rule.source_path
                     active_rule.compiler = str(info.get("compiler", ""))
+                    active_rule.compiler_snapshot = str(
+                        info.get("compiler_snapshot", ""))
                     active_rule.program_id = str(info.get("program_id", ""))
                     active_rules.append(active_rule)
                     continue
@@ -136,6 +139,8 @@ class Daemon:
         self.store = VerdictStore()
         self.attention = AttentionStore()
         self.incidents = IncidentStore()
+        self.validation_results = validation_store.ValidationResultStore()
+        self.deployment_queue = deployment_queue.DeploymentQueueStore()
         self.ledgers = LedgerStore()
         self.rules_cache = _RulesCache()
         self.engine = Engine(
@@ -154,8 +159,15 @@ class Daemon:
         self._project_activity: dict[str, dict[str, Any]] = {}
         self._prepared_deployments: dict[str, dict[str, Any]] = {}
         self._deployment_lock = threading.Lock()
+        self._finetune_jobs: dict[str, dict[str, Any]] = {}
+        self._finetune_lock = threading.Lock()
+        self._queued_deployment_lock = threading.Lock()
+        self._queued_deployments_running: set[str] = set()
         self._last_successful_audit = 0.0
         self._stop = threading.Event()
+        for queued in self.deployment_queue.pending():
+            self.work.submit(
+                self._run_queued_deployment, str(queued.get("id", "")))
 
     # --- event handling --------------------------------------------------
     def handle_event(self, ev_dict: dict[str, Any]) -> None:
@@ -218,6 +230,10 @@ class Daemon:
         rule_id = "gn3xtat6av4fy690"
         if not self._rule_enabled(rule_id, event.project_root):
             return
+        evaluation_id = secrets.token_hex(16)
+        started_at = time.time()
+        started_logged = False
+        rule = None
         try:
             rule = next(
                 (item for item in self.rules_cache.get(event.project_root)
@@ -230,21 +246,75 @@ class Daemon:
                 return
             input_text, _pointer, _value_type, _overridden = extract_input(
                 rule.trigger, event.raw_payload, rule.input_pointer)
+            source = ""
+            if rule.source_path:
+                try:
+                    source = Path(rule.source_path).read_text(encoding="utf-8")
+                except OSError:
+                    source = ""
+            evaluation_log.started(event.project_root, {
+                "evaluation_id": evaluation_id,
+                "timestamp": started_at,
+                "project_root": event.project_root,
+                "conversation_id": event.conversation_id,
+                "rule": {
+                    "id": rule.id,
+                    "name": rule.title,
+                    "source_hash": revisions.hash_source(source) if source else "",
+                    "behavior_hash": (
+                        revisions.behavior_hash(source) if source else ""),
+                    "compiler": rule.compiler or "",
+                    "compiler_snapshot": rule.compiler_snapshot or "",
+                    "program_id": rule.program_id or "",
+                },
+                "trigger": {
+                    "hook": event.hook_name,
+                    "event_id": event.id,
+                    "kind": event.kind,
+                },
+                "input": {
+                    "json_pointer": _pointer,
+                    "pointer_source": (
+                        "override" if _overridden else "default"),
+                    "value_type": _value_type,
+                    "text": input_text,
+                    "sha256": hashlib.sha256(
+                        input_text.encode("utf-8")).hexdigest(),
+                    "byte_count": len(input_text.encode("utf-8")),
+                },
+            })
+            started_logged = True
             input_bytes = len(input_text.encode("utf-8"))
             if input_bytes > rule.max_input_bytes:
+                message = (
+                    f"input too large: {input_bytes} bytes exceeds "
+                    f"{rule.max_input_bytes}")
+                evaluation_log.failed(event.project_root, {
+                    "evaluation_id": evaluation_id,
+                    "timestamp": time.time(),
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "error_code": "input_too_large",
+                    "error": message,
+                })
                 self._on_rule_error(
-                    rule, event.project_root,
-                    "input too large: "
-                    f"{input_bytes} bytes exceeds {rule.max_input_bytes}")
+                    rule, event.project_root, message)
                 return
             context = RuleContext(
                 ledger, self.runtime, rule.compiler or None,
                 input_text=input_text)
             result = rule.fn(context)
             if not result:
+                evaluation_log.completed(event.project_root, {
+                    "evaluation_id": evaluation_id,
+                    "timestamp": time.time(),
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "result": "OK",
+                    "finding_id": None,
+                    "attention_id": None,
+                })
                 return
             latest = input_text
-            self.attention.set(
+            attention_id = self.attention.set(
                 project_root=event.project_root,
                 conversation_id=event.conversation_id,
                 generation_id=event.generation_id,
@@ -252,7 +322,40 @@ class Daemon:
                 confidence="inferred",
                 source=rule_id,
             )
+            evaluation_log.completed(event.project_root, {
+                "evaluation_id": evaluation_id,
+                "timestamp": time.time(),
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "result": str(result[0]).upper(),
+                "finding_id": None,
+                "attention_id": attention_id,
+            })
         except Exception as exc:
+            if rule is not None:
+                if not started_logged:
+                    evaluation_log.started(event.project_root, {
+                        "evaluation_id": evaluation_id,
+                        "timestamp": started_at,
+                        "project_root": event.project_root,
+                        "conversation_id": event.conversation_id,
+                        "rule": {"id": rule.id, "name": rule.title},
+                        "trigger": {
+                            "hook": event.hook_name,
+                            "event_id": event.id,
+                            "kind": event.kind,
+                        },
+                        "input": {
+                            "json_pointer": rule.input_pointer,
+                            "text": None,
+                        },
+                    })
+                evaluation_log.failed(event.project_root, {
+                    "evaluation_id": evaluation_id,
+                    "timestamp": time.time(),
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "error_code": "runtime_exception",
+                    "error": str(exc),
+                })
             _log(f"attention evaluate error: {exc!r}")
 
     def _warm(self, project_root: str) -> None:
@@ -559,6 +662,42 @@ class Daemon:
                         candidate_id, project_root, reason="rule_deleted")
         return archived
 
+    @staticmethod
+    def _decorate_finding_group(
+        group: dict[str, Any], summary: dict[str, Any]
+    ) -> bool:
+        current_hash = (
+            summary.get("active_hash") or summary.get("working_hash") or "")
+        current_behavior_hash = str(
+            summary.get("active_behavior_hash")
+            or summary.get("working_behavior_hash")
+            or summary.get("behavior_hash")
+            or "")
+        evaluation_rule = (
+            (group.get("evaluation") or {}).get("rule") or {})
+        recorded_behavior_hash = str(
+            group.get("behavior_hash")
+            or evaluation_rule.get("behavior_hash")
+            or "")
+        if not recorded_behavior_hash:
+            recorded_source = str(evaluation_rule.get("source", ""))
+            if recorded_source:
+                recorded_behavior_hash = revisions.behavior_hash(
+                    recorded_source)
+        stale = bool(
+            recorded_behavior_hash
+            and current_behavior_hash
+            and recorded_behavior_hash != current_behavior_hash)
+        group["stale"] = stale
+        group["current_source_hash"] = current_hash
+        group["current_behavior_hash"] = current_behavior_hash
+        group["recorded_rule_title"] = group.get("rule_title", "")
+        current_name = str(
+            summary.get("name") or summary.get("title") or "")
+        if current_name:
+            group["rule_title"] = current_name
+        return stale
+
     def snapshot(self) -> dict[str, Any]:
         self._archive_orphaned_findings()
         all_findings = self.store.by_project()
@@ -570,14 +709,7 @@ class Daemon:
             }
             for group in groups:
                 summary = summaries.get(group.get("rule_id"), {})
-                current_hash = (
-                    summary.get("active_hash") or summary.get("working_hash") or ""
-                )
-                recorded_hash = group.get("source_hash") or ""
-                stale = bool(
-                    recorded_hash and recorded_hash != current_hash)
-                group["stale"] = stale
-                group["current_source_hash"] = current_hash
+                stale = self._decorate_finding_group(group, summary)
                 target = stale_findings if stale else active_findings
                 target.setdefault(project_root, []).append(group)
         combined = {
@@ -697,16 +829,34 @@ class Daemon:
             return self._rule_from(rule_id, project_root, info["source"])
         return None
 
-    def compile_rule(self, rule_id: str, project_root: str, finalize: bool = False,
-                     source: str | None = None) -> dict[str, Any]:
+    def compile_rule(
+        self,
+        rule_id: str,
+        project_root: str,
+        finalize: bool = False,
+        source: str | None = None,
+        compiler: str | None = None,
+    ) -> dict[str, Any]:
         if not self.runtime.available:
             return {"ok": False, "error": "PAW SDK not available"}
         rule = self._rule_from(rule_id, project_root, source)
         if rule is None or not rule.spec:
             return {"ok": False, "error": "rule has no PAW spec"}
-        compiler = "paw-ft-bs48" if finalize else None
+        compiler_info = self.runtime.compiler_info(compiler or "")
+        if finalize and not compiler:
+            compiler_info = self.runtime.compatible_finetune_compiler("")
+            compiler = str(compiler_info.get("name", "")) or None
+            if not compiler:
+                return {
+                    "ok": False,
+                    "error": "No compatible finetune compiler is available.",
+                }
+        compiler_kind = str(compiler_info.get("compiler_kind", ""))
         self._set_warm_state(project_root, rule.id, "warming")
-        pid = self.runtime.program_id_for_spec(rule.spec, compiler)
+        pid = self.runtime.program_id_for_spec(
+            rule.spec,
+            compiler,
+            timeout=360 if compiler_kind == "finetune_lora" else None)
         if not pid:
             self._set_warm_state(
                 project_root, rule.id, "failed", "Compilation failed or timed out")
@@ -717,7 +867,695 @@ class Daemon:
             "" if warmed else "Local PAW model failed to warm")
         if not warmed:
             return {"ok": False, "error": "compiled, but local model failed to warm"}
-        return {"ok": True, "program_id": pid, "finalized": finalize}
+        return {
+            "ok": True,
+            "program_id": pid,
+            "finalized": compiler_kind == "finetune_lora",
+            "compiler": compiler or str(compiler_info.get("name", "")),
+            "compiler_info": compiler_info,
+        }
+
+    def start_finetune(
+        self,
+        rule_id: str,
+        project_root: str,
+        compiler_name: str = "",
+        source: str = "",
+        validation_cases: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        info = rules_api.get_rule(rule_id, project_root or None) or {}
+        active = info.get("active") or {}
+        source_path = str(
+            (info.get("definition") or {}).get("source_path", ""))
+        if source:
+            source_hash = revisions.hash_source(source)
+            source_behavior_hash = revisions.behavior_hash(source)
+            cases = rules_api.normalize_validation_cases(validation_cases)
+        else:
+            source_hash = str(active.get("source_hash", ""))
+            source_behavior_hash = str(active.get("behavior_hash", ""))
+            cache_path = Path(str(active.get("cache_path", "")))
+            if not source_hash or not cache_path.exists():
+                return {"ok": False, "error": "Rule source is unavailable."}
+            try:
+                source = cache_path.read_text(encoding="utf-8")
+            except OSError:
+                return {
+                    "ok": False,
+                    "error": "Deployed rule source is unavailable.",
+                }
+            if not source_behavior_hash:
+                source_behavior_hash = revisions.behavior_hash(source)
+            cases = rules_api.validation_cases_for_path(source_path)
+        compiler_info = (
+            self.runtime.compiler_info(compiler_name)
+            if compiler_name
+            else self.runtime.compatible_finetune_compiler(
+                str(active.get("compiler", "")))
+        )
+        compiler_name = str(compiler_info.get("name", ""))
+        if not compiler_name:
+            return {
+                "ok": False,
+                "error": "No compatible finetune compiler is available.",
+            }
+        if not compiler_info.get("supports_local_sdk", True):
+            return {
+                "ok": False,
+                "error": "Selected compiler does not support the local SDK.",
+            }
+        rule = self._rule_from(rule_id, project_root, source)
+        if rule is None or not rule.spec:
+            return {"ok": False, "error": "Rule has no PAW specification."}
+        with self._finetune_lock:
+            existing = self._finetune_jobs.get(rule_id)
+            if existing and existing.get("status") in ("building", "ready"):
+                if (
+                    str(existing.get("behavior_hash", ""))
+                    == source_behavior_hash
+                    and str(existing.get("compiler", "")) == compiler_name
+                ):
+                    return {"ok": True, "job": dict(existing)}
+                existing["status"] = "cancelled"
+                existing["stale"] = True
+                existing["finished_at"] = time.time()
+            job = {
+                "id": secrets.token_urlsafe(16),
+                "rule_id": rule_id,
+                "rule_name": rule.title,
+                "project_root": project_root,
+                "source_hash": source_hash,
+                "behavior_hash": source_behavior_hash,
+                "source_path": source_path,
+                "source": source,
+                "spec": rule.spec,
+                "validation_cases": cases,
+                "status": "building",
+                "compiler": compiler_name,
+                "compiler_info": compiler_info,
+                "compiler_snapshot": str(
+                    compiler_info.get("latest_snapshot", "")),
+                "program_id": "",
+                "error": "",
+                "started_at": time.time(),
+                "finished_at": None,
+            }
+            self._finetune_jobs[rule_id] = job
+        self.work.submit(self._run_finetune, rule_id, job["id"])
+        return {"ok": True, "job": dict(job)}
+
+    def _run_finetune(self, rule_id: str, job_id: str) -> None:
+        with self._finetune_lock:
+            job = dict(self._finetune_jobs.get(rule_id) or {})
+        if job.get("id") != job_id or job.get("status") != "building":
+            return
+        program_id = self.runtime.program_id_for_spec(
+            str(job.get("spec", "")),
+            str(job.get("compiler", "")),
+            timeout=(
+                360
+                if (job.get("compiler_info") or {}).get(
+                    "compiler_kind") == "finetune_lora"
+                else None
+            ),
+        )
+        with self._finetune_lock:
+            current = self._finetune_jobs.get(rule_id)
+            if not current or current.get("id") != job_id:
+                return
+            if current.get("status") != "building":
+                return
+            current["finished_at"] = time.time()
+            if program_id:
+                current["status"] = "ready"
+                current["program_id"] = program_id
+                current["validation"] = {
+                    "ok": True,
+                    "passed": 0,
+                    "total": 0,
+                    "results": [],
+                    "note": "Validation cases run only when requested.",
+                }
+            else:
+                current["status"] = "failed"
+                current["error"] = "Finetuned compilation failed or timed out."
+            queued_job = dict(current)
+        self._resume_queued_deployment_for_job(rule_id, queued_job)
+
+    @staticmethod
+    def _public_deployment_queue(
+        value: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if not value:
+            return {}
+        allowed = {
+            "id", "rule_id", "project_root", "source_hash", "compiler",
+            "behavior_hash",
+            "compiler_snapshot", "program_id", "status", "phase", "error",
+            "created_at", "updated_at", "finished_at", "result",
+        }
+        return {
+            key: item for key, item in value.items() if key in allowed
+        }
+
+    def queue_deployment(self, req: dict[str, Any]) -> dict[str, Any]:
+        rule_id = str(req.get("rule_id", ""))
+        project_root = str(req.get("project_root", ""))
+        source = str(req.get("source", ""))
+        valid, error = rules_api.validate_editor_source(source)
+        if not valid:
+            return {"ok": False, "error": error}
+        projection = rules_api.source_projection(source)
+        if projection.get("id") != rule_id:
+            return {"ok": False, "error": "source ID does not match the rule"}
+        compiler = str(req.get("compiler", ""))
+        source_hash = revisions.hash_source(source)
+        source_behavior_hash = revisions.behavior_hash(source)
+        queue_id = str(
+            req.get("deployment_id") or secrets.token_urlsafe(18))
+        existing_id = self.deployment_queue.get(queue_id)
+        if existing_id:
+            if (
+                str(existing_id.get("rule_id", "")) != rule_id
+                or str(existing_id.get("source_hash", "")) != source_hash
+                or str(existing_id.get("compiler", "")) != compiler
+            ):
+                return {
+                    "ok": False,
+                    "error": "Deployment ID already belongs to another draft.",
+                    "conflict": True,
+                }
+            return {
+                "ok": True,
+                "queue": self._public_deployment_queue(existing_id),
+                "idempotent": True,
+            }
+        with self._finetune_lock:
+            job = dict(self._finetune_jobs.get(rule_id) or {})
+        job_matches = bool(
+            str(job.get("behavior_hash", "")) == source_behavior_hash
+            and str(job.get("compiler", "")) == compiler
+            and job.get("status") in ("building", "ready")
+        )
+        current = rules_api.get_rule(rule_id, project_root or None) or {}
+        if not current:
+            saved = rules_api.save_library_draft(
+                rule_id, source, expected_absent=True)
+            if not saved.get("ok"):
+                return saved
+            rules_api.save_validation_cases(
+                str(saved.get("path", "")),
+                list(req.get("validation_cases") or []),
+            )
+            rules_api.save_deployment_coverage_draft(
+                rule_id, dict(req.get("coverage") or {}))
+            current = rules_api.get_rule(rule_id, None) or {}
+        current_definition = current.get("definition") or {}
+        current_active = current.get("active") or {}
+        expected_active_hash = str(req.get(
+            "expected_active_hash",
+            current_active.get("source_hash", ""),
+        ))
+        if str(current_active.get("source_hash", "")) != expected_active_hash:
+            return {
+                "ok": False,
+                "error": "The deployed revision changed; review the draft again.",
+            }
+        rule = self._rule_from(rule_id, project_root, source)
+        if rule is None:
+            return {"ok": False, "error": "Queued rule could not be loaded."}
+        compiler_info = self.runtime.compiler_info(compiler)
+        requires_build = (
+            compiler_info.get("compiler_kind") == "finetune_lora")
+        requested_program = str(req.get("program_id", ""))
+        cached_program = getattr(
+            self.runtime, "cached_program_id_for_spec", None)
+        cached_program_id = (
+            str(cached_program(rule.spec, compiler or None) or "")
+            if callable(cached_program) else ""
+        )
+        active_program = ""
+        active_compiler = str(
+            current_active.get("compiler")
+            or self.runtime.compiler_info("").get("name", ""))
+        if (
+            str(current_active.get("behavior_hash", ""))
+            == source_behavior_hash
+            and active_compiler == compiler
+        ):
+            active_program = str(current_active.get("program_id", ""))
+        program_id = ""
+        if job_matches and job.get("status") == "ready":
+            program_id = str(job.get("program_id", ""))
+        elif requested_program and requested_program in (
+            cached_program_id, active_program
+        ):
+            program_id = requested_program
+        elif cached_program_id:
+            program_id = cached_program_id
+        elif active_program:
+            program_id = active_program
+        if requires_build and not program_id and not (
+            job_matches and job.get("status") == "building"
+        ):
+            return {
+                "ok": False,
+                "error": "No matching compiler build exists for this draft.",
+                "compiler_build_required": True,
+            }
+        existing = self.deployment_queue.active_for_rule(rule_id)
+        if existing:
+            self.deployment_queue.cancel(
+                str(existing.get("id", "")),
+                "Superseded by a newer deployment request.",
+            )
+        waiting_for_build = bool(
+            job_matches and job.get("status") == "building")
+        initial_status = (
+            "waiting_for_build"
+            if waiting_for_build else (
+                "checking" if program_id else "building"
+            )
+        )
+        queue_value = self.deployment_queue.put({
+            "id": queue_id,
+            "rule_id": rule_id,
+            "project_root": project_root,
+            "source": source,
+            "source_hash": source_hash,
+            "behavior_hash": source_behavior_hash,
+            "compiler": compiler,
+            "compiler_snapshot": str(
+                req.get("compiler_snapshot")
+                or (
+                    job.get("compiler_snapshot", "")
+                    if job_matches else ""
+                )
+                or compiler_info.get("latest_snapshot", "")),
+            "program_id": program_id,
+            "validation_cases": rules_api.normalize_validation_cases(
+                list(req.get("validation_cases") or [])),
+            "coverage": dict(req.get("coverage") or {}),
+            "warnings": list(req.get("warnings") or []),
+            "allow_failed_validation": bool(
+                req.get("allow_failed_validation")),
+            "validation_policy": str(
+                req.get("validation_policy") or "run"),
+            "expected_active_hash": expected_active_hash,
+            "expected_definition_hash": str(
+                current_definition.get("source_hash", "")),
+            "status": initial_status,
+            "phase": (
+                "Building compiler"
+                if initial_status in ("waiting_for_build", "building")
+                else "Checking draft"
+            ),
+            "error": "",
+        })
+        if not waiting_for_build:
+            self._schedule_queued_deployment(queue_id)
+        _log(
+            f"deployment {queue_id} queued rule={rule_id} "
+            f"compiler={compiler} status={initial_status}")
+        return {
+            "ok": True,
+            "queue": self._public_deployment_queue(queue_value),
+        }
+
+    def deployment_queue_status(
+        self, rule_id: str, queue_id: str = ""
+    ) -> dict[str, Any]:
+        value = (
+            self.deployment_queue.get(queue_id)
+            if queue_id else (
+                self.deployment_queue.active_for_rule(rule_id)
+                or self.deployment_queue.latest_for_rule(rule_id)
+            )
+        )
+        return {
+            "ok": True,
+            "queue": self._public_deployment_queue(value),
+        }
+
+    def cancel_queued_deployment(
+        self, rule_id: str, reason: str = "Cancelled by user."
+    ) -> dict[str, Any]:
+        value = self.deployment_queue.active_for_rule(rule_id)
+        if not value:
+            return {"ok": False, "error": "No deployment is queued."}
+        cancelled = self.deployment_queue.cancel(
+            str(value.get("id", "")), reason)
+        return {
+            "ok": True,
+            "queue": self._public_deployment_queue(cancelled),
+        }
+
+    def _resume_queued_deployment_for_job(
+        self, rule_id: str, job: dict[str, Any]
+    ) -> None:
+        queued = self.deployment_queue.active_for_rule(rule_id)
+        if not queued:
+            return
+        if (
+            str(queued.get("behavior_hash", ""))
+            != str(job.get("behavior_hash", ""))
+            or str(queued.get("compiler", ""))
+            != str(job.get("compiler", ""))
+        ):
+            return
+        if job.get("status") == "ready":
+            self.deployment_queue.update(
+                str(queued["id"]),
+                status="checking",
+                phase="Checking draft",
+                program_id=str(job.get("program_id", "")),
+                compiler_snapshot=str(
+                    job.get("compiler_snapshot", "")),
+            )
+            self._schedule_queued_deployment(str(queued["id"]))
+        elif job.get("status") == "failed":
+            self.deployment_queue.update(
+                str(queued["id"]),
+                status="failed",
+                phase="Compiler failed",
+                error=str(job.get("error", "Compiler build failed.")),
+                finished_at=time.time(),
+            )
+
+    def _schedule_queued_deployment(
+        self, queue_id: str, delay: float = 0.25
+    ) -> None:
+        def submit():
+            self.work.submit(self._run_queued_deployment, queue_id)
+
+        timer = threading.Timer(delay, submit)
+        timer.daemon = True
+        timer.start()
+
+    def _run_queued_deployment(self, queue_id: str) -> None:
+        if not queue_id:
+            return
+        with self._queued_deployment_lock:
+            if queue_id in self._queued_deployments_running:
+                return
+            self._queued_deployments_running.add(queue_id)
+        try:
+            queued = self.deployment_queue.get(queue_id)
+            if (
+                not queued
+                or queued.get("status")
+                not in deployment_queue.PENDING_STATUSES
+            ):
+                return
+            rule_id = str(queued.get("rule_id", ""))
+            project_root = str(queued.get("project_root", ""))
+            source = str(queued.get("source", ""))
+            _log(
+                f"deployment {queue_id} started rule={rule_id} "
+                f"status={queued.get('status', '')}")
+            current = rules_api.get_rule(
+                rule_id, project_root or None) or {}
+            already_active = current.get("active") or {}
+            if (
+                str(already_active.get("behavior_hash", ""))
+                == str(queued.get("behavior_hash", ""))
+                and str(already_active.get("compiler", ""))
+                == str(queued.get("compiler", ""))
+                and str(current.get("working_hash", ""))
+                == str(queued.get("source_hash", ""))
+            ):
+                self.deployment_queue.update(
+                    queue_id,
+                    status="succeeded",
+                    phase="Deployed",
+                    error="",
+                    result={
+                        "ok": True,
+                        "active": already_active,
+                        "rule": current,
+                        "coverage": rules_api.rule_coverage(
+                            rule_id, [
+                                item["path"]
+                                for item in self._project_catalog()
+                            ]),
+                    },
+                    finished_at=time.time(),
+                )
+                return
+            rule = self._rule_from(rule_id, project_root, source)
+            if rule is None or not rule.spec:
+                self.deployment_queue.update(
+                    queue_id,
+                    status="failed",
+                    phase="Invalid draft",
+                    error="The queued rule could not be loaded.",
+                    finished_at=time.time(),
+                )
+                return
+            program_id = str(queued.get("program_id", ""))
+            if not program_id:
+                self.deployment_queue.update(
+                    queue_id, status="building", phase="Building compiler")
+                compiler_info = self.runtime.compiler_info(
+                    str(queued.get("compiler", "")))
+                program_id = str(self.runtime.program_id_for_spec(
+                    rule.spec,
+                    str(queued.get("compiler", "")) or None,
+                    timeout=(
+                        360
+                        if compiler_info.get("compiler_kind")
+                        == "finetune_lora"
+                        else None
+                    ),
+                ) or "")
+                if not program_id:
+                    self.deployment_queue.update(
+                        queue_id,
+                        status="failed",
+                        phase="Compiler failed",
+                        error="The compiler build failed or timed out.",
+                        finished_at=time.time(),
+                    )
+                    return
+                self.deployment_queue.update(
+                    queue_id,
+                    program_id=program_id,
+                    compiler_snapshot=str(
+                        compiler_info.get("latest_snapshot", "")),
+                )
+            queued = self.deployment_queue.get(queue_id) or {}
+            if queued.get("status") == "cancelled":
+                return
+            current = rules_api.get_rule(rule_id, project_root or None) or {}
+            definition = current.get("definition") or {}
+            active = current.get("active") or {}
+            if (
+                str(definition.get("source_hash", ""))
+                != str(queued.get("expected_definition_hash", ""))
+                or str(active.get("source_hash", ""))
+                != str(queued.get("expected_active_hash", ""))
+            ):
+                self.deployment_queue.update(
+                    queue_id,
+                    status="cancelled",
+                    phase="Draft changed",
+                    error="The rule changed after deployment was queued.",
+                    finished_at=time.time(),
+                )
+                return
+            self.deployment_queue.update(
+                queue_id, status="checking", phase="Checking draft")
+            prepared = self.prepare_rule_deployment({
+                "rule_id": rule_id,
+                "project_root": project_root,
+                "source": source,
+                "source_changed": (
+                    str(queued.get("source_hash", ""))
+                    != str(active.get("source_hash", ""))
+                ),
+                "expected_active_hash": str(
+                    queued.get("expected_active_hash", "")),
+                "compiler": str(queued.get("compiler", "")),
+                "compiler_snapshot": str(
+                    queued.get("compiler_snapshot", "")),
+                "program_id": program_id,
+                "coverage": dict(queued.get("coverage") or {}),
+                "warnings": list(queued.get("warnings") or []),
+                "validation_cases": list(
+                    queued.get("validation_cases") or []),
+                "allow_failed_validation": bool(
+                    queued.get("allow_failed_validation")),
+                "validation_policy": str(
+                    queued.get("validation_policy") or "run"),
+            })
+            if not prepared.get("ok"):
+                self.deployment_queue.update(
+                    queue_id,
+                    status="failed",
+                    phase=(
+                        "Validation failed"
+                        if prepared.get("validation_failed")
+                        else "Deployment failed"
+                    ),
+                    error=str(
+                        prepared.get("error", "Deployment preparation failed.")),
+                    result={
+                        "validation": prepared.get("validation") or {},
+                        "validation_failed": bool(
+                            prepared.get("validation_failed")),
+                    },
+                    finished_at=time.time(),
+                )
+                _log(
+                    f"deployment {queue_id} failed phase=prepare "
+                    f"error={prepared.get('error', '')}")
+                return
+            if (
+                (self.deployment_queue.get(queue_id) or {}).get("status")
+                == "cancelled"
+            ):
+                return
+            self.deployment_queue.update(
+                queue_id, status="deploying", phase="Deploying")
+            result = self.commit_rule_deployment(str(prepared["token"]))
+            self.deployment_queue.update(
+                queue_id,
+                status="succeeded" if result.get("ok") else "failed",
+                phase="Deployed" if result.get("ok") else "Deployment failed",
+                error="" if result.get("ok") else str(
+                    result.get("error", "Deployment failed.")),
+                result=result,
+                finished_at=time.time(),
+            )
+            _log(
+                f"deployment {queue_id} "
+                f"{'succeeded' if result.get('ok') else 'failed'} "
+                f"phase=commit error={result.get('error', '')}")
+        except Exception as exc:
+            traceback.print_exc()
+            self.deployment_queue.update(
+                queue_id,
+                status="failed",
+                phase="Internal error",
+                error=f"{type(exc).__name__}: {exc}",
+                finished_at=time.time(),
+            )
+            _log(
+                f"deployment {queue_id} crashed "
+                f"error={type(exc).__name__}: {exc}")
+        finally:
+            with self._queued_deployment_lock:
+                self._queued_deployments_running.discard(queue_id)
+
+    def finetune_status(
+        self, rule_id: str, project_root: str
+    ) -> dict[str, Any]:
+        info = rules_api.get_rule(rule_id, project_root or None) or {}
+        active = dict(info.get("active") or {})
+        with self._finetune_lock:
+            job = dict(self._finetune_jobs.get(rule_id) or {})
+        if job:
+            job["stale"] = bool(
+                active.get("behavior_hash")
+                and str(active.get("behavior_hash"))
+                != str(job.get("behavior_hash")))
+        return {
+            "ok": True,
+            "active": active,
+            "job": job,
+        }
+
+    def cancel_finetune(self, rule_id: str) -> dict[str, Any]:
+        with self._finetune_lock:
+            job = self._finetune_jobs.get(rule_id)
+            if not job or job.get("status") != "building":
+                return {"ok": False, "error": "No finetune build is running."}
+            job["status"] = "cancelled"
+            job["finished_at"] = time.time()
+        return {"ok": True}
+
+    def _discard_stale_finetune_job(
+        self, rule_id: str, active_behavior_hash: str
+    ) -> bool:
+        with self._finetune_lock:
+            job = self._finetune_jobs.get(rule_id)
+            if (
+                not job
+                or str(job.get("behavior_hash", ""))
+                == active_behavior_hash
+                or job.get("status") not in ("building", "ready")
+            ):
+                return False
+            job["status"] = "cancelled"
+            job["stale"] = True
+            job["error"] = (
+                "Build discarded because a different revision was deployed.")
+            job["finished_at"] = time.time()
+            return True
+
+    def discard_finetune(self, rule_id: str) -> dict[str, Any]:
+        with self._finetune_lock:
+            job = self._finetune_jobs.get(rule_id)
+            if not job or job.get("status") not in (
+                "ready", "failed", "cancelled"):
+                return {"ok": False, "error": "No finetuned build to discard."}
+            self._finetune_jobs.pop(rule_id, None)
+        return {"ok": True}
+
+    def activate_finetune(
+        self,
+        rule_id: str,
+        project_root: str,
+        *,
+        allow_failed_validation: bool = False,
+    ) -> dict[str, Any]:
+        with self._finetune_lock:
+            job = dict(self._finetune_jobs.get(rule_id) or {})
+        if job.get("status") != "ready":
+            return {"ok": False, "error": "Finetuned build is not ready."}
+        validation = job.get("validation") or {}
+        if (
+            validation.get("total")
+            and not validation.get("ok")
+            and not allow_failed_validation
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    f"{validation.get('passed', 0)}/"
+                    f"{validation.get('total', 0)} validation cases passed"
+                ),
+                "validation_failed": True,
+                "validation": validation,
+            }
+        info = rules_api.get_rule(rule_id, project_root or None) or {}
+        active = info.get("active") or {}
+        if str(active.get("behavior_hash", "")) != str(
+            job.get("behavior_hash", "")
+        ):
+            return {
+                "ok": False,
+                "error": "The deployed specification changed; discard this build.",
+                "stale": True,
+            }
+        activated = revisions.activate(
+            rule_id,
+            str(
+                ((info.get("definition") or {}).get("source_path"))
+                or job.get("source_path", "")),
+            str(info.get("source") or job.get("source", "")),
+            compiler=str(job.get("compiler", "")),
+            program_id=str(job.get("program_id", "")),
+            warnings=list(active.get("warnings") or []),
+            compiler_snapshot=str(job.get("compiler_snapshot", "")),
+        )
+        with self._finetune_lock:
+            current = self._finetune_jobs.get(rule_id)
+            if current and current.get("id") == job.get("id"):
+                current["status"] = "activated"
+                current["finished_at"] = time.time()
+        self.rules_cache.invalidate()
+        return {"ok": True, "active": activated}
 
     def test_rule(self, rule_id: str, project_root: str,
                   source: str | None = None,
@@ -744,6 +1582,229 @@ class Daemon:
             passed += 1 if ok else 0
             results.append({"want": want_u, "got": got_raw, "ok": ok})
         return {"ok": True, "results": results, "passed": passed, "total": len(cases)}
+
+    def _validation_target(
+        self,
+        rule_id: str,
+        project_root: str,
+        rule: LoadedRule,
+        requested_compiler: str = "",
+        requested_program_id: str = "",
+        requested_snapshot: str = "",
+    ) -> dict[str, Any]:
+        default_info = self.runtime.compiler_info("")
+        compiler_info = (
+            self.runtime.compiler_info(requested_compiler)
+            if requested_compiler else default_info)
+        compiler = str(
+            requested_compiler or compiler_info.get("name", ""))
+        compiler_snapshot = str(
+            requested_snapshot
+            or compiler_info.get("latest_snapshot", ""))
+        target = {
+            "compiler": compiler,
+            "compiler_snapshot": compiler_snapshot,
+            "program_id": "",
+            "spec_hash": validation_store.spec_fingerprint(rule.spec),
+            "uses_active_program": False,
+        }
+        cached_program = getattr(
+            self.runtime, "cached_program_id_for_spec", None)
+        if callable(cached_program):
+            target["program_id"] = str(
+                cached_program(
+                    rule.spec, compiler or None) or "")
+        if requested_program_id and requested_program_id == target["program_id"]:
+            target["program_id"] = requested_program_id
+        with self._finetune_lock:
+            job = dict(self._finetune_jobs.get(rule_id) or {})
+        if (
+            job.get("status") == "ready"
+            and str(job.get("compiler", "")) == compiler
+            and str(job.get("spec", "")).strip() == rule.spec.strip()
+            and (
+                not requested_program_id
+                or str(job.get("program_id", "")) == requested_program_id
+            )
+        ):
+            target["program_id"] = str(job.get("program_id", ""))
+            target["compiler_snapshot"] = str(
+                job.get("compiler_snapshot", compiler_snapshot))
+        info = rules_api.get_rule(rule_id, project_root or None) or {}
+        active = info.get("active") or {}
+        active_program = str(active.get("program_id", ""))
+        cache_path = Path(str(active.get("cache_path", "")))
+        if not active_program or not cache_path.exists():
+            return target
+        try:
+            active_source = cache_path.read_text(encoding="utf-8")
+        except OSError:
+            return target
+        active_rule = self._rule_from(
+            rule_id, project_root, active_source)
+        if active_rule is None or active_rule.spec.strip() != rule.spec.strip():
+            return target
+        active_compiler = str(active.get("compiler", ""))
+        if not active_compiler:
+            active_compiler = str(default_info.get("name", ""))
+        if requested_compiler and active_compiler != compiler:
+            return target
+        return {
+            "compiler": active_compiler,
+            "compiler_snapshot": str(
+                active.get("compiler_snapshot", "")),
+            "program_id": active_program,
+            "spec_hash": validation_store.spec_fingerprint(rule.spec),
+            "uses_active_program": True,
+        }
+
+    def run_validation_cases(
+        self,
+        program_id: str,
+        cases: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        results = []
+        passed = 0
+        for case in rules_api.normalize_validation_cases(cases):
+            actual_raw = self.runtime.run(program_id, case["input"])
+            actual = (actual_raw or "").strip().upper()
+            expected = case["expected"]
+            valid_output = actual in ("OK", "INFO", "WARNING", "CRITICAL")
+            ok = valid_output and actual == expected
+            if ok:
+                passed += 1
+            results.append({
+                **case,
+                "actual": actual_raw or "",
+                "valid_output": valid_output,
+                "ok": ok,
+            })
+        return {
+            "ok": passed == len(results),
+            "passed": passed,
+            "total": len(results),
+            "results": results,
+        }
+
+    def _record_validation_results(
+        self,
+        *,
+        project_root: str,
+        rule_id: str,
+        spec: str,
+        target: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> dict[str, Any]:
+        results = self.validation_results.record(
+            project_root=project_root,
+            rule_id=rule_id,
+            spec=spec,
+            compiler=str(target.get("compiler", "")),
+            compiler_snapshot=str(
+                target.get("compiler_snapshot", "")),
+            program_id=str(target.get("program_id", "")),
+            results=list(validation.get("results") or []),
+        )
+        return {**validation, "results": results}
+
+    def cached_validation_results(
+        self,
+        rule_id: str,
+        project_root: str,
+        source: str,
+        cases: list[dict[str, Any]],
+        compiler: str = "",
+        compiler_snapshot: str = "",
+        program_id: str = "",
+    ) -> dict[str, Any]:
+        rule = self._rule_from(rule_id, project_root, source)
+        if rule is None or not rule.spec:
+            return {"ok": False, "error": "Rule has no PAW specification."}
+        normalized = rules_api.normalize_validation_cases(cases)
+        target = self._validation_target(
+            rule_id,
+            project_root,
+            rule,
+            compiler,
+            program_id,
+            compiler_snapshot,
+        )
+        results = self.validation_results.matching(
+            project_root=project_root,
+            rule_id=rule_id,
+            spec=rule.spec,
+            compiler=str(target.get("compiler", "")),
+            compiler_snapshot=str(
+                target.get("compiler_snapshot", "")),
+            cases=normalized,
+            program_id=str(target.get("program_id", "")),
+        )
+        return {
+            "ok": True,
+            "target": target,
+            "validation": {
+                "passed": sum(1 for item in results if item.get("ok")),
+                "matched": len(results),
+                "total": len(normalized),
+                "results": results,
+            },
+        }
+
+    def validate_rule_cases(
+        self,
+        rule_id: str,
+        project_root: str,
+        source: str,
+        cases: list[dict[str, Any]],
+        compiler: str = "",
+        compiler_snapshot: str = "",
+        program_id: str = "",
+    ) -> dict[str, Any]:
+        rule = self._rule_from(rule_id, project_root, source)
+        if rule is None or not rule.spec:
+            return {"ok": False, "error": "Rule has no PAW specification."}
+        target = self._validation_target(
+            rule_id,
+            project_root,
+            rule,
+            compiler,
+            program_id,
+            compiler_snapshot,
+        )
+        compile_started = time.time()
+        program_id = str(target.get("program_id", ""))
+        if not program_id:
+            program_id = self.runtime.program_id_for_spec(
+                rule.spec, str(target.get("compiler", "")) or None)
+            target["program_id"] = program_id
+        compile_ms = int((time.time() - compile_started) * 1000)
+        if not program_id:
+            _log(
+                f"validation compile failed rule={rule_id} "
+                f"elapsed_ms={compile_ms}")
+            return {"ok": False, "error": "Validation compilation failed."}
+        run_started = time.time()
+        validation = self.run_validation_cases(program_id, cases)
+        validation = self._record_validation_results(
+            project_root=project_root,
+            rule_id=rule_id,
+            spec=rule.spec,
+            target=target,
+            validation=validation,
+        )
+        run_ms = int((time.time() - run_started) * 1000)
+        _log(
+            f"validation complete rule={rule_id} compile_ms={compile_ms} "
+            f"run_ms={run_ms} cases={len(cases)}")
+        return {
+            "ok": True,
+            "validation": validation,
+            "target": target,
+            "timing": {
+                "compile_ms": compile_ms,
+                "run_ms": run_ms,
+            },
+        }
 
     def _project_catalog(self) -> list[dict[str, str]]:
         discovered = cursor_projects.discover_projects(limit=100)
@@ -845,38 +1906,170 @@ class Daemon:
             if "expected_active_hash" in req
             else current_active.get("source_hash", ""))
         source_changed = bool(req.get("source_changed", True))
-        compiler = str(
-            req.get("compiler")
-            if req.get("compiler") is not None
-            else current_active.get("compiler", ""))
+        default_compiler = self.runtime.compiler_info("")
+        active_compiler = str(
+            current_active.get("compiler")
+            or default_compiler.get("name", ""))
+        compiler = str(req.get("compiler") or active_compiler)
+        compiler_info = self.runtime.compiler_info(compiler)
+        compiler_snapshot = str(
+            req.get("compiler_snapshot")
+            or compiler_info.get("latest_snapshot", ""))
+        compiler_changed = bool(
+            current_active and compiler != active_compiler)
+        validation_cases = rules_api.normalize_validation_cases(
+            req.get("validation_cases")
+            if "validation_cases" in req
+            else rules_api.validation_cases(rule_id, project_root or None)
+        )
+        validation = {
+            "ok": True, "passed": 0, "total": 0, "results": []}
+        validation_policy = str(req.get("validation_policy") or "run")
         tested = {"ok": True, "results": [], "passed": 0, "total": 0}
-        program_id = str(current_active.get("program_id", ""))
-        if source_changed or not current_active:
-            rule = self._rule_from(rule_id, project_root, source)
-            if rule is None:
-                return {"ok": False, "error": "rule could not be loaded"}
-            if rule.spec:
-                tested = self.test_rule(
-                    rule_id, project_root, source, compiler or None)
-                if not tested.get("ok"):
-                    return tested
-                if tested.get("total") and tested.get("passed") != tested.get("total"):
-                    return {
-                        "ok": False,
-                        "error": (
-                            f"{tested.get('passed', 0)}/"
-                            f"{tested.get('total', 0)} examples passed"),
-                        "test": tested,
-                    }
+        rule = self._rule_from(rule_id, project_root, source)
+        if rule is None:
+            return {"ok": False, "error": "rule could not be loaded"}
+        source_behavior_hash = revisions.behavior_hash(source)
+        active_behavior_hash = str(
+            current_active.get("behavior_hash", ""))
+        behavior_changed = bool(
+            current_active
+            and active_behavior_hash != source_behavior_hash)
+        program_id = (
+            str(current_active.get("program_id", ""))
+            if not behavior_changed and not compiler_changed
+            else ""
+        )
+        requested_program = str(req.get("program_id", ""))
+        if requested_program:
+            with self._finetune_lock:
+                job = dict(self._finetune_jobs.get(rule_id) or {})
+            candidate_valid = bool(
+                job.get("status") == "ready"
+                and str(job.get("behavior_hash", ""))
+                == source_behavior_hash
+                and str(job.get("compiler", "")) == compiler
+                and str(job.get("program_id", "")) == requested_program
+            )
+            active_valid = bool(
+                not behavior_changed
+                and not compiler_changed
+                and str(current_active.get("program_id", ""))
+                == requested_program
+            )
+            cached_program = getattr(
+                self.runtime, "cached_program_id_for_spec", None)
+            cached_valid = bool(
+                callable(cached_program)
+                and str(cached_program(rule.spec, compiler or None))
+                == requested_program
+            )
+            if candidate_valid or active_valid or cached_valid:
+                program_id = requested_program
+                if candidate_valid:
+                    compiler_snapshot = str(
+                        job.get("compiler_snapshot", compiler_snapshot))
+        needs_program = bool(
+            rule.spec and (
+                behavior_changed
+                or compiler_changed
+                or not program_id
+                or not current_active
+            )
+        )
+        if needs_program:
+            if (
+                str(compiler_info.get("compiler_kind", ""))
+                == "finetune_lora"
+                and not program_id
+            ):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"Build {compiler_info.get('description') or compiler} "
+                        "for the current draft before deploying."
+                    ),
+                    "compiler_build_required": True,
+                }
+            if rule.spec and not program_id:
                 compiled = self.compile_rule(
                     rule_id,
                     project_root,
-                    finalize=compiler == "paw-ft-bs48",
                     source=source,
+                    compiler=compiler or None,
                 )
                 if not compiled.get("ok"):
                     return compiled
                 program_id = str(compiled.get("program_id", ""))
+                compiler = str(compiled.get("compiler", compiler))
+                compiler_snapshot = str(
+                    (compiled.get("compiler_info") or {}).get(
+                        "latest_snapshot", ""))
+        if validation_cases and program_id:
+            if validation_policy == "skip":
+                validation = {
+                    "ok": True,
+                    "passed": 0,
+                    "total": 0,
+                    "results": [],
+                    "skipped": True,
+                    "note": "Validation was explicitly skipped.",
+                }
+            else:
+                cached_results = self.validation_results.matching(
+                    project_root=project_root,
+                    rule_id=rule_id,
+                    spec=rule.spec,
+                    compiler=compiler,
+                    compiler_snapshot=compiler_snapshot,
+                    program_id=program_id,
+                    cases=validation_cases,
+                )
+                if len(cached_results) == len(validation_cases):
+                    validation = {
+                        "ok": all(
+                            item.get("ok") for item in cached_results),
+                        "passed": sum(
+                            1 for item in cached_results if item.get("ok")),
+                        "total": len(cached_results),
+                        "results": cached_results,
+                        "cached": True,
+                    }
+                elif validation_policy in ("cached", "allow_failed"):
+                    return {
+                        "ok": False,
+                        "error": (
+                            "Validation results are missing or stale. "
+                            "Run Tests or deploy without testing."
+                        ),
+                        "validation_missing": True,
+                    }
+                else:
+                    validation = self.run_validation_cases(
+                        program_id, validation_cases)
+                    validation = self._record_validation_results(
+                        project_root=project_root,
+                        rule_id=rule_id,
+                        spec=rule.spec,
+                        target={
+                            "compiler": compiler,
+                            "compiler_snapshot": compiler_snapshot,
+                            "program_id": program_id,
+                        },
+                        validation=validation,
+                    )
+            if not validation.get("ok") and not req.get(
+                "allow_failed_validation"
+            ):
+                return {
+                    "ok": False,
+                    "error": (
+                        f"{validation.get('passed', 0)}/"
+                        f"{validation.get('total', 0)} validation cases passed"
+                    ),
+                    "validation_failed": True,
+                    "validation": validation,
+                }
         token = secrets.token_urlsafe(24)
         prepared = {
             "token": token,
@@ -890,10 +2083,18 @@ class Daemon:
             "expected_coverage": expected_coverage,
             "compiler": compiler,
             "program_id": program_id,
+            "compiler_snapshot": compiler_snapshot,
             "coverage": dict(req.get("coverage") or {}),
+            "warnings": [
+                str(item) for item in (req.get("warnings") or [])
+            ],
             "source_changed": source_changed,
+            "behavior_changed": behavior_changed,
+            "compiler_changed": compiler_changed,
             "created_at": time.time(),
             "test": tested,
+            "validation_cases": validation_cases,
+            "validation": validation,
         }
         with self._state_lock:
             self._prepared_deployments[token] = prepared
@@ -903,6 +2104,7 @@ class Daemon:
             "source_hash": prepared["source_hash"],
             "test": tested,
             "program_id": program_id,
+            "validation": validation,
         }
 
     def commit_rule_deployment(self, token: str) -> dict[str, Any]:
@@ -986,6 +2188,10 @@ class Daemon:
         if not saved.get("ok"):
             return saved
         path = saved["path"]
+        validation_saved = rules_api.save_validation_cases(
+            path, prepared.get("validation_cases") or [])
+        if not validation_saved.get("ok"):
+            return validation_saved
         previous_active = revisions.active_info(rule_id, path)
         active = (
             revisions.activate(
@@ -994,8 +2200,14 @@ class Daemon:
                 saved["source"],
                 compiler=prepared.get("compiler") or None,
                 program_id=prepared.get("program_id") or None,
+                warnings=prepared.get("warnings") or [],
+                compiler_snapshot=prepared.get("compiler_snapshot") or None,
             )
-            if prepared.get("source_changed") or not previous_active
+            if (
+                prepared.get("source_changed")
+                or prepared.get("compiler_changed")
+                or not previous_active
+            )
             else previous_active
         )
         coverage_request = prepared.get("coverage") or {}
@@ -1100,6 +2312,8 @@ class Daemon:
             with self._state_lock:
                 self._warmed.add(root)
             self.work.submit(self._warm, root)
+        compiler_build_discarded = self._discard_stale_finetune_job(
+            rule_id, str(active.get("behavior_hash", "")))
         return {
             "ok": True,
             "rule": rules_api.get_rule(rule_id, None),
@@ -1108,6 +2322,9 @@ class Daemon:
             "affected_projects": affected,
             "impact_count": len(affected),
             "migrated_to_library": migrated_to_library,
+            "warnings": list(prepared.get("warnings") or []),
+            "validation": prepared.get("validation") or {},
+            "compiler_build_discarded": compiler_build_discarded,
         }
 
     # --- request dispatch ------------------------------------------------
@@ -1162,6 +2379,19 @@ class Daemon:
                     include_suppressed=bool(req.get("include_suppressed")),
                     limit=int(req.get("limit", 1000)),
                 )
+            summaries_by_project: dict[str, dict[str, dict[str, Any]]] = {}
+            for group in groups:
+                project_root = str(group.get("project_root", ""))
+                if project_root not in summaries_by_project:
+                    summaries_by_project[project_root] = {
+                        rule["id"]: rule
+                        for rule in rules_api.list_rules(project_root)
+                    }
+                self._decorate_finding_group(
+                    group,
+                    summaries_by_project[project_root].get(
+                        str(group.get("rule_id", "")), {}),
+                )
             return {"ok": True, "groups": groups}
         if rtype == "finding_detail":
             finding_id = int(req.get("id", 0))
@@ -1185,6 +2415,27 @@ class Daemon:
                 if current_source else ""
             )
             current_hash = current_rule.get("active_hash") or working_hash
+            current_behavior_hash = str(
+                current_rule.get("active_behavior_hash")
+                or current_rule.get("working_behavior_hash")
+                or (
+                    revisions.behavior_hash(current_source)
+                    if current_source else ""
+                ))
+            recorded_behavior_hash = str(
+                finding.get("behavior_hash")
+                or (evaluation.get("rule") or {}).get("behavior_hash")
+                or (
+                    revisions.behavior_hash(recorded_source)
+                    if recorded_source else ""
+                ))
+            recorded_rule_title = str(finding.get("rule_title", ""))
+            current_rule_title = str(
+                current_rule.get("name")
+                or current_rule.get("title")
+                or recorded_rule_title)
+            finding["recorded_rule_title"] = recorded_rule_title
+            finding["rule_title"] = current_rule_title
             ledger = self.ledgers.get(
                 finding.get("conversation_id", ""), finding["project_root"])
             ledger_window = ledger.context_window(
@@ -1207,12 +2458,75 @@ class Daemon:
                 "recorded_rule_projection": rules_api.source_projection(
                     recorded_source) if recorded_source else {},
                 "current_rule_hash": current_hash,
+                "current_behavior_hash": current_behavior_hash,
+                "recorded_behavior_hash": recorded_behavior_hash,
                 "working_rule_hash": working_hash,
                 "rule_changed": bool(
-                    entry and entry.get("rule_source_hash")
-                    and current_hash
-                    and entry.get("rule_source_hash") != current_hash),
+                    recorded_behavior_hash
+                    and current_behavior_hash
+                    and recorded_behavior_hash != current_behavior_hash),
             }
+        if rtype == "evaluation_history":
+            project_root = str(req.get("project_root", ""))
+            roots = (
+                [project_root] if project_root
+                else [item["path"] for item in self._project_catalog()]
+            )
+            rows = []
+            for root in roots:
+                root_rows = evaluation_log.history(
+                    root,
+                    rule_id=str(req.get("rule_id", "")),
+                    limit=int(req.get("limit", 500)),
+                )
+                expected_by_input = {
+                    str(case.get("input", "")): str(
+                        case.get("expected", ""))
+                    for case in rules_api.validation_cases(
+                        str(req.get("rule_id", "")), root)
+                }
+                for row in root_rows:
+                    input_text = str((row.get("input") or {}).get(
+                        "text", ""))
+                    row["expected"] = expected_by_input.get(input_text, "")
+                rows.extend(root_rows)
+            rows.sort(
+                key=lambda item: float(item.get("timestamp", 0)),
+                reverse=True)
+            return {
+                "ok": True,
+                "evaluations": rows[:max(
+                    1, min(5000, int(req.get("limit", 500))))],
+                "log_paths": [
+                    str(config.project_evaluation_log_file(root))
+                    for root in roots
+                ],
+            }
+        if rtype == "evaluation_detail":
+            project_root = str(req.get("project_root", ""))
+            value = evaluation_log.get(
+                project_root, str(req.get("evaluation_id", "")))
+            return {
+                "ok": bool(value),
+                "evaluation": value,
+                **({} if value else {"error": "evaluation not found"}),
+            }
+        if rtype == "add_validation_case":
+            return rules_api.add_validation_case(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")) or None,
+                str(req.get("input", "")),
+                str(req.get("expected", "")),
+            )
+        if rtype == "save_validation_cases":
+            info = rules_api.get_rule(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")) or None)
+            source_path = str(
+                ((info or {}).get("definition") or {}).get(
+                    "source_path", ""))
+            return rules_api.save_validation_cases(
+                source_path, list(req.get("validation_cases") or []))
         if rtype == "ledger_window":
             finding = self.store.get(int(req.get("id", 0)))
             if not finding:
@@ -1356,11 +2670,45 @@ class Daemon:
             info = rules_api.get_rule(
                 req["rule_id"], project_root or None)
             if info:
+                queued = (
+                    self.deployment_queue.active_for_rule(info["id"])
+                    or self.deployment_queue.latest_for_rule(info["id"])
+                    or {}
+                )
+                queue_overlay = bool(
+                    queued.get("status") in (
+                        "waiting_for_build", "building", "validating",
+                        "deploying", "failed",
+                    )
+                    and queued.get("source")
+                    and str((info.get("definition") or {}).get(
+                        "source_hash", ""))
+                    == str(queued.get("expected_definition_hash", ""))
+                )
+                if queue_overlay:
+                    info["source"] = str(queued["source"])
+                    info["working_hash"] = str(
+                        queued.get("source_hash", ""))
+                    info["draft_changes"] = (
+                        str(queued.get("source_hash", ""))
+                        != str((info.get("active") or {}).get(
+                            "source_hash", ""))
+                    )
+                    info["validation_cases"] = list(
+                        queued.get("validation_cases") or [])
                 info["projection"] = rules_api.source_projection(
                     info.get("source", ""))
                 info["is_builtin"] = info["id"] in set(scaffold.builtin_ids())
                 info["deployment"] = self.deployment_plan(
                     info["id"], project_root)
+                if queue_overlay:
+                    info["deployment"]["draft_coverage"] = {
+                        **dict(queued.get("coverage") or {}),
+                        "compiler": str(queued.get("compiler", "")),
+                        "compiler_snapshot": str(
+                            queued.get("compiler_snapshot", "")),
+                        "confirmed": True,
+                    }
             return {"ok": bool(info), "rule": info,
                     **({} if info else {"error": "rule not found"})}
         if rtype == "deployment_plan":
@@ -1370,6 +2718,48 @@ class Daemon:
             return self.prepare_rule_deployment(req)
         if rtype == "commit_deployment":
             return self.commit_rule_deployment(str(req.get("token", "")))
+        if rtype == "queue_deployment":
+            return self.queue_deployment(req)
+        if rtype == "deployment_queue_status":
+            return self.deployment_queue_status(
+                str(req.get("rule_id", "")),
+                str(req.get("deployment_id", "")),
+            )
+        if rtype == "cancel_queued_deployment":
+            return self.cancel_queued_deployment(
+                str(req.get("rule_id", "")),
+                str(req.get("reason", "Cancelled by user.")),
+            )
+        if rtype == "finetune_status":
+            return self.finetune_status(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")),
+            )
+        if rtype == "compiler_catalog":
+            return {
+                "ok": True,
+                **self.runtime.list_compilers(
+                    refresh=bool(req.get("refresh"))),
+            }
+        if rtype == "start_finetune":
+            return self.start_finetune(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")),
+                str(req.get("compiler", "")),
+                str(req.get("source", "")),
+                list(req.get("validation_cases") or []),
+            )
+        if rtype == "cancel_finetune":
+            return self.cancel_finetune(str(req.get("rule_id", "")))
+        if rtype == "discard_finetune":
+            return self.discard_finetune(str(req.get("rule_id", "")))
+        if rtype == "activate_finetune":
+            return self.activate_finetune(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")),
+                allow_failed_validation=bool(
+                    req.get("allow_failed_validation")),
+            )
         if rtype == "validate_rule":
             if req.get("strict"):
                 valid, error = rules_api.validate_editor_source(
@@ -1377,6 +2767,26 @@ class Daemon:
             else:
                 valid, error = rules_api.check_source_syntax(req.get("source", ""))
             return {"ok": valid, "error": error}
+        if rtype == "cached_validation_results":
+            return self.cached_validation_results(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")),
+                str(req.get("source", "")),
+                list(req.get("validation_cases") or []),
+                str(req.get("compiler", "")),
+                str(req.get("compiler_snapshot", "")),
+                str(req.get("program_id", "")),
+            )
+        if rtype == "validate_rule_cases":
+            return self.validate_rule_cases(
+                str(req.get("rule_id", "")),
+                str(req.get("project_root", "")),
+                str(req.get("source", "")),
+                list(req.get("validation_cases") or []),
+                str(req.get("compiler", "")),
+                str(req.get("compiler_snapshot", "")),
+                str(req.get("program_id", "")),
+            )
         if rtype == "new_rule_draft":
             project_root = req.get("project_root", "")
             existing = {rule["id"] for rule in rules_api.list_rules(None)}
@@ -1391,6 +2801,24 @@ class Daemon:
                 if template == "python"
                 else rules_api.draft_rule_source(rule_id)
             )
+            coverage_mode = str(req.get(
+                "coverage_mode",
+                "selected" if project_root else "all",
+            ))
+            if coverage_mode not in ("all", "selected"):
+                coverage_mode = "all" if not project_root else "selected"
+            initial_coverage = {
+                "mode": coverage_mode,
+                "all_projects": coverage_mode == "all",
+                "selected_projects": (
+                    [project_root]
+                    if coverage_mode == "selected" and project_root else []
+                ),
+                "confirmed": True,
+            }
+            deployment = self.deployment_plan(rule_id, project_root)
+            deployment["coverage"] = dict(initial_coverage)
+            deployment["draft_coverage"] = dict(initial_coverage)
             return {
                 "ok": True,
                 "rule": {
@@ -1408,8 +2836,7 @@ class Daemon:
                     "enabled": False,
                     "muted": False,
                     "new_draft": True,
-                    "deployment": self.deployment_plan(
-                        rule_id, project_root),
+                    "deployment": deployment,
                 },
             }
         if rtype == "save_library_draft":
@@ -1424,6 +2851,12 @@ class Daemon:
                 expected_absent=bool(req.get("expected_absent")),
             )
             if result.get("ok"):
+                validation_saved = rules_api.save_validation_cases(
+                    result.get("path", ""),
+                    list(req.get("validation_cases") or []))
+                if not validation_saved.get("ok"):
+                    return validation_saved
+                result["validation_cases"] = validation_saved["cases"]
                 if req.get("coverage"):
                     coverage_saved = rules_api.save_deployment_coverage_draft(
                         result["id"], dict(req["coverage"]))
@@ -1443,6 +2876,12 @@ class Daemon:
                 expected_source_hash=req.get("expected_source_hash", ""),
             )
             if result.get("ok"):
+                validation_saved = rules_api.save_validation_cases(
+                    result.get("path", ""),
+                    list(req.get("validation_cases") or []))
+                if not validation_saved.get("ok"):
+                    return validation_saved
+                result["validation_cases"] = validation_saved["cases"]
                 if req.get("coverage"):
                     coverage_saved = rules_api.save_deployment_coverage_draft(
                         result["id"], dict(req["coverage"]))

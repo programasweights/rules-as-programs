@@ -165,9 +165,13 @@ def draft_rule_py(name: str, prose: str) -> tuple[str, str]:
     src = rules_api.generate_managed_fuzzy_source(
         rule_id,
         title,
-        f"Decide whether the agent violated this project rule: {prose_compact}",
+        (
+            f"Decide whether the agent violated this project rule: "
+            f"{prose_compact}\n\n"
+            "Return OK when the rule was not violated.\n"
+            "Return WARNING when the rule was violated."
+        ),
         trigger="afterAgentResponse",
-        cases=[],
     )
     return f"{rule_id}/rule.py", src
 

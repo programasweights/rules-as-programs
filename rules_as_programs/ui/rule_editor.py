@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-import textwrap
+import threading
+import json
+import secrets
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,6 +33,7 @@ from AppKit import (
     NSLayoutAttributeCenterY,
     NSLayoutAttributeLeading,
     NSLayoutConstraint,
+    NSLineBreakByTruncatingTail,
     NSLayoutPriorityDefaultLow,
     NSMinYEdge,
     NSMenu,
@@ -45,8 +49,12 @@ from AppKit import (
     NSStackView,
     NSStackViewDistributionFill,
     NSToolbar,
+    NSToolbarDisplayModeIconOnly,
     NSToolbarFlexibleSpaceItemIdentifier,
     NSToolbarItem,
+    NSToolbarItemVisibilityPriorityHigh,
+    NSToolbarItemVisibilityPriorityLow,
+    NSToolbarItemVisibilityPriorityStandard,
     NSTextField,
     NSTextView,
     NSUserInterfaceLayoutOrientationHorizontal,
@@ -64,12 +72,18 @@ from AppKit import (
     NSWindowStyleMaskTitled,
     NSWorkspace,
 )
-from Foundation import NSMakeRect, NSMakeSize, NSObject
+from Foundation import (
+    NSMakeRect,
+    NSMakeSize,
+    NSObject,
+    NSUserNotification,
+    NSUserNotificationCenter,
+)
 from PyObjCTools import AppHelper
 
-from .. import rules_api, scaffold
+from .. import ipc, rules_api, scaffold
 from ..core.triggers import COMMON_TRIGGERS, ORDERED_TRIGGERS, TRIGGERS
-from ..core import revisions
+from ..core import revisions, validation_store
 from .layout import fit_rule_editor_layout
 from .macos_controls import (
     ButtonRole,
@@ -80,44 +94,18 @@ from .macos_controls import (
 )
 from .model import UIModel
 
-def _upsert_test_case(spec: str, input_text: str, wanted: str) -> str:
-    lines = str(spec or "").splitlines()
-    out: list[str] = []
-    replaced = False
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if not line.startswith("Input:"):
-            out.append(line)
-            index += 1
-            continue
-        end = index + 1
-        collected = [line[len("Input:"):].lstrip()]
-        while end < len(lines) and not lines[end].startswith("Output:"):
-            collected.append(lines[end])
-            end += 1
-        if end >= len(lines):
-            out.extend(lines[index:])
-            break
-        if "\n".join(collected) == input_text:
-            if not replaced:
-                out.extend(
-                    [f"Input: {input_text}", f"Output: {wanted}"])
-                replaced = True
-            index = end + 1
-            continue
-        out.extend(lines[index:end + 1])
-        index = end + 1
-    updated = "\n".join(out).rstrip()
-    if not replaced:
-        updated += (
-            ("\n\n" if updated else "")
-            + f"Input: {input_text}\nOutput: {wanted}")
-    return updated
-
-
 def _on_main(callback: Callable[[], None]) -> None:
     AppHelper.callAfter(callback)
+
+
+def _after_delay(
+    seconds: float, callback: Callable[[], None]
+) -> threading.Timer:
+    dispatcher = _on_main
+    timer = threading.Timer(seconds, lambda: dispatcher(callback))
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def _activate(*constraints) -> None:
@@ -145,18 +133,22 @@ class RAPRuleEditorTextDelegate(NSObject):
 
 class RAPRuleToolbarDelegate(NSObject):
     def toolbarAllowedItemIdentifiers_(self, _toolbar):
-        return [
-            "rule.actions", "rule.state",
+        owner = getattr(self, "owner", None)
+        return (
+            ([] if owner and owner.rule.get("new_draft") else ["rule.actions"])
+            + ["rule.state",
             NSToolbarFlexibleSpaceItemIdentifier,
-            "rule.advanced", "rule.deploy",
-        ]
+            "rule.advanced", "rule.deploy"]
+        )
 
     def toolbarDefaultItemIdentifiers_(self, _toolbar):
-        return [
-            "rule.actions", "rule.state",
+        owner = getattr(self, "owner", None)
+        return (
+            ([] if owner and owner.rule.get("new_draft") else ["rule.actions"])
+            + ["rule.state",
             NSToolbarFlexibleSpaceItemIdentifier,
-            "rule.advanced", "rule.deploy",
-        ]
+            "rule.advanced", "rule.deploy"]
+        )
 
     def toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar_(
         self, _toolbar, identifier, _inserted
@@ -178,6 +170,27 @@ class RAPRuleToolbarDelegate(NSObject):
         item.setLabel_(label)
         item.setPaletteLabel_(label)
         item.setView_(view)
+        key = str(identifier)
+        if key == "rule.deploy":
+            item.setVisibilityPriority_(
+                NSToolbarItemVisibilityPriorityHigh)
+            item.setMinSize_(NSMakeSize(118, 28))
+            item.setMaxSize_(NSMakeSize(170, 32))
+        elif key == "rule.advanced":
+            item.setVisibilityPriority_(
+                NSToolbarItemVisibilityPriorityStandard)
+            item.setMinSize_(NSMakeSize(82, 24))
+            item.setMaxSize_(NSMakeSize(108, 30))
+        elif key == "rule.state":
+            item.setVisibilityPriority_(
+                NSToolbarItemVisibilityPriorityLow)
+            item.setMinSize_(NSMakeSize(84, 20))
+            item.setMaxSize_(NSMakeSize(180, 24))
+        else:
+            item.setVisibilityPriority_(
+                NSToolbarItemVisibilityPriorityLow)
+            item.setMinSize_(NSMakeSize(58, 24))
+            item.setMaxSize_(NSMakeSize(82, 30))
         return item
 
 class RAPRuleEditorWindow(RAPCommandWindow):
@@ -264,6 +277,51 @@ class RAPRuleEditorDocument(NSObject):
         self._working_hash = ""
         self._definition_hash = ""
         self._saved_source_hash = ""
+        self.active_compiler = ""
+        self.active_compiler_snapshot = ""
+        self.active_program_id = ""
+        self.draft_compiler = ""
+        self.draft_compiler_snapshot = ""
+        self._draft_compiler_explicit = False
+        self._compiler_dirty = False
+        self._current_source_hash = ""
+        self._current_behavior_hash = ""
+        self._active_behavior_hash = ""
+        self.compiler_catalog: list[dict[str, Any]] = []
+        self.compiler_catalog_cached = False
+        self.compiler_catalog_offline = False
+        self.compiler_catalog_fetched_at = 0.0
+        self._compiler_catalog_attempted = False
+        self._finetune_status: dict[str, Any] = {}
+        self._finetune_poll_timer = None
+        self._deployment_queue: dict[str, Any] = {}
+        self._deployment_queue_poll_timer = None
+        self._deployment_queue_poll_failures = 0
+        self._deployment_queue_poll_recovery_thread = None
+        self._notified_queue_terminal = ""
+        self._pending_deployment_id = ""
+        self._deployment_recovery_thread = None
+        self._draft_generation = 0
+        self._confirmed_spec_warning_hash = ""
+        self._confirmed_build_discard_hash = ""
+        self._allow_failed_validation_hash = ""
+        self._allow_untested_validation_hash = ""
+        self.validation_cases: list[dict[str, str]] = []
+        self._saved_validation_cases = "[]"
+        self._validation_dirty = False
+        self._validation_save_generation = 0
+        self._last_removed_validation = None
+        self._validation_results: dict[str, dict[str, Any]] = {}
+        self._validation_result_cache: dict[str, dict[str, Any]] = {}
+        self.validation_result_labels: dict[str, NSTextField] = {}
+        self._validation_run_key = ""
+        self._validation_target: dict[str, Any] = {}
+        self._validation_results_loaded = False
+        self._validation_load_generation = 0
+        self._busy_label = ""
+        self._diagnostic_operation_id = ""
+        self._content_fit_generation = 0
+        self._content_fit_timer = None
         return self
 
     @objc.python_method
@@ -283,6 +341,9 @@ class RAPRuleEditorDocument(NSObject):
         self.full_source = str(rule.get("source", ""))
         self._apply_projection(
             rule.get("projection") or rules_api.source_projection(self.full_source))
+        self.validation_cases = list(rule.get("validation_cases") or [])
+        self._saved_validation_cases = json.dumps(
+            self.validation_cases, sort_keys=True)
         self.original_name = self.name
         deployment = rule.get("deployment") or {}
         active_coverage = deployment.get("coverage") or {}
@@ -303,19 +364,49 @@ class RAPRuleEditorDocument(NSObject):
         if not self.selected_projects and project_root and rule.get("new_draft"):
             self.selected_projects = [project_root]
         self._active_hash = str(rule.get("active_hash", ""))
+        self.active_compiler = str(
+            (rule.get("active") or {}).get("compiler", ""))
+        self.active_compiler_snapshot = str(
+            (rule.get("active") or {}).get("compiler_snapshot", ""))
+        self.active_program_id = str(
+            (rule.get("active") or {}).get("program_id", ""))
+        self._active_behavior_hash = str(
+            (rule.get("active") or {}).get("behavior_hash")
+            or rule.get("active_behavior_hash", ""))
+        self.draft_compiler = self.active_compiler
+        self.draft_compiler_snapshot = self.active_compiler_snapshot
+        if (draft_coverage or {}).get("compiler"):
+            self.draft_compiler = str(draft_coverage["compiler"])
+            self.draft_compiler_snapshot = str(
+                (draft_coverage or {}).get("compiler_snapshot", ""))
+            self._draft_compiler_explicit = True
+        self._compiler_dirty = bool(
+            self.draft_compiler
+            and self.draft_compiler != self.active_compiler)
         self._working_hash = str(rule.get("working_hash", ""))
         self._definition_hash = str(
             (rule.get("definition") or {}).get("source_hash", ""))
         self._saved_source_hash = revisions.hash_source(self.full_source)
-        self._source_dirty = bool(
-            rule.get("new_draft") or rule.get("draft_changes"))
+        self._current_source_hash = self._saved_source_hash
+        self._current_behavior_hash = revisions.behavior_hash(self.full_source)
+        if not self._active_behavior_hash and self._active_hash:
+            self._active_behavior_hash = str(
+                rule.get("working_behavior_hash")
+                if self._active_hash == self._working_hash else "")
+        self._source_dirty = bool(rule.get("draft_changes"))
         self._coverage_dirty = {
             "mode": self.coverage_mode,
             "selected_projects": sorted(
                 self.selected_projects
                 if self.coverage_mode == "selected" else []),
         } != self._active_coverage
-        self._dirty = self._source_dirty or self._coverage_dirty
+        if rule.get("new_draft") and not draft_coverage:
+            self._coverage_dirty = False
+        self._dirty = (
+            self._source_dirty
+            or self._coverage_dirty
+            or self._compiler_dirty
+            or self._validation_dirty)
         self._scope_confirmed = bool(
             (draft_coverage or {}).get("confirmed"))
         self._build_window()
@@ -335,8 +426,11 @@ class RAPRuleEditorDocument(NSObject):
         )
         self.spec = str(projection.get("spec", ""))
         self.description = self.spec
+        if self.rule.get("new_draft"):
+            if self.name.strip().lower() == "untitled rule":
+                self.name = ""
         self.allowed_label = str(projection.get("allowed_label", "OK"))
-        self.cases = list(projection.get("cases", []))
+        self.cases = []
         self.on = list(projection.get("on", []))
         self.inputs = list(projection.get("inputs", []))
         self.probes = dict(projection.get("probes", {}))
@@ -344,6 +438,12 @@ class RAPRuleEditorDocument(NSObject):
         self.severity = str(projection.get("severity", "warn"))
         self.inputs_inferred = bool(projection.get("inputs_inferred"))
         self.trigger = str(projection.get("trigger", "afterAgentResponse"))
+        if (
+            self.rule.get("new_draft")
+            and not self.rule.get("path")
+            and not self.rule.get("definition")
+        ):
+            self.trigger = ""
         self.input_pointer = str(projection.get("input_pointer", ""))
 
     @objc.python_method
@@ -371,8 +471,8 @@ class RAPRuleEditorDocument(NSObject):
         self.window.owner = self
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
-        self.window.setContentMinSize_(NSMakeSize(680, 520))
-        self.window.setTitle_(f"Rule — {self.name}")
+        self.window.setContentMinSize_(NSMakeSize(680, 360))
+        self.window.setTitle_("Rule Editor")
 
     @objc.python_method
     def _wire(
@@ -516,6 +616,7 @@ class RAPRuleEditorDocument(NSObject):
         scroll.setHasVerticalScroller_(True)
         scroll.setDrawsBackground_(False)
         scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        self.content_scroll = scroll
         root.addSubview_(scroll)
         root.addSubview_(separator)
         root.addSubview_(footer)
@@ -536,7 +637,7 @@ class RAPRuleEditorDocument(NSObject):
             self._footer_height_constraint,
         )
 
-        document = NSView.alloc().init()
+        document = RAPFlippedView.alloc().init()
         document.setTranslatesAutoresizingMaskIntoConstraints_(False)
         scroll.setDocumentView_(document)
         content = self._stack([], vertical=True, spacing=10)
@@ -548,8 +649,6 @@ class RAPRuleEditorDocument(NSObject):
                 scroll.contentView().leadingAnchor()),
             document.widthAnchor().constraintEqualToAnchor_(
                 scroll.contentView().widthAnchor()),
-            document.heightAnchor().constraintGreaterThanOrEqualToAnchor_(
-                scroll.contentView().heightAnchor()),
             content.topAnchor().constraintEqualToAnchor_constant_(
                 document.topAnchor(), 18),
             content.leadingAnchor().constraintEqualToAnchor_constant_(
@@ -562,6 +661,7 @@ class RAPRuleEditorDocument(NSObject):
 
         self.name_field = NSTextField.alloc().init()
         self.name_field.setFont_(NSFont.systemFontOfSize_(15))
+        self.name_field.setPlaceholderString_("Rule name")
         self.name_field.setDelegate_(self._text_delegate)
         self.name_field.setAccessibilityLabel_("Rule name")
         name_row = self._stack(
@@ -572,6 +672,7 @@ class RAPRuleEditorDocument(NSObject):
         self.state_label = self._label(
             "Draft", size=10, bold=True, color=NSColor.controlAccentColor())
         content.addArrangedSubview_(self.state_label)
+        self.state_label.setHidden_(True)
 
         self.finding_label = self._label(
             "", size=10, color=NSColor.secondaryLabelColor(), lines=3)
@@ -581,16 +682,12 @@ class RAPRuleEditorDocument(NSObject):
         self.finding_show_button = self._button(
             "Show Finding", lambda _sender: self.show_finding(),
             role="flat")
-        self.finding_case_button = self._button(
-            "Add as Test Case…", lambda _sender: self.add_finding_test_case(),
-            role="flat")
         self.finding_callout = self._stack([
             self._label("Tuning from finding", size=11, bold=True),
             self.finding_label,
             self._stack([
                 self.finding_show_button,
                 self.finding_copy_button,
-                self.finding_case_button,
                 self._spacer(),
             ], vertical=False, spacing=8),
         ], vertical=True, spacing=4)
@@ -598,17 +695,23 @@ class RAPRuleEditorDocument(NSObject):
         self._refresh_finding_context()
 
         spec_heading = self._heading(
-            "Rule spec",
-            "Describe the behavior to audit in plain language. PAW compiles this "
-            "specification into a local rule program.",
+            "PAW specification",
+            "This exact text is passed to paw.compile(). RAP does not append or "
+            "rewrite it.",
         )
         self.advanced_button = self._button(
             "View Python…", lambda _sender: self.show_advanced(),
             role="flat", accessibility="View underlying Python")
-        spec_heading.insertArrangedSubview_atIndex_(self.advanced_button, 1)
+        self.advanced_button.setHidden_(True)
         content.addArrangedSubview_(spec_heading)
         self.spec_scroll, self.description_editor = self._text_scroll(
-            self.description, prose=True, minimum_height=170)
+            self.description, prose=True, minimum_height=100)
+        description_lines = max(
+            4, self.description.count("\n") + len(self.description) // 90 + 1)
+        self.spec_height_constraint = (
+            self.spec_scroll.heightAnchor().constraintEqualToConstant_(
+                min(260, max(100, description_lines * 18 + 24))))
+        _activate(self.spec_height_constraint)
         self.spec_scroll.setContentHuggingPriority_forOrientation_(
             NSLayoutPriorityDefaultLow,
             NSUserInterfaceLayoutOrientationVertical)
@@ -616,6 +719,8 @@ class RAPRuleEditorDocument(NSObject):
             NSLayoutPriorityDefaultLow,
             NSUserInterfaceLayoutOrientationVertical)
         self.description_editor.setAccessibilityLabel_("Rule specification")
+        self.description_editor.setPlaceholderString_(
+            "Describe when the input should be shown and what PAW should return.")
         content.addArrangedSubview_(self.spec_scroll)
         self.custom_label = self._label(
             "This is a custom Python rule. Edit its behavior through View Python.",
@@ -664,36 +769,203 @@ class RAPRuleEditorDocument(NSObject):
         self.trigger_buttons: dict[str, NSButton] = {}
         self.input_buttons: dict[str, NSButton] = {}
         self.trigger_popup = NSPopUpButton.alloc().init()
+        self.trigger_popup.addItemWithTitle_(
+            "Choose a trigger — Required")
+        self.trigger_popup.lastItem().setRepresentedObject_("")
         for definition in COMMON_TRIGGERS:
-            self.trigger_popup.addItemWithTitle_(
-                f"{definition.label} — {definition.hook} "
-                f"{definition.input_pointer}")
+            self.trigger_popup.addItemWithTitle_(definition.label)
             self.trigger_popup.lastItem().setRepresentedObject_(definition.hook)
         self.trigger_popup.menu().addItem_(NSMenuItem.separatorItem())
         self.trigger_popup.addItemWithTitle_("More actions…")
         self.trigger_popup.lastItem().setRepresentedObject_("__more__")
         self._wire(self.trigger_popup, self.trigger_changed)
+        self.trigger_error_label = self._label(
+            "Choose when this rule should run.",
+            size=10,
+            color=NSColor.systemRedColor(),
+        )
+        self.trigger_error_label.setHidden_(True)
         self.input_contract_label = self._label(
             "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
         self.input_mapping_button = self._button(
             "Advanced input…", lambda _sender: self.show_input_mapping(),
             role="flat")
+        self.input_mapping_button.setHidden_(True)
+        self.input_row = self._stack([
+            self._label("Input:", size=12, bold=True),
+            self.input_contract_label,
+            self._spacer(),
+        ], vertical=False, spacing=6)
         self.metadata_stack = self._stack([
             self._label("Trigger", size=12, bold=True),
             self.trigger_popup,
-            self._label("Input", size=12, bold=True),
-            self._stack([
-                self.input_contract_label,
-                self._spacer(),
-                self.input_mapping_button,
-            ], vertical=False, spacing=8),
+            self.trigger_error_label,
+            self.input_row,
         ], vertical=True, spacing=7)
+        self.metadata_stack.setContentHuggingPriority_forOrientation_(
+            1000, NSUserInterfaceLayoutOrientationVertical)
         content.addArrangedSubview_(self.metadata_stack)
         self.inferred_label = self._label(
             "",
             size=10, color=NSColor.secondaryLabelColor())
         self.inferred_label.setHidden_(True)
         content.addArrangedSubview_(self.inferred_label)
+
+        content.removeArrangedSubview_(self.metadata_stack)
+        self.metadata_stack.removeFromSuperview()
+        content.insertArrangedSubview_atIndex_(self.metadata_stack, 3)
+
+        self.spec_guidance_label = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
+        self.spec_guidance_label.setContentHuggingPriority_forOrientation_(
+            1000, NSUserInterfaceLayoutOrientationVertical)
+        content.insertArrangedSubview_atIndex_(self.spec_guidance_label, 6)
+
+        self.validation_controls: list[
+            tuple[NSTextField, NSPopUpButton]
+        ] = []
+        self.validation_stack = self._stack(
+            [], vertical=True, spacing=6)
+        validation_document = RAPFlippedView.alloc().init()
+        validation_document.setTranslatesAutoresizingMaskIntoConstraints_(
+            False)
+        validation_scroll = NSScrollView.alloc().init()
+        validation_scroll.setHasVerticalScroller_(True)
+        validation_scroll.setAutohidesScrollers_(False)
+        validation_scroll.setDrawsBackground_(True)
+        validation_scroll.setBackgroundColor_(NSColor.controlBackgroundColor())
+        validation_scroll.setBorderType_(1)
+        validation_scroll.setDocumentView_(validation_document)
+        validation_scroll.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        validation_document.addSubview_(self.validation_stack)
+        _activate(
+            validation_document.topAnchor().constraintEqualToAnchor_(
+                validation_scroll.contentView().topAnchor()),
+            validation_document.leadingAnchor().constraintEqualToAnchor_(
+                validation_scroll.contentView().leadingAnchor()),
+            validation_document.widthAnchor().constraintEqualToAnchor_(
+                validation_scroll.contentView().widthAnchor()),
+            self.validation_stack.topAnchor().constraintEqualToAnchor_constant_(
+                validation_document.topAnchor(), 4),
+            self.validation_stack.leadingAnchor().constraintEqualToAnchor_constant_(
+                validation_document.leadingAnchor(), 2),
+            self.validation_stack.trailingAnchor().constraintEqualToAnchor_constant_(
+                validation_document.trailingAnchor(), -8),
+            self.validation_stack.bottomAnchor().constraintEqualToAnchor_constant_(
+                validation_document.bottomAnchor(), -4),
+        )
+        self.validation_scroll = validation_scroll
+        self.validation_document = validation_document
+        self.validation_height_constraint = (
+            validation_scroll.heightAnchor().constraintEqualToConstant_(44))
+        self.validation_document_height = (
+            validation_document.heightAnchor().constraintEqualToConstant_(44))
+        _activate(
+            self.validation_height_constraint,
+            self.validation_document_height,
+        )
+        self.add_validation_button = self._button(
+            "+ Add case", lambda _sender: self.add_validation_case(),
+            role="flat")
+        self.run_validation_button = self._button(
+            "Run Tests", lambda _sender: self.run_validation_cases(),
+            role="flat")
+        self.validation_count_label = self._label(
+            "", size=9.5, color=NSColor.secondaryLabelColor())
+        self.validation_undo_button = self._button(
+            "Undo", lambda _sender: self.undo_remove_validation_case(),
+            role="flat")
+        self.validation_undo_button.setHidden_(True)
+        self.validation_actions_button = self._button(
+            "Actions…", lambda sender: self.show_validation_actions(sender),
+            role="flat")
+        self.validation_status = self._label(
+            "", size=9.5, color=NSColor.secondaryLabelColor(), lines=1)
+        self.validation_status.setContentCompressionResistancePriority_forOrientation_(
+            1, NSUserInterfaceLayoutOrientationHorizontal)
+        validation_title_row = self._stack([
+            self._label("Validation cases · Optional", size=12, bold=True),
+            self.validation_count_label,
+            self.validation_status,
+            self._spacer(),
+            self.validation_undo_button,
+            self.run_validation_button,
+            self.add_validation_button,
+            self.validation_actions_button,
+        ], vertical=False, spacing=8)
+        input_header = self._label(
+            "Input", size=9.5, bold=True,
+            color=NSColor.secondaryLabelColor())
+        expected_header = self._label(
+            "Expected", size=9.5, bold=True,
+            color=NSColor.secondaryLabelColor())
+        result_header = self._label(
+            "Last result", size=9.5, bold=True,
+            color=NSColor.secondaryLabelColor())
+        column_header = self._stack([
+            input_header,
+            expected_header,
+            result_header,
+            NSView.alloc().init(),
+            NSView.alloc().init(),
+        ], vertical=False, spacing=8)
+        _activate(
+            input_header.widthAnchor().constraintGreaterThanOrEqualToConstant_(
+                300),
+            expected_header.widthAnchor().constraintEqualToConstant_(95),
+            result_header.widthAnchor().constraintEqualToConstant_(170),
+            column_header.arrangedSubviews()[-2].widthAnchor().constraintEqualToConstant_(28),
+            column_header.arrangedSubviews()[-1].widthAnchor().constraintEqualToConstant_(28),
+        )
+        self.validation_section = self._stack([
+            validation_title_row,
+            column_header,
+            validation_scroll,
+        ], vertical=True, spacing=7)
+        self.validation_column_header = column_header
+        self.validation_section.setContentHuggingPriority_forOrientation_(
+            1000, NSUserInterfaceLayoutOrientationVertical)
+        content.insertArrangedSubview_atIndex_(self.validation_section, 7)
+        self._render_validation_cases()
+
+        self.observed_runs_button = self._button(
+            "View History…", lambda _sender: self.show_evaluation_history(),
+            role="flat")
+        self.observed_runs_row = self._stack([
+            self._label("Observed runs", size=12, bold=True),
+            self._label(
+                "Inspect every real input and prediction.",
+                size=9.5, color=NSColor.secondaryLabelColor()),
+            self._spacer(),
+            self.observed_runs_button,
+        ], vertical=False, spacing=8)
+        content.insertArrangedSubview_atIndex_(self.observed_runs_row, 8)
+
+        self.compiler_status_label = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
+        self.compiler_action_button = self._button(
+            "Compilation…", lambda _sender: self.compiler_action(),
+            role="flat")
+        self.compiler_row = self._stack([
+            self._label("Draft compiler", size=12, bold=True),
+            self.compiler_status_label,
+            self._spacer(),
+            self.compiler_action_button,
+        ], vertical=False, spacing=8)
+        content.insertArrangedSubview_atIndex_(self.compiler_row, 9)
+
+        self.applies_summary = self._label(
+            "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
+        self.scope_change_button = self._button(
+            "Change…", lambda _sender: self.show_projects_sheet(), role="flat")
+        self.applies_row = self._stack([
+            self._label("Applies to", size=12, bold=True),
+            self.applies_summary,
+            self.scope_change_button,
+        ], vertical=False, spacing=8)
+        self.applies_row.setContentHuggingPriority_forOrientation_(
+            1000, NSUserInterfaceLayoutOrientationVertical)
+        content.insertArrangedSubview_atIndex_(self.applies_row, 10)
 
         self.diagnostics_label = self._label(
             "", size=10, color=NSColor.secondaryLabelColor(), lines=5)
@@ -711,13 +983,18 @@ class RAPRuleEditorDocument(NSObject):
             "Rule…", lambda sender: self.show_rule_actions(sender), role="flat")
         self.footer_status = self._label(
             "", size=10, color=NSColor.secondaryLabelColor())
+        self.footer_status.cell().setLineBreakMode_(
+            NSLineBreakByTruncatingTail)
+        self.footer_status.setFrameSize_(NSMakeSize(180, 20))
         self.footer_advanced = self._button(
-            "Advanced…", lambda _sender: self.show_advanced(), role="flat")
+            "Advanced…", lambda sender: self.show_advanced_menu(sender),
+            role="flat")
         self.deploy_button = self._button(
             "Deploy", lambda _sender: self.deploy(), role="primary")
         toolbar = NSToolbar.alloc().initWithIdentifier_("RuleEditorToolbar")
         toolbar.setDelegate_(self._toolbar_delegate)
         toolbar.setAllowsUserCustomization_(False)
+        toolbar.setDisplayMode_(NSToolbarDisplayModeIconOnly)
         self.window.setToolbar_(toolbar)
         self.toolbar = toolbar
         self._interactive_controls = [
@@ -728,10 +1005,14 @@ class RAPRuleEditorDocument(NSObject):
             self.edit_projects_button,
             self.trigger_popup,
             self.input_mapping_button,
+            self.scope_change_button,
+            self.run_validation_button,
+            self.add_validation_button,
+            self.observed_runs_button,
+            self.compiler_action_button,
             self.advanced_button,
             self.finding_show_button,
             self.finding_copy_button,
-            self.finding_case_button,
             self.footer_advanced,
             self.deploy_button,
             self.rule_actions_button,
@@ -756,15 +1037,18 @@ class RAPRuleEditorDocument(NSObject):
             self.name_field,
             self.finding_show_button,
             self.finding_copy_button,
-            self.finding_case_button,
-            self.description_editor,
-            self.all_projects_radio,
-            self.selected_projects_radio,
-            self.edit_projects_button,
             self.trigger_popup,
-            self.input_mapping_button,
-            *self.trigger_buttons.values(),
-            *self.input_buttons.values(),
+            self.description_editor,
+            *[
+                control
+                for pair in getattr(self, "validation_controls", [])
+                for control in pair
+            ],
+            self.run_validation_button,
+            self.add_validation_button,
+            self.observed_runs_button,
+            self.compiler_action_button,
+            self.scope_change_button,
             self.rule_actions_button,
             self.footer_advanced,
             self.deploy_button,
@@ -799,6 +1083,19 @@ class RAPRuleEditorDocument(NSObject):
             NSMakeSize(size.width, 10_000_000))
 
     @objc.python_method
+    def _fit_window_to_content(self) -> None:
+        self.window.contentView().layoutSubtreeIfNeeded()
+        fitting_height = float(self._content_stack.fittingSize().height) + 40
+        screen = self.window.screen() or NSScreen.mainScreen()
+        maximum = (
+            float(screen.visibleFrame().size.height) - 80
+            if screen else 720)
+        desired = max(360, min(maximum, fitting_height))
+        self.window.setContentSize_(NSMakeSize(
+            max(680, self.window.contentView().frame().size.width),
+            desired))
+
+    @objc.python_method
     def _lifecycle_title(self) -> str:
         if self.rule.get("new_draft") and not self.rule.get("path"):
             return "Discard Draft"
@@ -818,22 +1115,17 @@ class RAPRuleEditorDocument(NSObject):
         if not self.custom:
             self.spec = str(self.description_editor.string()).strip()
             self.description = self.spec
+            self.cases = []
 
     @objc.python_method
     def _compose(self) -> tuple[bool, str, str]:
         self._capture()
+        self._capture_validation_cases()
         if self.custom:
             ok, source, error = rules_api.patch_rule_identity(
                 self.full_source, self.rule_id, self.name)
             return ok, source, error
         if self.managed_fuzzy:
-            if "Return ONLY one of:" not in self.spec:
-                return (
-                    False,
-                    self.full_source,
-                    "Rule spec must keep the output contract: "
-                    "Return ONLY one of: OK, INFO, WARNING, CRITICAL",
-                )
             projection = rules_api.source_projection(self.full_source)
             ok, source, error = rules_api.patch_source_projection(
                 self.full_source,
@@ -864,7 +1156,9 @@ class RAPRuleEditorDocument(NSObject):
         self._programmatic = True
         if sync_text:
             self.name_field.setStringValue_(self.name)
-            self.description_editor.setString_(self.spec)
+            self.description_editor.setString_(self.description)
+            self._render_validation_cases()
+            self._fit_description_height()
         for kind, button in self.trigger_buttons.items():
             button.setState_(
                 NSControlStateValueOn if kind in self.on
@@ -883,8 +1177,7 @@ class RAPRuleEditorDocument(NSObject):
         definition = TRIGGERS.get(self.trigger)
         if trigger_item is None and definition is not None:
             self.trigger_popup.insertItemWithTitle_atIndex_(
-                f"{definition.label} — {definition.hook} "
-                f"{definition.input_pointer}", 0)
+                definition.label, 0)
             trigger_item = self.trigger_popup.itemAtIndex_(0)
             trigger_item.setRepresentedObject_(definition.hook)
         if trigger_item is not None:
@@ -894,10 +1187,16 @@ class RAPRuleEditorDocument(NSObject):
         source = "rule override" if self.input_pointer else "default"
         self.input_contract_label.setStringValue_(
             (
-                f"{definition.input_label}\n"
-                f"Cursor field: {definition.hook} {pointer} ({source})"
+                f"{definition.input_label}"
             )
             if definition else "Choose one supported trigger.")
+        self._refresh_spec_guidance()
+        self.spec_guidance_label.setHidden_(self.custom)
+        self.validation_section.setHidden_(self.custom)
+        self.observed_runs_row.setHidden_(self.custom)
+        self.observed_runs_button.setEnabled_(
+            bool(self._active_hash) and not self._busy)
+        self.applies_row.setHidden_(self.custom)
         self.all_projects_radio.setState_(
             NSControlStateValueOn
             if self.coverage_mode == "all" else NSControlStateValueOff)
@@ -918,6 +1217,19 @@ class RAPRuleEditorDocument(NSObject):
                 if selected_names else "No projects selected."
             )
         )
+        self.applies_summary.setStringValue_(
+            "All projects"
+            if self.coverage_mode == "all"
+            else (
+                f"This project · {selected_names[0]}"
+                if (
+                    len(selected_names) == 1
+                    and self.selected_projects == [self.project_root]
+                )
+                else f"{len(selected_names)} selected project"
+                f"{'s' if len(selected_names) != 1 else ''}"
+                if selected_names else "No projects selected"
+            ))
         self.custom_label.setHidden_(not self.custom)
         self.metadata_stack.setHidden_(self.custom)
         self.inferred_label.setHidden_(
@@ -925,7 +1237,7 @@ class RAPRuleEditorDocument(NSObject):
         self.description_editor.setEditable_(not self.custom and not self._busy)
         self.lifecycle_button.setTitle_(self._lifecycle_title())
         if self._busy:
-            state = "Deploying"
+            state = self._busy_label or "Working"
         elif self.rule.get("_deploy_failed"):
             state = "Deploy failed"
         elif self.rule.get("new_draft") and not self.rule.get("path"):
@@ -943,48 +1255,151 @@ class RAPRuleEditorDocument(NSObject):
         deploy_needed = bool(
             self.rule.get("new_draft")
             or self._dirty
+            or self._compiler_dirty
             or not self._active_hash
             or (
                 self._working_hash
                 and self._working_hash != self._active_hash
             )
         )
-        impact = (
-            len([
-                item for item in self.projects
-                if (
-                    item.get("path") not in self.project_overrides
-                    or (
-                        self.source_scope == "project"
-                        and item.get("path") == self.project_root
-                    )
+        basic_ready = (
+            self.custom
+            or (
+                bool(self.name.strip())
+                and bool(self.spec.strip())
+                and self.trigger in TRIGGERS
+                and (
+                    not self.rule.get("new_draft")
+                    or self.name.strip().lower() != "untitled rule"
                 )
-            ])
-            if self.coverage_mode == "all"
-            else len([
-                path for path in self.selected_projects
-                if (
-                    path not in self.project_overrides
-                    or (
-                        self.source_scope == "project"
-                        and path == self.project_root
-                    )
-                )
-            ])
-        )
-        self.footer_status.setStringValue_(
-            state
-            + (
-                f" · Updates {impact} project"
-                f"{'s' if impact != 1 else ''}"
-                if deploy_needed else ""
             )
         )
-        self.deploy_button.setEnabled_(deploy_needed and not self._busy)
+        raw_job = self._finetune_status.get("job") or {}
+        raw_job_status = str(raw_job.get("status", ""))
+        stale_build_running = bool(
+            raw_job_status == "building"
+            and not self._job_matches_current_behavior(raw_job)
+        )
+        job = self._draft_candidate_job()
+        job_status = str(job.get("status", ""))
+        active_compiler_label = self.compiler_label(
+            self.resolved_active_compiler())
+        draft_compiler = self.resolved_draft_compiler()
+        draft_compiler_label = self.compiler_label(draft_compiler)
+        draft_requires_build = self.compiler_requires_build(draft_compiler)
+        draft_program_id = self._draft_program_id()
+        draft_ready = bool(
+            not draft_requires_build or draft_program_id)
+        queue_status = str(self._deployment_queue.get("status", ""))
+        queue_pending = queue_status in (
+            "waiting_for_build", "building", "checking", "validating", "deploying",
+            "cancelling")
+        can_queue = bool(
+            draft_requires_build
+            and not draft_program_id
+            and job_status == "building"
+        )
+        if not self._active_hash:
+            deployed_copy = "Not deployed"
+        elif job_status == "building":
+            deployed_copy = f"Deployed: {active_compiler_label}"
+        else:
+            deployed_copy = f"Deployed: {active_compiler_label}"
+        if job_status == "building":
+            draft_copy = f"Draft: {draft_compiler_label} · building…"
+            compiler_action = "Building…"
+        elif draft_requires_build and not draft_ready:
+            draft_copy = f"Draft: {draft_compiler_label} · build required"
+            compiler_action = "Choose…"
+        else:
+            draft_copy = f"Draft: {draft_compiler_label} · ready"
+            compiler_action = "Choose…"
+        if queue_pending:
+            phase = str(
+                self._deployment_queue.get("phase")
+                or "Deployment queued")
+            elapsed = max(
+                0, int(time.time() - float(
+                    self._deployment_queue.get("created_at", time.time()))))
+            draft_copy = (
+                f"Draft: {draft_compiler_label} · {phase.lower()} "
+                f"· {elapsed // 60}:{elapsed % 60:02d} elapsed"
+            )
+            compiler_action = "Cancel Queue…"
+        compiler_copy = f"{draft_copy}   {deployed_copy}"
+        self.compiler_status_label.setStringValue_(compiler_copy)
+        self.compiler_action_button.setTitle_(compiler_action)
+        self.compiler_action_button.setEnabled_(not self._busy)
+        self.compiler_row.setHidden_(self.custom or not self.simple_fuzzy)
+        status_copy = state
+        self.footer_status.setStringValue_(status_copy)
+        self.deploy_button.setEnabled_(
+            deploy_needed
+            and (draft_ready or can_queue)
+            and not queue_pending
+            and not self._busy)
         self.deploy_button.setTitle_(
-            "Deploy" if deploy_needed else "Deployed")
-        self._recalculate_key_loop()
+            "Queued"
+            if queue_pending else (
+                "Deploy When Ready" if can_queue else "Deploy"
+            )
+        )
+        test_count = len(self.validation_cases)
+        self.run_validation_button.setTitle_(
+            f"Run {test_count} Test{'s' if test_count != 1 else ''}")
+        self.run_validation_button.setEnabled_(
+            bool(test_count)
+            and self.trigger in TRIGGERS
+            and draft_ready
+            and not self._busy
+        )
+        self.run_validation_button.setToolTip_(
+            f"Run all {test_count} tests against the current draft with "
+            f"{draft_compiler_label}."
+            if draft_ready
+            else f"Build {draft_compiler_label} for this draft first."
+        )
+        if self._busy:
+            deploy_tooltip = "Wait for the current editor operation to finish."
+        elif queue_pending:
+            deploy_tooltip = (
+                "This exact draft will deploy automatically after its compiler "
+                "build and validation pass.")
+        elif not basic_ready:
+            deploy_tooltip = "Complete the rule name, trigger, and specification."
+        elif not deploy_needed:
+            deploy_tooltip = "No undeployed draft changes."
+        elif can_queue:
+            deploy_tooltip = (
+                f"Queue this exact draft to deploy after "
+                f"{draft_compiler_label} finishes building and tests pass.")
+        elif not draft_ready:
+            deploy_tooltip = (
+                f"Build {draft_compiler_label} for the current draft before "
+                "deploying it.")
+        elif stale_build_running:
+            deploy_tooltip = (
+                "Deploy these changes now. The compiler build for the "
+                "previous revision will be discarded.")
+        else:
+            deploy_tooltip = "Deploy the current rule revision."
+        self.deploy_button.setToolTip_(deploy_tooltip)
         self._programmatic = False
+        if sync_text and self._shown:
+            self._schedule_content_fit()
+
+    @objc.python_method
+    def _refresh_spec_guidance(self) -> None:
+        level_check = rules_api.inspect_spec_levels(self.spec)
+        self.spec_guidance_label.setStringValue_(
+            (
+                "Detected outputs: " + ", ".join(level_check["levels"])
+                if level_check["ok"]
+                else level_check["warning"]
+            ))
+        self.spec_guidance_label.setTextColor_(
+            NSColor.secondaryLabelColor()
+            if level_check["ok"] else NSColor.systemOrangeColor())
 
     @objc.python_method
     def update_finding_context(self, context: dict[str, Any] | None) -> None:
@@ -1000,9 +1415,6 @@ class RAPRuleEditorDocument(NSObject):
         finding = context.get("finding") or {}
         evaluation = context.get("evaluation") or {}
         input_text = str((evaluation.get("input") or {}).get("text", ""))
-        safe_case = not any(
-            line.startswith(("Input:", "Output:"))
-            for line in input_text.splitlines())
         preview = input_text[:320]
         if len(input_text) > len(preview):
             preview += "…"
@@ -1013,12 +1425,6 @@ class RAPRuleEditorDocument(NSObject):
             f"{finding.get('severity', '').title()} finding{warning}\n"
             f"Input: {preview or '(no input)'}")
         self.finding_callout.setHidden_(not bool(context))
-        self.finding_case_button.setEnabled_(
-            bool(input_text)
-            and safe_case
-            and self.managed_fuzzy
-            and not self.custom
-            and self._advanced_window is None)
 
     @objc.python_method
     def copy_finding_input(self) -> None:
@@ -1035,77 +1441,74 @@ class RAPRuleEditorDocument(NSObject):
             self.manager.show_finding(int(finding["id"]))
 
     @objc.python_method
-    def add_finding_test_case(self) -> None:
-        context = self.finding_context or {}
-        evaluation = context.get("evaluation") or {}
-        input_text = str((evaluation.get("input") or {}).get("text", ""))
-        output = {
-            "info": "INFO",
-            "warn": "WARNING",
-            "critical": "CRITICAL",
-        }.get(str(evaluation.get("severity", "")).lower(), "WARNING")
-        safe_case = not any(
-            line.startswith(("Input:", "Output:"))
-            for line in input_text.splitlines())
-        if (
-            not input_text
-            or not safe_case
-            or self.custom
-            or self._advanced_window is not None
-        ):
-            return
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_("Add this finding as a test case?")
-        alert.setInformativeText_(
-            "Choose the output this exact recorded input should produce.\n\n"
-            + "\n".join(textwrap.wrap(
-                input_text[:500], width=80,
-                replace_whitespace=False, drop_whitespace=False)))
-        alert.addButtonWithTitle_("Expect OK")
-        alert.addButtonWithTitle_(f"Expect {output or 'WARNING'}")
-        alert.addButtonWithTitle_("Cancel")
-
-        def completed(response):
-            if response not in (
-                NSAlertFirstButtonReturn, NSAlertSecondButtonReturn
-            ):
-                return
-            wanted = "OK" if response == NSAlertFirstButtonReturn else (
-                output or "WARNING")
-            self._append_finding_test_case(input_text, wanted)
-
-        alert.beginSheetModalForWindow_completionHandler_(
-            self.window, completed)
-
-    @objc.python_method
-    def _append_finding_test_case(
-        self, input_text: str, wanted: str
-    ) -> None:
-        if wanted not in {"OK", "INFO", "WARNING", "CRITICAL"}:
-            return
-        updated = _upsert_test_case(self.spec, input_text, wanted)
-        if updated != self.spec:
-            self.spec = updated
-            self.description_editor.setString_(self.spec)
-            self.editor_changed()
-
-    @objc.python_method
     def editor_changed(self) -> None:
         if self._programmatic or self._busy:
             return
         self._capture()
         ok, source, _error = self._compose()
+        self._current_source_hash = (
+            revisions.hash_source(source) if ok else "")
+        self._current_behavior_hash = (
+            revisions.behavior_hash(source) if ok else "")
         self._source_dirty = (
-            not ok or revisions.hash_source(source) != self._saved_source_hash)
-        self._dirty = self._source_dirty or self._coverage_dirty
+            not ok or self._current_source_hash != self._saved_source_hash)
+        self._cancel_queue_for_draft_change(
+            "Draft changed after deployment was queued.")
+        self._sync_draft_compiler_for_source()
+        self._capture_validation_cases()
+        self._validation_dirty = (
+            json.dumps(self.validation_cases, sort_keys=True)
+            != self._saved_validation_cases)
+        self._invalidate_validation_results()
+        if self._can_autosave_validation() and self._validation_dirty:
+            self._schedule_validation_save()
+            self._dirty = (
+                self._source_dirty
+                or self._coverage_dirty
+                or self._compiler_dirty
+            )
+        else:
+            self._dirty = (
+                self._source_dirty
+                or self._coverage_dirty
+                or self._compiler_dirty
+                or self._validation_dirty)
         self.rule["_deploy_failed"] = False
-        self.window.setDocumentEdited_(True)
+        self.window.setDocumentEdited_(self._dirty)
+        self._fit_description_height()
         self._refresh_ui()
+
+    @objc.python_method
+    def _fit_description_height(self) -> None:
+        if not hasattr(self, "spec_height_constraint"):
+            return
+        text = str(self.description_editor.string())
+        lines = max(4, text.count("\n") + len(text) // 90 + 1)
+        self.spec_height_constraint.setConstant_(
+            min(260, max(100, lines * 18 + 24)))
+
+    @objc.python_method
+    def _schedule_content_fit(self) -> None:
+        self._content_fit_generation += 1
+        generation = self._content_fit_generation
+        if self._content_fit_timer is not None:
+            self._content_fit_timer.cancel()
+
+        def fit() -> None:
+            if (
+                generation == self._content_fit_generation
+                and self.window.isVisible()
+            ):
+                self._fit_window_to_content()
+
+        self._content_fit_timer = _after_delay(0.08, fit)
 
     @objc.python_method
     def coverage_changed(self) -> None:
         if self._programmatic or self._busy:
             return
+        self._cancel_queue_for_draft_change(
+            "Project scope changed after deployment was queued.")
         current = {
             "mode": self.coverage_mode,
             "selected_projects": sorted(
@@ -1113,7 +1516,12 @@ class RAPRuleEditorDocument(NSObject):
                 if self.coverage_mode == "selected" else []),
         }
         self._coverage_dirty = current != self._active_coverage
-        self._dirty = self._source_dirty or self._coverage_dirty
+        self._dirty = (
+            self._source_dirty
+            or self._coverage_dirty
+            or self._compiler_dirty
+            or self._validation_dirty
+        )
         self.rule["_deploy_failed"] = False
         self.window.setDocumentEdited_(True)
         self._refresh_ui()
@@ -1126,7 +1534,655 @@ class RAPRuleEditorDocument(NSObject):
             return
         self.trigger = str(selected or "afterAgentResponse")
         self.input_pointer = ""
+        self.trigger_error_label.setHidden_(True)
         self.editor_changed()
+        self._refresh_ui()
+
+    @objc.python_method
+    def _validation_result_presentation(
+        self, result: dict[str, Any]
+    ) -> tuple[str, Any, str]:
+        text = "Not run"
+        color = NSColor.secondaryLabelColor()
+        tooltip = ""
+        if result.get("running"):
+            text = "Running…"
+        elif result:
+            actual = str(result.get("actual") or "(empty)")
+            if not result.get("valid_output", True):
+                text = "Invalid output · Failed"
+            else:
+                text = (
+                    f"Actual {actual} · "
+                    f"{'Passed' if result.get('ok') else 'Failed'}")
+            color = (
+                NSColor.systemGreenColor()
+                if result.get("ok") else NSColor.systemRedColor())
+            provenance = " · ".join(
+                value for value in (
+                    str(result.get("compiler", "")),
+                    str(result.get("compiler_snapshot", "")),
+                )
+                if value
+            )
+            tooltip = f"Raw result: {actual}"
+            if provenance:
+                tooltip += f"\nCompiler: {provenance}"
+        return text, color, tooltip
+
+    @objc.python_method
+    def _refresh_validation_result_labels(self) -> None:
+        for case in self.validation_cases:
+            case_id = str(case.get("id", ""))
+            label = self.validation_result_labels.get(case_id)
+            if label is None:
+                continue
+            text, color, tooltip = self._validation_result_presentation(
+                self._validation_results.get(case_id, {}))
+            label.setStringValue_(text)
+            label.setTextColor_(color)
+            label.setToolTip_(tooltip or None)
+
+    @objc.python_method
+    def _render_validation_cases(self) -> None:
+        for view in list(self.validation_stack.arrangedSubviews()):
+            self.validation_stack.removeArrangedSubview_(view)
+            view.removeFromSuperview()
+        self.validation_controls = []
+        self.validation_result_labels = {}
+        for index, case in enumerate(self.validation_cases):
+            input_field = NSTextField.alloc().init()
+            input_field.setStringValue_(str(case.get("input", "")))
+            input_field.setPlaceholderString_("Test input")
+            input_field.setDelegate_(self._text_delegate)
+            input_field.setMaximumNumberOfLines_(1)
+            input_field.cell().setScrollable_(True)
+            input_field.cell().setLineBreakMode_(
+                NSLineBreakByTruncatingTail)
+            input_field.setToolTip_(
+                str(case.get("note") or case.get("input", "")))
+            input_field.setContentHuggingPriority_forOrientation_(
+                1, NSUserInterfaceLayoutOrientationHorizontal)
+            input_field.setContentCompressionResistancePriority_forOrientation_(
+                1, NSUserInterfaceLayoutOrientationHorizontal)
+            output = NSPopUpButton.alloc().init()
+            output.addItemsWithTitles_(
+                ["OK", "INFO", "WARNING", "CRITICAL"])
+            output.selectItemWithTitle_(
+                str(case.get("expected", "WARNING")))
+            self._wire(output, lambda _sender: self.validation_changed())
+            remove = self._button(
+                "",
+                lambda _sender, value=index:
+                    self.remove_validation_case(value),
+                role="icon",
+                accessibility=f"Remove validation case {index + 1}")
+            set_button_symbol(
+                remove, "trash", f"Remove validation case {index + 1}",
+                fallback="Remove", point_size=11)
+            remove.setToolTip_("Remove validation case")
+            expand = self._button(
+                "",
+                lambda _sender, value=index:
+                    self.edit_validation_input(value),
+                role="icon",
+                accessibility=f"Open validation case {index + 1}")
+            set_button_symbol(
+                expand, "arrow.up.left.and.arrow.down.right",
+                f"Open validation case {index + 1}",
+                fallback="Open", point_size=10)
+            expand.setToolTip_("Open full input")
+            result = self._validation_results.get(
+                str(case.get("id", "")), {})
+            result_text, result_color, result_tooltip = (
+                self._validation_result_presentation(result))
+            result_label = self._label(
+                result_text, size=9.5, color=result_color)
+            result_label.cell().setLineBreakMode_(
+                NSLineBreakByTruncatingTail)
+            result_label.setContentCompressionResistancePriority_forOrientation_(
+                1, NSUserInterfaceLayoutOrientationHorizontal)
+            if result_tooltip:
+                result_label.setToolTip_(result_tooltip)
+            row = self._stack(
+                [input_field, output, result_label, expand, remove],
+                vertical=False, spacing=8)
+            _activate(
+                input_field.widthAnchor().constraintGreaterThanOrEqualToConstant_(
+                    300),
+                output.widthAnchor().constraintEqualToConstant_(95),
+                result_label.widthAnchor().constraintEqualToConstant_(170),
+                expand.widthAnchor().constraintEqualToConstant_(28),
+                remove.widthAnchor().constraintEqualToConstant_(28),
+                row.heightAnchor().constraintEqualToConstant_(28),
+            )
+            self.validation_stack.addArrangedSubview_(row)
+            self.validation_controls.append((input_field, output))
+            self.validation_result_labels[
+                str(case.get("id", ""))
+            ] = result_label
+        count = len(self.validation_cases)
+        draft_compiler = self.resolved_draft_compiler()
+        draft_ready = bool(
+            not self.compiler_requires_build(draft_compiler)
+            or self._draft_program_id()
+        )
+        self.run_validation_button.setTitle_(
+            f"Run {count} Test{'s' if count != 1 else ''}")
+        self.run_validation_button.setHidden_(count == 0)
+        self.validation_actions_button.setHidden_(count == 0)
+        self.validation_count_label.setHidden_(count == 0)
+        self.validation_status.setHidden_(count == 0)
+        self.validation_column_header.setHidden_(count == 0)
+        self.validation_scroll.setHidden_(count == 0)
+        self.run_validation_button.setEnabled_(
+            bool(count)
+            and self.trigger in TRIGGERS
+            and draft_ready
+            and not self._busy)
+        visible = min(count, 5)
+        self.validation_count_label.setStringValue_(
+            f"({count})"
+            + (f" · showing {visible}" if count > visible else ""))
+        self.validation_height_constraint.setConstant_(
+            0 if count == 0 else min(180, max(44, count * 34 + 8)))
+        self.validation_document_height.setConstant_(
+            0 if count == 0 else max(
+                float(self.validation_height_constraint.constant()),
+                float(count * 34 + 8),
+            ))
+        self.validation_document.layoutSubtreeIfNeeded()
+        if hasattr(self, "compiler_action_button"):
+            self._recalculate_key_loop()
+
+    @objc.python_method
+    def _capture_validation_cases(self) -> None:
+        existing_ids = [
+            str(case.get("id", "")) for case in self.validation_cases]
+        existing_notes = [
+            str(case.get("note", "")) for case in self.validation_cases]
+        self.validation_cases = []
+        for index, (input_field, output) in enumerate(
+            self.validation_controls
+        ):
+            input_text = str(input_field.stringValue())
+            if not input_text:
+                continue
+            self.validation_cases.append({
+                "id": (
+                    existing_ids[index]
+                    if index < len(existing_ids) and existing_ids[index]
+                    else secrets.token_hex(8)
+                ),
+                "input": input_text,
+                "expected": str(output.titleOfSelectedItem()),
+                "note": (
+                    existing_notes[index]
+                    if index < len(existing_notes) else ""),
+            })
+
+    @objc.python_method
+    def _validation_cache_key(self, result: dict[str, Any]) -> str:
+        return "\x00".join((
+            str(result.get("spec_hash", "")),
+            str(result.get("compiler", "")),
+            str(result.get("compiler_snapshot", "")),
+            str(result.get("program_id", "")),
+            str(result.get("case_hash", "")),
+        ))
+
+    @objc.python_method
+    def _cache_validation_results(
+        self, results: list[dict[str, Any]]
+    ) -> None:
+        for result in results:
+            if not result.get("case_hash") or not result.get("spec_hash"):
+                continue
+            self._validation_result_cache[
+                self._validation_cache_key(result)
+            ] = dict(result)
+
+    @objc.python_method
+    def _reconcile_validation_results(self) -> None:
+        spec_hash = validation_store.spec_fingerprint(self.spec)
+        compiler = str(self._validation_target.get("compiler", ""))
+        snapshot = str(
+            self._validation_target.get("compiler_snapshot", ""))
+        program_id = str(self._validation_target.get("program_id", ""))
+        current = dict(self._validation_results)
+        reconciled: dict[str, dict[str, Any]] = {}
+        for case in self.validation_cases:
+            case_id = str(case.get("id", ""))
+            case_hash = validation_store.case_fingerprint(case)
+            running = current.get(case_id) or {}
+            if (
+                running.get("running")
+                and running.get("spec_hash") == spec_hash
+                and running.get("case_hash") == case_hash
+            ):
+                reconciled[case_id] = running
+                continue
+            key = "\x00".join((
+                spec_hash, compiler, snapshot, program_id, case_hash))
+            cached = self._validation_result_cache.get(key)
+            if cached is None and not program_id:
+                candidates = [
+                    value for value in self._validation_result_cache.values()
+                    if value.get("spec_hash") == spec_hash
+                    and (
+                        not compiler
+                        or value.get("compiler") == compiler
+                    )
+                    and value.get("compiler_snapshot") == snapshot
+                    and value.get("case_hash") == case_hash
+                ]
+                cached = max(
+                    candidates,
+                    key=lambda value: float(value.get("ran_at", 0)),
+                    default=None,
+                )
+            if cached is not None:
+                reconciled[case_id] = {
+                    **cached,
+                    **case,
+                    "case_hash": case_hash,
+                }
+        self._validation_results = reconciled
+        self._update_validation_summary()
+
+    @objc.python_method
+    def _update_validation_summary(self) -> None:
+        completed = [
+            result for result in self._validation_results.values()
+            if not result.get("running")
+        ]
+        if any(
+            result.get("running")
+            for result in self._validation_results.values()
+        ):
+            return
+        if not completed:
+            self.validation_status.setStringValue_(
+                "Not run for current specification.")
+            self.validation_status.setTextColor_(
+                NSColor.systemOrangeColor())
+            return
+        passed = sum(1 for result in completed if result.get("ok"))
+        failed = len(completed) - passed
+        not_run = max(0, len(self.validation_cases) - len(completed))
+        compiler = str(
+            completed[0].get("compiler")
+            or self._validation_target.get("compiler", ""))
+        latest = max(
+            float(result.get("ran_at", 0)) for result in completed)
+        parts = [f"{passed}/{len(completed)} passed"]
+        if not_run:
+            parts.append(f"{not_run} not run")
+        parts.append(self.compiler_label(compiler))
+        if latest:
+            parts.append(time.strftime("%-I:%M %p", time.localtime(latest)))
+        self.validation_status.setStringValue_(" · ".join(parts))
+        self.validation_status.setTextColor_(
+            NSColor.systemRedColor()
+            if failed else (
+                NSColor.systemOrangeColor()
+                if not_run else NSColor.systemGreenColor()
+            )
+        )
+
+    @objc.python_method
+    def _invalidate_validation_results(self) -> None:
+        self._reconcile_validation_results()
+        self._refresh_validation_result_labels()
+
+    @objc.python_method
+    def edit_validation_input(self, index: int) -> None:
+        self._capture_validation_cases()
+        if not 0 <= index < len(self.validation_cases):
+            return
+        scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 560, 180))
+        scroll.setHasVerticalScroller_(True)
+        editor = NSTextView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, 540, 180))
+        editor.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+        editor.setString_(self.validation_cases[index]["input"])
+        scroll.setDocumentView_(editor)
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(f"Validation case {index + 1}")
+        note = str(self.validation_cases[index].get("note", ""))
+        alert.setInformativeText_(
+            note or "Edit the exact input used for validation.")
+        alert.setAccessoryView_(scroll)
+        alert.addButtonWithTitle_("Apply")
+        alert.addButtonWithTitle_("Cancel")
+
+        def completed(response):
+            if response != NSAlertFirstButtonReturn:
+                return
+            input_text = str(editor.string())
+            if not input_text:
+                return
+            self.validation_cases[index]["input"] = input_text
+            self._render_validation_cases()
+            self.validation_changed()
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def validation_changed(self) -> None:
+        self._cancel_queue_for_draft_change(
+            "Validation cases changed after deployment was queued.")
+        self._capture_validation_cases()
+        self._validation_dirty = (
+            json.dumps(self.validation_cases, sort_keys=True)
+            != self._saved_validation_cases)
+        self._invalidate_validation_results()
+        if self._can_autosave_validation():
+            self._dirty = self._source_dirty or self._coverage_dirty
+            self._schedule_validation_save()
+        else:
+            self._dirty = (
+                self._source_dirty
+                or self._coverage_dirty
+                or self._validation_dirty)
+            self.window.setDocumentEdited_(True)
+            self.validation_status.setStringValue_(
+                "Saved with the first draft or deployment.")
+        self._refresh_ui()
+        self._schedule_content_fit()
+
+    @objc.python_method
+    def add_validation_case(self) -> None:
+        self._cancel_queue_for_draft_change(
+            "Validation cases changed after deployment was queued.")
+        self._capture_validation_cases()
+        self.validation_cases.append({
+            "id": secrets.token_hex(8),
+            "input": "",
+            "expected": "WARNING",
+            "note": "",
+        })
+        self._render_validation_cases()
+        if self.validation_controls:
+            self.window.makeFirstResponder_(
+                self.validation_controls[-1][0])
+        _on_main(self._scroll_validation_to_bottom)
+
+    @objc.python_method
+    def _scroll_validation_to_bottom(self) -> None:
+        self.validation_document.layoutSubtreeIfNeeded()
+        clip = self.validation_scroll.contentView()
+        maximum = max(
+            0.0,
+            float(self.validation_document.frame().size.height)
+            - float(clip.bounds().size.height),
+        )
+        clip.scrollToPoint_((0, maximum))
+        self.validation_scroll.reflectScrolledClipView_(clip)
+
+    @objc.python_method
+    def remove_validation_case(self, index: int) -> None:
+        self._cancel_queue_for_draft_change(
+            "Validation cases changed after deployment was queued.")
+        self._capture_validation_cases()
+        if 0 <= index < len(self.validation_cases):
+            removed = self.validation_cases.pop(index)
+            self._last_removed_validation = (index, removed)
+            self.validation_undo_button.setHidden_(False)
+            self._validation_dirty = True
+            self._invalidate_validation_results()
+            self._render_validation_cases()
+            if self._can_autosave_validation():
+                self._persist_validation_cases()
+            else:
+                self.validation_changed()
+
+    @objc.python_method
+    def undo_remove_validation_case(self) -> None:
+        self._cancel_queue_for_draft_change(
+            "Validation cases changed after deployment was queued.")
+        if not self._last_removed_validation:
+            return
+        index, removed = self._last_removed_validation
+        if isinstance(removed, list):
+            self.validation_cases = list(removed)
+        else:
+            self.validation_cases.insert(
+                min(int(index), len(self.validation_cases)), removed)
+        self._last_removed_validation = None
+        self.validation_undo_button.setHidden_(True)
+        self._invalidate_validation_results()
+        self._render_validation_cases()
+        if self._can_autosave_validation():
+            self._persist_validation_cases()
+        else:
+            self.validation_changed()
+
+    @objc.python_method
+    def show_validation_actions(self, sender) -> None:
+        menu = NSMenu.alloc().initWithTitle_("Validation actions")
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Remove all cases", "invoke:", "")
+        self._wire(item, lambda _sender: self.remove_all_validation_cases())
+        item.setEnabled_(bool(self.validation_cases))
+        menu.addItem_(item)
+        menu.popUpMenuPositioningItem_atLocation_inView_(
+            None, (0, sender.bounds().size.height), sender)
+
+    @objc.python_method
+    def remove_all_validation_cases(self) -> None:
+        self._cancel_queue_for_draft_change(
+            "Validation cases changed after deployment was queued.")
+        self._capture_validation_cases()
+        if not self.validation_cases:
+            return
+        self._last_removed_validation = (0, list(self.validation_cases))
+        self.validation_cases = []
+        self.validation_undo_button.setHidden_(False)
+        self._invalidate_validation_results()
+        self._render_validation_cases()
+        if self._can_autosave_validation():
+            self._persist_validation_cases()
+        else:
+            self.validation_changed()
+
+    @objc.python_method
+    def _can_autosave_validation(self) -> bool:
+        return bool((self.rule.get("definition") or {}).get("source_path"))
+
+    @objc.python_method
+    def _schedule_validation_save(self) -> None:
+        self._validation_save_generation += 1
+        generation = self._validation_save_generation
+        self.validation_status.setStringValue_("Saving…")
+        self.validation_status.setTextColor_(
+            NSColor.secondaryLabelColor())
+
+        def save() -> None:
+            if generation == self._validation_save_generation:
+                self._persist_validation_cases()
+
+        _after_delay(0.4, save)
+
+    @objc.python_method
+    def _persist_validation_cases(self) -> None:
+        self._capture_validation_cases()
+        self.validation_status.setStringValue_("Saving…")
+        self.validation_status.setTextColor_(
+            NSColor.secondaryLabelColor())
+
+        def completed(result):
+            def apply():
+                if result.get("ok"):
+                    self.validation_cases = list(
+                        result.get("cases") or self.validation_cases)
+                    self._saved_validation_cases = json.dumps(
+                        self.validation_cases, sort_keys=True)
+                    self._validation_dirty = False
+                    self._dirty = (
+                        self._source_dirty
+                        or self._coverage_dirty
+                        or self._compiler_dirty
+                    )
+                    self.window.setDocumentEdited_(self._dirty)
+                    if self._validation_results:
+                        self._update_validation_summary()
+                    else:
+                        self.validation_status.setStringValue_("Saved")
+                        self.validation_status.setTextColor_(
+                            NSColor.systemGreenColor())
+                else:
+                    self.validation_status.setStringValue_(
+                        result.get("error", "Could not save validation cases."))
+                    self.validation_status.setTextColor_(
+                        NSColor.systemRedColor())
+            _on_main(apply)
+
+        self.model.perform({
+            "type": "save_validation_cases",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "validation_cases": self.validation_cases,
+        }, completed)
+
+    @objc.python_method
+    def run_validation_cases(self) -> None:
+        self._capture_validation_cases()
+        if not self.validation_cases:
+            return
+        ok, source, error = self._compose()
+        if not ok:
+            self._deployment_failed(error)
+            return
+        run_key = secrets.token_hex(8)
+        self._validation_run_key = run_key
+        spec_hash = validation_store.spec_fingerprint(self.spec)
+        self._validation_results = {
+            str(case.get("id", "")): {
+                "running": True,
+                "spec_hash": spec_hash,
+                "case_hash": validation_store.case_fingerprint(case),
+            }
+            for case in self.validation_cases
+        }
+        self.validation_status.setStringValue_(
+            "Preparing the validation program and running tests…")
+        self.validation_status.setTextColor_(
+            NSColor.secondaryLabelColor())
+        self._refresh_validation_result_labels()
+        self._set_busy(True, busy_label="Running validation")
+
+        def completed(result):
+            def apply():
+                self._set_busy(False)
+                if run_key != self._validation_run_key:
+                    return
+                if not result.get("ok"):
+                    self._validation_results = {}
+                    self._validation_run_key = ""
+                    self._reconcile_validation_results()
+                    self.validation_status.setStringValue_(
+                        result.get("error", "Validation failed to run."))
+                    self.validation_status.setTextColor_(
+                        NSColor.systemRedColor())
+                    self._refresh_validation_result_labels()
+                    return
+                validation = result.get("validation") or {}
+                self._validation_target = dict(
+                    result.get("target")
+                    or self._validation_target
+                    or {
+                        "compiler": self.active_compiler,
+                        "compiler_snapshot": self.active_compiler_snapshot,
+                    }
+                )
+                validation_results = []
+                for item in validation.get("results") or []:
+                    value = dict(item)
+                    value.setdefault("spec_hash", spec_hash)
+                    value.setdefault(
+                        "case_hash",
+                        validation_store.case_fingerprint(value),
+                    )
+                    value.setdefault(
+                        "compiler",
+                        str(self._validation_target.get("compiler", "")),
+                    )
+                    value.setdefault(
+                        "compiler_snapshot",
+                        str(self._validation_target.get(
+                            "compiler_snapshot", "")),
+                    )
+                    value.setdefault("ran_at", time.time())
+                    validation_results.append(value)
+                self._cache_validation_results(validation_results)
+                self._validation_results = {}
+                self._validation_run_key = ""
+                self._reconcile_validation_results()
+                timing = result.get("timing") or {}
+                if timing:
+                    summary = str(self.validation_status.stringValue())
+                    summary += (
+                        f" · compile {float(timing.get('compile_ms', 0)) / 1000:.1f}s"
+                        f" · run {float(timing.get('run_ms', 0)) / 1000:.1f}s"
+                    )
+                    self.validation_status.setStringValue_(summary)
+                self._refresh_validation_result_labels()
+            _on_main(apply)
+
+        self.model.perform({
+            "type": "validate_rule_cases",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "source": source,
+            "validation_cases": self.validation_cases,
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "program_id": self._draft_program_id(),
+        }, completed, timeout=180)
+
+    @objc.python_method
+    def reload_validation_results(self) -> None:
+        self._capture_validation_cases()
+        if not self.validation_cases:
+            return
+        ok, source, _error = self._compose()
+        if not ok:
+            return
+        self._validation_load_generation += 1
+        generation = self._validation_load_generation
+
+        def completed(result):
+            def apply():
+                if generation != self._validation_load_generation:
+                    return
+                self._validation_results_loaded = True
+                if not result.get("ok"):
+                    return
+                self._validation_target = dict(result.get("target") or {})
+                validation = result.get("validation") or {}
+                self._cache_validation_results(
+                    list(validation.get("results") or []))
+                self._reconcile_validation_results()
+                self._refresh_validation_result_labels()
+            _on_main(apply)
+
+        request = {
+            "type": "cached_validation_results",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "source": source,
+            "validation_cases": self.validation_cases,
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "program_id": self._draft_program_id(),
+        }
+        if hasattr(self.model, "query"):
+            self.model.query(request, completed, timeout=10)
+        else:
+            self.model.perform(request, completed, timeout=10)
 
     @objc.python_method
     def show_more_triggers(self) -> None:
@@ -1366,6 +2422,932 @@ class RAPRuleEditorDocument(NSObject):
             self.window, completed)
 
     @objc.python_method
+    def show_advanced_menu(self, sender) -> None:
+        menu = NSMenu.alloc().initWithTitle_("Advanced")
+        for title, callback in (
+            ("Compilation…", self.show_compilation),
+            ("Evaluation History…", self.show_evaluation_history),
+            ("Input Mapping…", self.show_input_mapping),
+            ("View Compiled Spec…", self.show_compiled_spec),
+            ("View Python…", self.show_advanced),
+        ):
+            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                title, "invoke:", "")
+            self._wire(item, lambda _item, fn=callback: fn())
+            menu.addItem_(item)
+        menu.popUpMenuPositioningItem_atLocation_inView_(
+            None, (0, sender.bounds().size.height), sender)
+
+    @objc.python_method
+    def show_evaluation_history(self) -> None:
+        from .evaluation_history import EvaluationHistoryManager
+        if not hasattr(self, "_evaluation_history_manager"):
+            self._evaluation_history_manager = EvaluationHistoryManager(
+                self.model,
+                self.manager.show_finding if self.manager else None,
+                lambda _rule_id, _project_root:
+                    self.reload_validation_cases())
+        self._evaluation_history_manager.open(
+            self.rule_id, self.name, self.project_root)
+
+    @objc.python_method
+    def _queue_is_pending(self) -> bool:
+        return str(self._deployment_queue.get("status", "")) in (
+            "waiting_for_build", "building", "checking", "validating", "deploying")
+
+    @objc.python_method
+    def compiler_action(self) -> None:
+        if not self._queue_is_pending():
+            self.show_compilation()
+            return
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Cancel queued deployment?")
+        alert.setInformativeText_(
+            "The compiler build may continue, but this draft will no longer "
+            "deploy automatically.")
+        alert.addButtonWithTitle_("Keep Queued")
+        alert.addButtonWithTitle_("Cancel Deployment")
+
+        def completed(response):
+            if response == NSAlertSecondButtonReturn:
+                self.cancel_queued_deployment("Cancelled by user.")
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def reload_deployment_queue(self) -> None:
+        def completed(result):
+            if result.get("ok"):
+                self._deployment_queue_poll_failures = 0
+                _on_main(lambda: self._apply_deployment_queue(
+                    dict(result.get("queue") or {})))
+            elif self._queue_is_pending():
+                self._recover_deployment_queue_poll()
+
+        request = {
+            "type": "deployment_queue_status",
+            "rule_id": self.rule_id,
+        }
+        if hasattr(self.model, "query"):
+            self.model.query(request, completed, timeout=10)
+        else:
+            self.model.perform(request, completed, timeout=10)
+
+    @objc.python_method
+    def _recover_deployment_queue_poll(self) -> None:
+        self._deployment_queue_poll_failures += 1
+
+        def recover():
+            result = None
+            if ipc.ensure_daemon(wait=8.0):
+                result = ipc.send_request({
+                    "type": "deployment_queue_status",
+                    "rule_id": self.rule_id,
+                    "deployment_id": str(
+                        self._deployment_queue.get("id", "")),
+                }, timeout=10)
+
+            def apply():
+                if result and result.get("ok"):
+                    self._deployment_queue_poll_failures = 0
+                    self._apply_deployment_queue(
+                        dict(result.get("queue") or {}))
+                elif self._queue_is_pending():
+                    self._schedule_deployment_queue_poll()
+
+            _on_main(apply)
+
+        worker = threading.Thread(
+            target=recover,
+            name="rap-queue-poll-recovery",
+            daemon=True,
+        )
+        self._deployment_queue_poll_recovery_thread = worker
+        worker.start()
+
+    @objc.python_method
+    def _apply_deployment_queue(self, value: dict[str, Any]) -> None:
+        was_pending = self._queue_is_pending()
+        self._deployment_queue = dict(value)
+        status = str(value.get("status", ""))
+        if status in (
+            "waiting_for_build", "building", "checking", "validating", "deploying"
+        ):
+            self._clear_diagnostics()
+            self._schedule_deployment_queue_poll()
+        elif status in ("succeeded", "failed", "cancelled"):
+            self._pending_deployment_id = ""
+            if self._deployment_queue_poll_timer:
+                self._deployment_queue_poll_timer.cancel()
+                self._deployment_queue_poll_timer = None
+            terminal_key = f"{value.get('id')}:{status}"
+            recent = (
+                time.time() - float(value.get("finished_at", 0) or 0) < 30
+            )
+            if (
+                terminal_key != self._notified_queue_terminal
+                and (was_pending or recent)
+            ):
+                self._notified_queue_terminal = terminal_key
+                title = (
+                    "Rule deployed"
+                    if status == "succeeded"
+                    else "Queued deployment needs attention"
+                )
+                body = (
+                    f"{self.name} deployed successfully."
+                    if status == "succeeded"
+                    else str(value.get("error") or "Deployment did not finish.")
+                )
+                notification = NSUserNotification.alloc().init()
+                notification.setTitle_(title)
+                notification.setInformativeText_(body)
+                NSUserNotificationCenter.defaultUserNotificationCenter(
+                ).deliverNotification_(notification)
+            if status == "succeeded":
+                self._clear_diagnostics()
+                result = value.get("result") or {}
+                active = result.get("active") or {}
+                rule = result.get("rule") or {}
+                self.rule.update(rule)
+                self.rule["new_draft"] = False
+                self._active_hash = str(active.get("source_hash", ""))
+                self._active_behavior_hash = str(
+                    active.get("behavior_hash")
+                    or value.get("behavior_hash")
+                    or self._current_behavior_hash)
+                self.active_compiler = str(active.get("compiler", ""))
+                self.active_compiler_snapshot = str(
+                    active.get("compiler_snapshot", ""))
+                self.active_program_id = str(active.get("program_id", ""))
+                self.draft_compiler = self.active_compiler
+                self.draft_compiler_snapshot = self.active_compiler_snapshot
+                self._draft_compiler_explicit = False
+                self._compiler_dirty = False
+                self._source_dirty = False
+                self._coverage_dirty = False
+                self._validation_dirty = False
+                self._dirty = False
+                self.full_source = str(
+                    rule.get("source") or self.full_source)
+                self._working_hash = str(
+                    rule.get("working_hash") or self._active_hash)
+                self._definition_hash = str(
+                    (rule.get("definition") or {}).get(
+                        "source_hash", self._active_hash))
+                self._saved_source_hash = revisions.hash_source(
+                    self.full_source)
+                self._current_source_hash = self._saved_source_hash
+                self._current_behavior_hash = revisions.behavior_hash(
+                    self.full_source)
+                coverage = result.get("coverage") or {}
+                self.coverage_mode = str(
+                    coverage.get("mode", self.coverage_mode))
+                self.selected_projects = list(
+                    coverage.get("selected_projects") or [])
+                self._active_coverage = {
+                    "mode": str(
+                        coverage.get("mode", self.coverage_mode)),
+                    "selected_projects": sorted(
+                        coverage.get("selected_projects") or []),
+                }
+                self.window.setDocumentEdited_(False)
+                self.diagnostics_label.setStringValue_(
+                    "✓ Deployed in the background.")
+                self.diagnostics_label.setTextColor_(
+                    NSColor.systemGreenColor())
+                self.diagnostics_label.setHidden_(False)
+                if self.manager:
+                    self.manager.changed(result)
+            elif status == "failed":
+                self._set_compilation_message(
+                    str(value.get("error") or "Queued deployment failed."),
+                    str(value.get("id", "")),
+                )
+                result = value.get("result") or {}
+                if (
+                    result.get("validation_failed")
+                    and self.window.isVisible()
+                ):
+                    self.confirm_validation_failure(
+                        result.get("validation") or {},
+                        str(value.get("source_hash", "")),
+                    )
+        self._refresh_ui()
+
+    @objc.python_method
+    def _schedule_deployment_queue_poll(self) -> None:
+        if self._deployment_queue_poll_timer:
+            self._deployment_queue_poll_timer.cancel()
+
+        def poll():
+            self.reload_deployment_queue()
+
+        delay = min(
+            30.0,
+            2.0 * (2 ** min(self._deployment_queue_poll_failures, 4)),
+        )
+        self._deployment_queue_poll_timer = _after_delay(delay, poll)
+
+    @objc.python_method
+    def cancel_queued_deployment(self, reason: str) -> None:
+        if not self._queue_is_pending():
+            return
+        self._deployment_queue["status"] = "cancelling"
+        self._refresh_ui()
+
+        def completed(result):
+            if result.get("ok"):
+                _on_main(lambda: self._apply_deployment_queue(
+                    dict(result.get("queue") or {})))
+            else:
+                def failed():
+                    self._set_compilation_message(
+                        result.get("error", "Could not cancel deployment."))
+                    self.reload_deployment_queue()
+                _on_main(failed)
+
+        self.model.perform({
+            "type": "cancel_queued_deployment",
+            "rule_id": self.rule_id,
+            "reason": reason,
+        }, completed, timeout=10)
+
+    @objc.python_method
+    def _cancel_queue_for_draft_change(self, reason: str) -> None:
+        self._draft_generation += 1
+        self._allow_failed_validation_hash = ""
+        self._allow_untested_validation_hash = ""
+        if self._queue_is_pending():
+            self.cancel_queued_deployment(reason)
+
+    @objc.python_method
+    def reload_compiler_catalog(
+        self, *, refresh: bool = False, then: Callable[[], None] | None = None
+    ) -> None:
+        request = {"type": "compiler_catalog", "refresh": refresh}
+
+        def completed(result):
+            def apply():
+                self._compiler_catalog_attempted = True
+                if result.get("ok"):
+                    self.compiler_catalog = list(
+                        result.get("compilers") or [])
+                    self.compiler_catalog_cached = bool(result.get("cached"))
+                    self.compiler_catalog_offline = bool(result.get("offline"))
+                    self.compiler_catalog_fetched_at = float(
+                        result.get("fetched_at") or 0)
+                    self._sync_draft_compiler_for_source()
+                    self._validation_target = {
+                        "compiler": self.resolved_draft_compiler(),
+                        "compiler_snapshot": self.draft_compiler_snapshot,
+                        "program_id": self._draft_program_id(),
+                    }
+                    self._reconcile_validation_results()
+                    self._refresh_validation_result_labels()
+                    self._refresh_ui()
+                    if self._validation_results:
+                        self._update_validation_summary()
+                if then:
+                    then()
+            _on_main(apply)
+
+        if hasattr(self.model, "query"):
+            self.model.query(request, completed, timeout=10)
+        else:
+            self.model.perform(request, completed, timeout=10)
+
+    @objc.python_method
+    def compiler_info(self, name: str = "") -> dict[str, Any]:
+        if name:
+            return next(
+                (
+                    dict(item) for item in self.compiler_catalog
+                    if str(item.get("name", "")) == name
+                ),
+                {"name": name, "description": name},
+            )
+        return next(
+            (
+                dict(item) for item in self.compiler_catalog
+                if item.get("default")
+            ),
+            {"name": "", "description": "Server default", "default": True},
+        )
+
+    @objc.python_method
+    def compiler_label(self, name: str = "") -> str:
+        info = self.compiler_info(name)
+        description = str(info.get("description") or info.get("name") or "")
+        return description.split("—", 1)[0].strip() or "Server default"
+
+    @objc.python_method
+    def resolved_active_compiler(self) -> str:
+        return str(
+            self.active_compiler or self.compiler_info().get("name", ""))
+
+    @objc.python_method
+    def resolved_draft_compiler(self) -> str:
+        return str(
+            self.draft_compiler
+            or self.compiler_info().get("name", ""))
+
+    @objc.python_method
+    def compiler_requires_build(self, name: str) -> bool:
+        return (
+            str(self.compiler_info(name).get("compiler_kind", ""))
+            == "finetune_lora"
+        )
+
+    @objc.python_method
+    def _job_matches_current_behavior(
+        self, job: dict[str, Any]
+    ) -> bool:
+        behavior = str(job.get("behavior_hash", ""))
+        if behavior:
+            return behavior == self._current_behavior_hash
+        return str(job.get("source_hash", "")) == self._current_source_hash
+
+    @objc.python_method
+    def _draft_candidate_job(self) -> dict[str, Any]:
+        job = dict(self._finetune_status.get("job") or {})
+        if (
+            str(job.get("compiler", "")) == self.resolved_draft_compiler()
+            and self._job_matches_current_behavior(job)
+        ):
+            return job
+        return {}
+
+    @objc.python_method
+    def _draft_program_id(self) -> str:
+        compiler = self.resolved_draft_compiler()
+        if (
+            self._current_behavior_hash == self._active_behavior_hash
+            and compiler == self.resolved_active_compiler()
+        ):
+            return self.active_program_id
+        job = self._draft_candidate_job()
+        if str(job.get("status", "")) == "ready":
+            return str(job.get("program_id", ""))
+        return ""
+
+    @objc.python_method
+    def _set_draft_compiler(
+        self, name: str, *, explicit: bool
+    ) -> None:
+        self._cancel_queue_for_draft_change(
+            "Draft compiler changed after deployment was queued.")
+        self._clear_diagnostics()
+        self.draft_compiler = str(name)
+        info = self.compiler_info(self.draft_compiler)
+        self.draft_compiler_snapshot = str(
+            info.get("latest_snapshot", ""))
+        self._draft_compiler_explicit = explicit
+        self._compiler_dirty = (
+            self.resolved_draft_compiler()
+            != self.resolved_active_compiler()
+        )
+        self._validation_target = {
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "program_id": self._draft_program_id(),
+        }
+        self._reconcile_validation_results()
+        self._refresh_validation_result_labels()
+        self._dirty = (
+            self._source_dirty
+            or self._coverage_dirty
+            or self._compiler_dirty
+            or self._validation_dirty
+        )
+        self.window.setDocumentEdited_(self._dirty)
+        self._refresh_ui()
+
+    @objc.python_method
+    def _sync_draft_compiler_for_source(self) -> None:
+        draft_source_changed = bool(
+            not self._active_hash
+            or self._current_behavior_hash != self._active_behavior_hash
+        )
+        if not self.draft_compiler:
+            self.draft_compiler = str(
+                self.compiler_info().get("name", ""))
+        if not draft_source_changed and not self._draft_compiler_explicit:
+            self.draft_compiler = self.resolved_active_compiler()
+        if (
+            draft_source_changed
+            and not self._draft_compiler_explicit
+            and self.compiler_requires_build(
+                self.resolved_draft_compiler())
+        ):
+            self.draft_compiler = str(
+                self.compiler_info().get("name", ""))
+        info = self.compiler_info(self.resolved_draft_compiler())
+        self.draft_compiler_snapshot = str(
+            info.get("latest_snapshot", ""))
+        self._compiler_dirty = (
+            self.resolved_draft_compiler()
+            != self.resolved_active_compiler()
+        )
+
+    @objc.python_method
+    def compiler_sheet_items(
+        self, active: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        deployed = bool(active.get("source_hash") or self._active_hash)
+        default_info = self.compiler_info()
+        active_name = str(
+            active.get("compiler")
+            or self.active_compiler
+            or default_info.get("name", "")
+        )
+        items = [dict(item) for item in self.compiler_catalog]
+        if active_name and not any(
+            str(item.get("name", "")) == active_name for item in items
+        ):
+            items.append(self.compiler_info(active_name))
+
+        rows = []
+        draft_name = self.resolved_draft_compiler()
+        source_matches_active = (
+            bool(self._active_hash)
+            and self._current_behavior_hash == self._active_behavior_hash
+        )
+        candidate_job = dict(self._finetune_status.get("job") or {})
+        for item in items:
+            name = str(item.get("name", ""))
+            raw_description = str(
+                item.get("description") or name or "Unnamed compiler")
+            label, separator, detail = raw_description.partition("—")
+            is_active = bool(deployed and name == active_name)
+            is_draft = bool(name == draft_name)
+            requires_build = (
+                str(item.get("compiler_kind", "")) == "finetune_lora")
+            job_matches = (
+                str(candidate_job.get("compiler", "")) == name
+                and self._job_matches_current_behavior(candidate_job)
+            )
+            job_status = (
+                str(candidate_job.get("status", ""))
+                if job_matches else "")
+            ready = bool(
+                not requires_build
+                or (is_active and source_matches_active)
+                or job_status == "ready"
+            )
+            if requires_build and job_status == "building":
+                action = "cancel"
+                action_title = "Cancel"
+            elif requires_build and not ready:
+                action = "build"
+                action_title = "Build…"
+            elif not is_draft:
+                action = "select"
+                action_title = "Use"
+            else:
+                action = ""
+                action_title = ""
+            if (
+                not requires_build
+                and bool(item.get("default"))
+                and str(candidate_job.get("status", "")) == "building"
+                and self._job_matches_current_behavior(candidate_job)
+                and self.compiler_requires_build(draft_name)
+            ):
+                action = "deploy_now"
+                action_title = "Use & Deploy…"
+            rows.append({
+                **item,
+                "name": name,
+                "label": label.strip() or name,
+                "detail": detail.strip() if separator else raw_description,
+                "is_active": is_active,
+                "is_draft": is_draft,
+                "is_paw_default": bool(item.get("default")),
+                "requires_build": requires_build,
+                "ready_for_draft": ready,
+                "job_status": job_status,
+                "action": action,
+                "action_title": action_title,
+                "can_build": bool(
+                    name
+                    and item.get("supports_local_sdk")
+                    and action in (
+                        "build", "select", "cancel", "deploy_now")
+                ),
+            })
+        default_runtime = str(default_info.get("runtime_id", ""))
+        rows.sort(key=lambda item: (
+            0 if item["is_active"] else 1,
+            0
+            if default_runtime
+            and str(item.get("runtime_id", "")) == default_runtime
+            else 1,
+            0
+            if item["is_paw_default"]
+            else (
+                1
+                if item.get("compiler_kind") == "finetune_lora"
+                else 2
+            ),
+        ))
+        return rows
+
+    @objc.python_method
+    def compiler_catalog_accessory(
+        self,
+        alert,
+        active: dict[str, Any],
+        pending: dict[str, Any],
+    ):
+        rows = self.compiler_sheet_items(active)
+        self._compiler_sheet_rows = rows
+        width = 560
+        row_height = 94
+        document_height = max(row_height, len(rows) * row_height)
+        visible_height = min(document_height, row_height * 3)
+        accessory = RAPFlippedView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, width, 42 + visible_height))
+
+        heading = self._label("Compilers from PAW", size=11, bold=True)
+        heading.setFrame_(NSMakeRect(0, 0, 260, 18))
+        accessory.addSubview_(heading)
+        catalog_state = "Cached catalog" if self.compiler_catalog_cached else (
+            "Current catalog")
+        if self.compiler_catalog_offline:
+            catalog_state += " · offline"
+        source = self._label(
+            catalog_state,
+            size=9,
+            color=NSColor.secondaryLabelColor(),
+        )
+        source.setFrame_(NSMakeRect(0, 20, 300, 16))
+        accessory.addSubview_(source)
+
+        def close_with(
+            *,
+            compiler: str = "",
+            action: str = "",
+            refresh: bool = False,
+        ) -> None:
+            pending["compiler"] = compiler
+            pending["action"] = action
+            pending["refresh"] = refresh
+            alert.buttons()[0].performClick_(None)
+
+        refresh = self._button(
+            "Refresh",
+            lambda _sender: close_with(refresh=True),
+            role="flat",
+            key_view=False,
+        )
+        refresh.setFrame_(NSMakeRect(width - 74, 1, 74, 24))
+        accessory.addSubview_(refresh)
+
+        scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(0, 42, width, visible_height))
+        scroll.setHasVerticalScroller_(document_height > visible_height)
+        scroll.setAutohidesScrollers_(True)
+        scroll.setDrawsBackground_(False)
+        document = RAPFlippedView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, width - 16, document_height))
+        scroll.setDocumentView_(document)
+        accessory.addSubview_(scroll)
+
+        for index, item in enumerate(rows):
+            y = index * row_height
+            title = self._label(
+                str(item.get("label") or item.get("name")),
+                size=12,
+                bold=True,
+            )
+            title.setFrame_(NSMakeRect(12, y + 8, 350, 19))
+            document.addSubview_(title)
+
+            badges = []
+            if item.get("is_active"):
+                badges.append("Deployed")
+            if item.get("is_draft"):
+                badges.append("✓ Draft")
+                if (
+                    item.get("requires_build")
+                    and not item.get("ready_for_draft")
+                ):
+                    badges.append("build required")
+            if item.get("job_status") == "ready":
+                badges.append("Ready")
+            elif item.get("job_status") == "building":
+                badges.append("Building")
+            if item.get("is_paw_default"):
+                badges.append("PAW default")
+            if not item.get("supports_local_sdk", False):
+                badges.append("Unavailable locally")
+            if badges:
+                badge = self._label(
+                    " · ".join(badges),
+                    size=9.5,
+                    bold=bool(
+                        item.get("is_active") or item.get("is_draft")),
+                    color=(
+                        NSColor.systemBlueColor()
+                        if item.get("is_draft")
+                        else (
+                            NSColor.systemGreenColor()
+                            if item.get("is_active")
+                            else NSColor.secondaryLabelColor()
+                        )
+                    ),
+                )
+                badge.setFrame_(NSMakeRect(366, y + 9, 180, 18))
+                document.addSubview_(badge)
+
+            detail = self._label(
+                str(item.get("detail", "")),
+                size=10,
+                color=NSColor.secondaryLabelColor(),
+                lines=2,
+            )
+            detail.setPreferredMaxLayoutWidth_(430)
+            detail.setFrame_(NSMakeRect(12, y + 31, 430, 34))
+            document.addSubview_(detail)
+
+            technical = self._label(
+                f"{item.get('name') or 'unknown'} · "
+                f"{item.get('latest_snapshot') or 'snapshot unavailable'}",
+                size=8.5,
+                color=NSColor.tertiaryLabelColor(),
+            )
+            fixed_font = NSFont.userFixedPitchFontOfSize_(8.5)
+            if fixed_font is not None:
+                technical.setFont_(fixed_font)
+            technical.setLineBreakMode_(NSLineBreakByTruncatingTail)
+            technical.setFrame_(NSMakeRect(12, y + 68, 430, 15))
+            document.addSubview_(technical)
+
+            if item.get("action"):
+                build = self._button(
+                    str(item.get("action_title", "")),
+                    lambda _sender,
+                    name=str(item.get("name", "")),
+                    action=str(item.get("action", "")): (
+                        close_with(compiler=name, action=action)
+                    ),
+                    role="secondary",
+                    key_view=False,
+                )
+                build.setFrame_(NSMakeRect(466, y + 35, 78, 28))
+                build.setEnabled_(bool(item.get("can_build")))
+                document.addSubview_(build)
+
+            if index < len(rows) - 1:
+                separator = NSBox.alloc().initWithFrame_(
+                    NSMakeRect(12, y + row_height - 1, width - 40, 1))
+                separator.setBoxType_(NSBoxSeparator)
+                document.addSubview_(separator)
+
+        return accessory
+
+    @objc.python_method
+    def reload_validation_cases(self) -> None:
+        request = {
+            "type": "rule_get",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+        }
+
+        def completed(result):
+            def apply():
+                if not result.get("ok"):
+                    return
+                info = result.get("rule") or {}
+                self.validation_cases = list(
+                    info.get("validation_cases") or [])
+                self._saved_validation_cases = json.dumps(
+                    self.validation_cases, sort_keys=True)
+                self._validation_dirty = False
+                self._dirty = self._source_dirty or self._coverage_dirty
+                self._render_validation_cases()
+                self._refresh_ui()
+                self._schedule_content_fit()
+            _on_main(apply)
+
+        if hasattr(self.model, "query"):
+            self.model.query(request, completed)
+        else:
+            self.model.perform(request, completed)
+
+    @objc.python_method
+    def show_compilation(self) -> None:
+        if not self.compiler_catalog and not self._compiler_catalog_attempted:
+            self.reload_compiler_catalog(then=self.show_compilation)
+            return
+        def completed(result):
+            _on_main(lambda: self._show_compilation_result(result))
+
+        request = {
+            "type": "finetune_status",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+        }
+        if hasattr(self.model, "query"):
+            self.model.query(request, completed)
+        else:
+            self.model.perform(request, completed)
+
+    @objc.python_method
+    def _show_compilation_result(self, result: dict[str, Any]) -> None:
+        if not result.get("ok"):
+            self._set_compilation_message(
+                result.get("error", "Compilation status is unavailable."))
+            return
+        self._apply_finetune_status(result)
+        active = result.get("active") or {}
+        active_label = self.compiler_label(str(active.get("compiler", "")))
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Draft compiler")
+        alert.setInformativeText_(
+            (
+                f"{active_label} is deployed. Choose or build the compiler "
+                "for the current editor draft; Deploy is the only action that "
+                "changes the running rule."
+            )
+            if self._active_hash
+            else (
+                "Choose or build the compiler for this draft. Nothing runs "
+                "until you Deploy."
+            )
+        )
+        catalog_action = {
+            "compiler": "", "action": "", "refresh": False}
+        alert.addButtonWithTitle_("Close")
+        alert.setAccessoryView_(
+            self.compiler_catalog_accessory(
+                alert, active, catalog_action))
+
+        def finished(_response):
+            compiler = str(catalog_action.get("compiler", ""))
+            action = str(catalog_action.get("action", ""))
+            if action == "select" and compiler:
+                self._set_draft_compiler(compiler, explicit=True)
+            elif action == "deploy_now" and compiler:
+                self._set_draft_compiler(compiler, explicit=True)
+                self.deploy()
+            elif action == "build" and compiler:
+                self._set_draft_compiler(compiler, explicit=True)
+                self._selected_build_compiler = compiler
+                self._perform_finetune_action("start_finetune")
+            elif action == "cancel":
+                self._perform_finetune_action("cancel_finetune")
+            elif catalog_action.get("refresh"):
+                self._compiler_catalog_attempted = False
+                self.reload_compiler_catalog(
+                    refresh=True, then=self.show_compilation)
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, finished)
+
+    @objc.python_method
+    def _perform_finetune_action(self, action: str) -> None:
+        request = {
+            "type": action,
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+        }
+        if action == "start_finetune":
+            self._clear_diagnostics()
+            request["compiler"] = str(
+                getattr(self, "_selected_build_compiler", ""))
+            self._capture()
+            self._capture_validation_cases()
+            ok, source, error = self._compose()
+            if not ok:
+                self._set_compilation_message(error)
+                return
+            self._current_source_hash = revisions.hash_source(source)
+            request["source"] = source
+            request["validation_cases"] = list(self.validation_cases)
+
+        def completed(result):
+            def apply():
+                if not result.get("ok"):
+                    self._set_compilation_message(
+                        result.get("error", "Compilation action failed."))
+                    return
+                if action == "start_finetune":
+                    self._finetune_status = {
+                        "job": result.get("job") or {"status": "building"},
+                    }
+                    self._clear_diagnostics()
+                    self._schedule_finetune_poll()
+                else:
+                    self._finetune_status = {}
+                self._refresh_ui()
+            _on_main(apply)
+
+        self.model.perform(request, completed, timeout=10)
+
+    @objc.python_method
+    def _set_compilation_message(
+        self, message: str, operation_id: str = ""
+    ) -> None:
+        self._diagnostic_operation_id = operation_id
+        self.diagnostics_label.setStringValue_(message)
+        self.diagnostics_label.setTextColor_(NSColor.systemRedColor())
+        self.diagnostics_label.setHidden_(False)
+
+    @objc.python_method
+    def _clear_diagnostics(self, operation_id: str = "") -> None:
+        if (
+            operation_id
+            and self._diagnostic_operation_id
+            and operation_id != self._diagnostic_operation_id
+        ):
+            return
+        self._diagnostic_operation_id = ""
+        self.diagnostics_label.setStringValue_("")
+        self.diagnostics_label.setHidden_(True)
+        self.rule["_deploy_failed"] = False
+
+    @objc.python_method
+    def _apply_finetune_status(self, result: dict[str, Any]) -> None:
+        self._finetune_status = dict(result)
+        active = result.get("active") or {}
+        self.active_compiler = str(active.get("compiler", ""))
+        self.active_compiler_snapshot = str(
+            active.get("compiler_snapshot", ""))
+        self.active_program_id = str(active.get("program_id", ""))
+        job = result.get("job") or {}
+        job_status = str(job.get("status", ""))
+        job_id = str(job.get("id", ""))
+        if job_status in ("building", "ready", "activated", "deployed"):
+            self._clear_diagnostics()
+        elif job_status == "failed":
+            self._set_compilation_message(
+                str(job.get("error") or "Compiler build failed."),
+                job_id,
+            )
+        self._refresh_ui()
+        if job_status == "building":
+            self._schedule_finetune_poll()
+        elif job_status == "ready":
+            self.reload_validation_results()
+
+    @objc.python_method
+    def _schedule_finetune_poll(self) -> None:
+        if self._finetune_poll_timer:
+            self._finetune_poll_timer.cancel()
+
+        def poll():
+            request = {
+                "type": "finetune_status",
+                "rule_id": self.rule_id,
+                "project_root": self.project_root,
+            }
+
+            def completed(result):
+                if result.get("ok"):
+                    _on_main(lambda: self._apply_finetune_status(result))
+
+            if hasattr(self.model, "query"):
+                self.model.query(request, completed)
+            else:
+                self.model.perform(request, completed)
+
+        timer = threading.Timer(5.0, poll)
+        timer.daemon = True
+        self._finetune_poll_timer = timer
+        timer.start()
+
+    @objc.python_method
+    def show_compiled_spec(self) -> None:
+        self._capture()
+        mask = (
+            NSWindowStyleMaskTitled
+            | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskResizable
+        )
+        window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, 700, 520), mask,
+            NSBackingStoreBuffered, False)
+        window.setTitle_("Compiled PAW Specification")
+        scroll = NSScrollView.alloc().initWithFrame_(
+            window.contentView().bounds())
+        scroll.setHasVerticalScroller_(True)
+        scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
+        editor = NSTextView.alloc().initWithFrame_(scroll.bounds())
+        editor.setEditable_(False)
+        editor.setSelectable_(True)
+        editor.setFont_(NSFont.monospacedSystemFontOfSize_weight_(11, 0))
+        editor.setString_(self.spec)
+        scroll.setDocumentView_(editor)
+        window.contentView().addSubview_(scroll)
+        window.center()
+        window.makeKeyAndOrderFront_(None)
+        self._compiled_spec_window = window
+        self._compiled_spec_editor = editor
+
+    @objc.python_method
     def show_advanced(self) -> None:
         if self._advanced_window:
             self._advanced_window.makeKeyAndOrderFront_(None)
@@ -1448,7 +3430,11 @@ class RAPRuleEditorDocument(NSObject):
         else:
             self.custom = True
         self._source_dirty = True
+        self._current_source_hash = revisions.hash_source(source)
+        self._current_behavior_hash = revisions.behavior_hash(source)
+        self._sync_draft_compiler_for_source()
         self._dirty = True
+        self._invalidate_validation_results()
         self.window.setDocumentEdited_(True)
         self._advanced_window.close()
         self._advanced_window = None
@@ -1457,11 +3443,25 @@ class RAPRuleEditorDocument(NSObject):
         self._refresh_ui(sync_text=not self.custom)
 
     @objc.python_method
-    def _set_busy(self, busy: bool, status: str = "") -> None:
+    def _set_busy(
+        self, busy: bool, status: str = "", *, busy_label: str = ""
+    ) -> None:
         self._busy = busy
+        self._busy_label = busy_label if busy else ""
         for control in self._interactive_controls:
-            if hasattr(control, "setEnabled_"):
+            if isinstance(control, (NSTextField, NSTextView)):
+                if hasattr(control, "setEditable_"):
+                    control.setEditable_(not busy)
+                if hasattr(control, "setSelectable_"):
+                    control.setSelectable_(True)
+            elif hasattr(control, "setEnabled_"):
                 control.setEnabled_(not busy)
+        for input_field, output in getattr(
+            self, "validation_controls", []
+        ):
+            input_field.setEditable_(not busy)
+            input_field.setSelectable_(True)
+            output.setEnabled_(not busy)
         if hasattr(self.description_editor, "setEditable_"):
             self.description_editor.setEditable_(not busy and not self.custom)
         if self._advanced_editor:
@@ -1470,15 +3470,29 @@ class RAPRuleEditorDocument(NSObject):
             self._advanced_apply.setEnabled_(not busy)
         if status:
             self.diagnostics_label.setStringValue_(status)
+            self.diagnostics_label.setTextColor_(
+                NSColor.secondaryLabelColor())
             self.diagnostics_label.setHidden_(False)
         self._refresh_ui()
 
     @objc.python_method
     def deploy(self) -> None:
-        if self._busy or not self.deploy_button.isEnabled():
+        if self._busy:
             return
+        if not self._validate_form_before_deploy():
+            return
+        draft_compiler = self.resolved_draft_compiler()
         if not self._active_hash and not self._scope_confirmed:
             self.show_projects_sheet(on_confirm=self.deploy)
+            return
+        self._capture()
+        level_check = rules_api.inspect_spec_levels(self.spec)
+        warning_hash = revisions.hash_source(self.spec)
+        if (
+            not level_check["ok"]
+            and self._confirmed_spec_warning_hash != warning_hash
+        ):
+            self.confirm_spec_warning(level_check["warning"], warning_hash)
             return
         ok, source, error = self._compose()
         if not ok:
@@ -1486,11 +3500,52 @@ class RAPRuleEditorDocument(NSObject):
             return
         source_hash = revisions.hash_source(source)
         source_changed = source_hash != self._active_hash
-        self._set_busy(True, "Validating, testing, and compiling…")
+        validation_policy = self._validation_policy_for_deploy(source_hash)
+        if validation_policy is None:
+            return
+        build_job = self._finetune_status.get("job") or {}
+        if (
+            self.compiler_requires_build(draft_compiler)
+            and not self._draft_program_id()
+        ):
+            if (
+                str(build_job.get("status", "")) == "building"
+                and self._job_matches_current_behavior(build_job)
+                and str(build_job.get("compiler", "")) == draft_compiler
+            ):
+                self._queue_current_deployment(
+                    source, source_hash, level_check, validation_policy)
+            else:
+                self._set_compilation_message(
+                    f"Build {self.compiler_label(draft_compiler)} for this "
+                    "draft before deploying.")
+            return
+        stale_build_running = bool(
+            str(build_job.get("status", "")) == "building"
+            and not self._job_matches_current_behavior(build_job)
+        )
+        if (
+            source_changed
+            and stale_build_running
+            and self._confirmed_build_discard_hash != source_hash
+        ):
+            self.confirm_deploy_during_compiler_build(source_hash)
+            return
+        self._queue_current_deployment(
+            source, source_hash, level_check, validation_policy)
+        return
+        self._set_busy(
+            True, "Checking rule…", busy_label="Deploying")
+        _after_delay(0.35, self._show_compile_progress)
 
         def prepared(result: dict[str, Any]) -> None:
             def apply() -> None:
                 if not result.get("ok"):
+                    if result.get("validation_failed"):
+                        self._set_busy(False)
+                        self.confirm_validation_failure(
+                            result.get("validation") or {}, source_hash)
+                        return
                     self._deployment_failed(
                         result.get("error", "Deployment preparation failed."))
                     return
@@ -1536,25 +3591,51 @@ class RAPRuleEditorDocument(NSObject):
                 }
                 self._active_hash = str(
                     (result.get("active") or {}).get("source_hash", ""))
+                self._active_behavior_hash = str(
+                    (result.get("active") or {}).get("behavior_hash")
+                    or self._current_behavior_hash)
+                self.active_compiler = str(
+                    (result.get("active") or {}).get("compiler", ""))
+                self.active_compiler_snapshot = str(
+                    (result.get("active") or {}).get(
+                        "compiler_snapshot", ""))
+                self.active_program_id = str(
+                    (result.get("active") or {}).get("program_id", ""))
+                self.draft_compiler = self.active_compiler
+                self.draft_compiler_snapshot = self.active_compiler_snapshot
+                self._draft_compiler_explicit = False
+                self._compiler_dirty = False
+                self._finetune_status = {}
                 self._working_hash = str(
                     info.get("working_hash", self._active_hash))
                 self._definition_hash = str(
                     (info.get("definition") or {}).get("source_hash", ""))
                 self._saved_source_hash = revisions.hash_source(self.full_source)
+                self._current_source_hash = self._saved_source_hash
+                self._current_source_hash = self._saved_source_hash
                 self._source_dirty = False
                 self._coverage_dirty = False
+                self.validation_cases = list(
+                    info.get("validation_cases") or self.validation_cases)
+                self._saved_validation_cases = json.dumps(
+                    self.validation_cases, sort_keys=True)
+                self._validation_dirty = False
                 self._dirty = False
                 self.rule["_deploy_failed"] = False
                 self.window.setDocumentEdited_(False)
-                self.window.setTitle_(f"Rule — {self.name}")
+                self.window.setTitle_("Rule Editor")
                 self.diagnostics_label.setStringValue_(
-                    f"Deployed to {result.get('impact_count', 0)} project(s).")
+                    f"✓ Deployed to {result.get('impact_count', 0)} project(s).")
+                self.diagnostics_label.setTextColor_(
+                    NSColor.systemGreenColor())
+                self.diagnostics_label.setHidden_(False)
                 self._set_busy(False)
                 self._refresh_ui(sync_text=True)
                 if self.manager:
                     if old_id != self.rule_id:
                         self.manager.renamed(self, old_id, self.rule_id)
                     self.manager.changed(result)
+                _after_delay(0.7, self._close_deployed_editor)
             _on_main(apply)
 
         self.model.perform({
@@ -1568,13 +3649,376 @@ class RAPRuleEditorDocument(NSObject):
                 "mode": self.coverage_mode,
                 "selected_projects": self.selected_projects,
             },
+            "warnings": (
+                [level_check["warning"]] if not level_check["ok"] else []),
+            "validation_cases": self.validation_cases,
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "program_id": self._draft_program_id(),
+            "allow_failed_validation": (
+                self._allow_failed_validation_hash == source_hash),
         }, prepared, timeout=180)
+
+    @objc.python_method
+    def _validate_form_before_deploy(self) -> bool:
+        self._capture()
+        if not self.custom and self.trigger not in TRIGGERS:
+            self.trigger_error_label.setHidden_(False)
+            self.metadata_stack.scrollRectToVisible_(
+                self.metadata_stack.bounds())
+            self.window.makeFirstResponder_(self.trigger_popup)
+            return False
+        self.trigger_error_label.setHidden_(True)
+        if not self.name.strip():
+            self.window.makeFirstResponder_(self.name_field)
+            self._set_compilation_message("Enter a rule name.")
+            return False
+        if not self.custom and not self.spec.strip():
+            self.window.makeFirstResponder_(self.description_editor)
+            self._set_compilation_message("Enter a PAW specification.")
+            return False
+        return True
+
+    @objc.python_method
+    def _validation_policy_for_deploy(
+        self, source_hash: str
+    ) -> str | None:
+        self._capture_validation_cases()
+        if not self.validation_cases:
+            return "skip"
+        self._reconcile_validation_results()
+        completed = [
+            self._validation_results.get(str(case.get("id", "")))
+            for case in self.validation_cases
+        ]
+        completed = [
+            result for result in completed
+            if result and not result.get("running")
+        ]
+        if len(completed) != len(self.validation_cases):
+            if self._allow_untested_validation_hash == source_hash:
+                return "skip"
+            self.confirm_untested_validation(
+                len(self.validation_cases) - len(completed),
+                source_hash,
+            )
+            return None
+        if any(not result.get("ok") for result in completed):
+            if self._allow_failed_validation_hash == source_hash:
+                return "allow_failed"
+            self.confirm_validation_failure(
+                {
+                    "passed": sum(
+                        1 for result in completed if result.get("ok")),
+                    "total": len(completed),
+                    "results": completed,
+                },
+                source_hash,
+            )
+            return None
+        return "cached"
+
+    @objc.python_method
+    def confirm_untested_validation(
+        self, missing: int, source_hash: str
+    ) -> None:
+        compiler = self.resolved_draft_compiler()
+        can_run = bool(
+            not self.compiler_requires_build(compiler)
+            or self._draft_program_id()
+        )
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(
+            f"{missing} validation case"
+            f"{'s have' if missing != 1 else ' has'} not been run")
+        alert.setInformativeText_(
+            "Deploy never runs validation cases automatically. Run them "
+            "explicitly, or deploy this exact draft without testing.")
+        alert.addButtonWithTitle_(
+            "Run Tests" if can_run else "Wait for Compiler")
+        alert.addButtonWithTitle_("Deploy Without Testing")
+        alert.addButtonWithTitle_("Cancel")
+        alert.buttons()[0].setEnabled_(can_run)
+
+        def completed(response):
+            if response == NSAlertFirstButtonReturn and can_run:
+                self.run_validation_cases()
+            elif response == NSAlertSecondButtonReturn:
+                self._allow_untested_validation_hash = source_hash
+                self.deploy()
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def _queue_current_deployment(
+        self,
+        source: str,
+        source_hash: str,
+        level_check: dict[str, Any],
+        validation_policy: str,
+    ) -> None:
+        self._capture_validation_cases()
+        self.rule["_deploy_failed"] = False
+        self._clear_diagnostics()
+        if not self._pending_deployment_id:
+            self._pending_deployment_id = secrets.token_urlsafe(18)
+        deployment_id = self._pending_deployment_id
+        queued_generation = self._draft_generation
+        queued_compiler = self.resolved_draft_compiler()
+        queued_compiler_snapshot = self.draft_compiler_snapshot
+        queued_cases = json.dumps(
+            self.validation_cases, sort_keys=True, ensure_ascii=False)
+        queued_coverage = json.dumps({
+            "mode": self.coverage_mode,
+            "selected_projects": sorted(self.selected_projects),
+        }, sort_keys=True)
+        self.diagnostics_label.setStringValue_(
+            "Queuing this exact draft for background deployment…")
+        self.diagnostics_label.setTextColor_(
+            NSColor.secondaryLabelColor())
+        self.diagnostics_label.setHidden_(False)
+
+        request = {
+            "type": "queue_deployment",
+            "deployment_id": deployment_id,
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "source": source,
+            "source_hash": source_hash,
+            "expected_active_hash": self._active_hash,
+            "compiler": queued_compiler,
+            "compiler_snapshot": queued_compiler_snapshot,
+            "program_id": self._draft_program_id(),
+            "coverage": {
+                "mode": self.coverage_mode,
+                "selected_projects": self.selected_projects,
+            },
+            "warnings": (
+                [level_check["warning"]] if not level_check["ok"] else []),
+            "validation_cases": self.validation_cases,
+            "allow_failed_validation": (
+                self._allow_failed_validation_hash == source_hash),
+            "validation_policy": validation_policy,
+        }
+
+        def apply_result(result):
+            if not result.get("ok"):
+                self._set_compilation_message(
+                    result.get(
+                        "error", "Deployment could not be queued."))
+                return
+            current_cases = json.dumps(
+                self.validation_cases,
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            current_coverage = json.dumps({
+                "mode": self.coverage_mode,
+                "selected_projects": sorted(self.selected_projects),
+            }, sort_keys=True)
+            if (
+                self._draft_generation != queued_generation
+                or self._current_source_hash != source_hash
+                or self.resolved_draft_compiler() != queued_compiler
+                or self.draft_compiler_snapshot
+                != queued_compiler_snapshot
+                or current_cases != queued_cases
+                or current_coverage != queued_coverage
+            ):
+                self._deployment_queue = dict(
+                    result.get("queue") or {})
+                self.cancel_queued_deployment(
+                    "Draft changed while deployment was being queued.")
+                return
+            self._apply_deployment_queue(
+                dict(result.get("queue") or {}))
+            self.diagnostics_label.setStringValue_(
+                "Deployment queued. It will run only if the compiler "
+                "build and validation succeed.")
+            self.diagnostics_label.setTextColor_(
+                NSColor.systemBlueColor())
+            self.diagnostics_label.setHidden_(False)
+            self._close_queued_editor()
+
+        def completed(result):
+            error = str(result.get("error", ""))
+            if not result.get("ok") and (
+                "did not respond" in error.lower()
+                or "timed out" in error.lower()
+            ):
+                self._recover_deployment_after_disconnect(
+                    request, deployment_id, queued_generation, apply_result)
+                return
+            _on_main(lambda: apply_result(result))
+
+        self.model.perform(request, completed, timeout=10)
+
+    @objc.python_method
+    def _close_queued_editor(self) -> None:
+        if self._queue_is_pending() and self.window.isVisible():
+            self.window.close()
+
+    @objc.python_method
+    def _recover_deployment_after_disconnect(
+        self,
+        request: dict[str, Any],
+        deployment_id: str,
+        queued_generation: int,
+        apply_result: Callable[[dict[str, Any]], None],
+    ) -> None:
+        self.diagnostics_label.setStringValue_(
+            "Connection lost — checking deployment status…")
+        self.diagnostics_label.setTextColor_(
+            NSColor.systemOrangeColor())
+        self.diagnostics_label.setHidden_(False)
+
+        def recover():
+            if not ipc.ensure_daemon(wait=8.0):
+                result = {
+                    "ok": False,
+                    "error": (
+                        "Could not reconnect to the daemon. "
+                        "The draft is unchanged; click Deploy to retry."
+                    ),
+                }
+            else:
+                status = ipc.send_request({
+                    "type": "deployment_queue_status",
+                    "rule_id": self.rule_id,
+                    "deployment_id": deployment_id,
+                }, timeout=10)
+                if status and status.get("ok") and status.get("queue"):
+                    result = status
+                elif self._draft_generation == queued_generation:
+                    result = ipc.send_request(
+                        request, timeout=15) or {
+                            "ok": False,
+                            "error": (
+                                "The daemon reconnected but deployment could "
+                                "not be queued. Click Deploy to retry."
+                            ),
+                        }
+                else:
+                    result = {
+                        "ok": False,
+                        "error": (
+                            "Deployment was not retried because the draft "
+                            "changed during reconnection."
+                        ),
+                    }
+            _on_main(lambda: apply_result(result))
+
+        worker = threading.Thread(
+            target=recover,
+            name="rap-deployment-recovery",
+            daemon=True,
+        )
+        self._deployment_recovery_thread = worker
+        worker.start()
+
+    @objc.python_method
+    def confirm_validation_failure(
+        self, validation: dict[str, Any], source_hash: str
+    ) -> None:
+        failures = [
+            item for item in validation.get("results", [])
+            if not item.get("ok")]
+        detail = ""
+        if failures:
+            first = failures[0]
+            detail = (
+                f"\n\nExpected {first.get('expected')}, got "
+                f"{first.get('actual') or '(empty)'} for:\n"
+                f"{str(first.get('input', ''))[:300]}"
+            )
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_(
+            f"{validation.get('passed', 0)}/"
+            f"{validation.get('total', 0)} validation cases passed")
+        alert.setInformativeText_(
+            "The candidate program did not match the expected "
+            "results." + detail)
+        alert.addButtonWithTitle_("Edit Specification")
+        alert.addButtonWithTitle_("Deploy Anyway")
+
+        def completed(response):
+            if response == NSAlertSecondButtonReturn:
+                self._allow_failed_validation_hash = source_hash
+                self.deploy()
+            else:
+                self.window.makeFirstResponder_(self.description_editor)
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def confirm_spec_warning(self, warning: str, warning_hash: str) -> None:
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("PAW output levels may be unclear")
+        alert.setInformativeText_(
+            warning + "\n\nThe specification will be compiled exactly as "
+            "written. RAP will not add or rewrite anything.")
+        alert.addButtonWithTitle_("Edit Specification")
+        alert.addButtonWithTitle_("Deploy Anyway")
+
+        def completed(response):
+            if response == NSAlertSecondButtonReturn:
+                self._confirmed_spec_warning_hash = warning_hash
+                self.deploy()
+            else:
+                self.window.makeFirstResponder_(self.description_editor)
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def confirm_deploy_during_compiler_build(
+        self, source_hash: str
+    ) -> None:
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("Deploy changes while a compiler is building?")
+        alert.setInformativeText_(
+            "The running build belongs to the currently deployed revision. "
+            "Deploying these changes will discard that build; you can start "
+            "a new one for the new revision afterward.")
+        alert.addButtonWithTitle_("Keep Editing")
+        alert.addButtonWithTitle_("Deploy and Discard Build")
+
+        def completed(response):
+            if response == NSAlertSecondButtonReturn:
+                self._confirmed_build_discard_hash = source_hash
+                self.deploy()
+
+        alert.beginSheetModalForWindow_completionHandler_(
+            self.window, completed)
+
+    @objc.python_method
+    def _close_deployed_editor(self) -> None:
+        if not self._busy and not self._dirty and self.window.isVisible():
+            self.window.close()
+
+    @objc.python_method
+    def _show_compile_progress(self) -> None:
+        if (
+            self._busy
+            and str(self.diagnostics_label.stringValue()) == "Checking rule…"
+        ):
+            self.diagnostics_label.setStringValue_(
+                f"Preparing this draft with "
+                f"{self.compiler_label(self.resolved_draft_compiler())}… "
+                "Exact matching test results will be reused. A first local "
+                "runtime load may take longer.")
+            self.diagnostics_label.setTextColor_(
+                NSColor.secondaryLabelColor())
+            self.diagnostics_label.setHidden_(False)
 
     @objc.python_method
     def _deployment_failed(self, error: str) -> None:
         self.rule["_deploy_failed"] = True
         self.diagnostics_label.setStringValue_(
             f"Deploy failed. The previous deployment is still active.\n{error}")
+        self.diagnostics_label.setTextColor_(NSColor.systemRedColor())
         self.diagnostics_label.setHidden_(False)
         self._set_busy(False)
 
@@ -1582,11 +4026,19 @@ class RAPRuleEditorDocument(NSObject):
     def save_draft(self) -> None:
         if self._busy:
             return
+        if self._queue_is_pending():
+            self.diagnostics_label.setStringValue_(
+                "This exact draft is already persisted in the deployment queue.")
+            self.diagnostics_label.setTextColor_(
+                NSColor.secondaryLabelColor())
+            self.diagnostics_label.setHidden_(False)
+            return
         ok, source, error = self._compose()
         if not ok:
             self._deployment_failed(error)
             return
-        self._set_busy(True, "Saving local draft…")
+        self._set_busy(
+            True, "Saving local draft…", busy_label="Saving draft")
         definition = self.rule.get("definition") or {}
         if self.rule.get("scope") == "project":
             request = {
@@ -1600,7 +4052,10 @@ class RAPRuleEditorDocument(NSObject):
                     "mode": self.coverage_mode,
                     "selected_projects": self.selected_projects,
                     "confirmed": self._scope_confirmed,
+                    "compiler": self.resolved_draft_compiler(),
+                    "compiler_snapshot": self.draft_compiler_snapshot,
                 },
+                "validation_cases": self.validation_cases,
             }
         else:
             request = {
@@ -1613,7 +4068,10 @@ class RAPRuleEditorDocument(NSObject):
                     "mode": self.coverage_mode,
                     "selected_projects": self.selected_projects,
                     "confirmed": self._scope_confirmed,
+                    "compiler": self.resolved_draft_compiler(),
+                    "compiler_snapshot": self.draft_compiler_snapshot,
                 },
+                "validation_cases": self.validation_cases,
             }
 
         def complete(result: dict[str, Any]) -> None:
@@ -1631,7 +4089,13 @@ class RAPRuleEditorDocument(NSObject):
                 self._working_hash = str(result.get("working_hash", ""))
                 self._saved_source_hash = revisions.hash_source(self.full_source)
                 self._source_dirty = False
-                self._dirty = self._coverage_dirty
+                self.validation_cases = list(
+                    result.get("validation_cases") or self.validation_cases)
+                self._saved_validation_cases = json.dumps(
+                    self.validation_cases, sort_keys=True)
+                self._validation_dirty = False
+                self._dirty = (
+                    self._coverage_dirty or self._compiler_dirty)
                 self.window.setDocumentEdited_(self._dirty)
                 self.diagnostics_label.setStringValue_(
                     "Draft saved. Deploy when ready.")
@@ -1757,7 +4221,10 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def set_external_lifecycle_pending(self, pending: bool) -> None:
-        self._set_busy(pending, "Removing rule…" if pending else "")
+        self._set_busy(
+            pending,
+            "Removing rule…" if pending else "",
+            busy_label="Removing rule" if pending else "")
 
     @objc.python_method
     def copy_rule_id(self) -> None:
@@ -1774,6 +4241,11 @@ class RAPRuleEditorDocument(NSObject):
     @objc.python_method
     def show(self) -> None:
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        if not self._shown:
+            self._fit_window_to_content()
+            self.reload_compiler_catalog()
+            self.reload_validation_results()
+            self.reload_deployment_queue()
         self.window.makeKeyAndOrderFront_(None)
         self.window.contentView().layoutSubtreeIfNeeded()
         self._fit_spec_width()
@@ -1782,7 +4254,14 @@ class RAPRuleEditorDocument(NSObject):
             self.window.makeFirstResponder_(self.name_field)
             if self.rule.get("new_draft"):
                 self.name_field.selectText_(None)
+            self._scroll_content_to_top()
             self._shown = True
+
+    @objc.python_method
+    def _scroll_content_to_top(self) -> None:
+        clip = self.content_scroll.contentView()
+        clip.scrollToPoint_((0, 0))
+        self.content_scroll.reflectScrolledClipView_(clip)
 
     def windowDidResize_(self, _notification):
         self._fit_spec_width()
@@ -1792,6 +4271,8 @@ class RAPRuleEditorDocument(NSObject):
             return True
         if self._busy:
             return False
+        if self._queue_is_pending():
+            return True
         if not self._dirty:
             return True
         alert = NSAlert.alloc().init()
@@ -1821,6 +4302,18 @@ class RAPRuleEditorDocument(NSObject):
             self._advanced_apply = None
             self._refresh_finding_context()
             return
+        if self._finetune_poll_timer:
+            self._finetune_poll_timer.cancel()
+            self._finetune_poll_timer = None
+        if (
+            self._deployment_queue_poll_timer
+            and not self._queue_is_pending()
+        ):
+            self._deployment_queue_poll_timer.cancel()
+            self._deployment_queue_poll_timer = None
+        if self._content_fit_timer:
+            self._content_fit_timer.cancel()
+            self._content_fit_timer = None
         if self._advanced_window:
             advanced = self._advanced_window
             self._advanced_window = None
@@ -1863,6 +4356,13 @@ class RuleEditorManager:
     def show_finding(self, finding_id: int) -> None:
         if self.on_show_finding:
             self.on_show_finding(finding_id)
+
+    def validation_cases_changed(
+        self, rule_id: str, _project_root: str = ""
+    ) -> None:
+        for document in self.documents.values():
+            if document.rule_id == rule_id:
+                document.reload_validation_cases()
 
     def closed(self, document: RAPRuleEditorDocument) -> None:
         for key, value in list(self.documents.items()):

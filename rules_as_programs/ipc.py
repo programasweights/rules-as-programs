@@ -17,7 +17,7 @@ from typing import Any
 
 from . import config
 
-PROTOCOL_VERSION = 12
+PROTOCOL_VERSION = 21
 
 
 def send_request(obj: dict[str, Any], timeout: float = 2.0) -> dict[str, Any] | None:
@@ -60,14 +60,19 @@ def ping(timeout: float = 0.5, required_protocol: int | None = None) -> bool:
 
 def _spawn_daemon() -> bool:
     try:
-        subprocess.Popen(
-            [sys.executable, "-m", "rules_as_programs.daemon"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            env={**os.environ},
-        )
+        log_path = config.daemon_stderr_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.touch(exist_ok=True)
+        os.chmod(log_path, 0o600)
+        with log_path.open("ab", buffering=0) as diagnostics:
+            subprocess.Popen(
+                [sys.executable, "-m", "rules_as_programs.daemon"],
+                stdout=diagnostics,
+                stderr=diagnostics,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                env={**os.environ, "PYTHONFAULTHANDLER": "1"},
+            )
         return True
     except OSError:
         return False

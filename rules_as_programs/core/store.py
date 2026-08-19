@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import config
+from . import revisions
 
 
 @dataclass
@@ -31,6 +32,7 @@ class Verdict:
     trigger_event_id: str = ""
     trigger_kind: str = ""
     source_hash: str = ""
+    behavior_hash: str = ""
     suppressed: bool = False
     suppression_reason: str = ""
     id: int | None = None
@@ -48,6 +50,7 @@ class Verdict:
             "trigger_event_id": self.trigger_event_id,
             "trigger_kind": self.trigger_kind,
             "source_hash": self.source_hash,
+            "behavior_hash": self.behavior_hash,
             "suppressed": self.suppressed,
             "suppression_reason": self.suppression_reason,
             "id": self.id,
@@ -73,6 +76,7 @@ CREATE TABLE IF NOT EXISTS verdicts (
     trigger_event_id TEXT,
     trigger_kind TEXT,
     source_hash TEXT,
+    behavior_hash TEXT,
     ts REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_verdicts_project ON verdicts(project_root);
@@ -119,10 +123,14 @@ def reset_development_finding_history() -> None:
             pass
     shutil.rmtree(config.state_dir() / "ledgers", ignore_errors=True)
     for project_root in project_roots:
-        try:
-            config.project_log_file(project_root).unlink()
-        except OSError:
-            pass
+        for path in (
+            config.project_log_file(project_root),
+            config.project_evaluation_log_file(project_root),
+        ):
+            try:
+                path.unlink()
+            except OSError:
+                pass
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(expected + "\n", encoding="utf-8")
 
@@ -160,6 +168,43 @@ class VerdictStore:
                     "DROP INDEX IF EXISTS idx_verdicts_open;"
                 )
             conn.executescript(_SCHEMA)
+            columns = {
+                str(row[1]) for row in conn.execute(
+                    "PRAGMA table_info(verdicts)").fetchall()
+            }
+            if "behavior_hash" not in columns:
+                conn.execute(
+                    "ALTER TABLE verdicts ADD COLUMN behavior_hash TEXT")
+            legacy_rows = conn.execute(
+                """SELECT id, rule_id, severity, project_root, source_hash,
+                          evaluation_json
+                   FROM verdicts
+                   WHERE behavior_hash IS NULL OR behavior_hash=''"""
+            ).fetchall()
+            for row in legacy_rows:
+                try:
+                    evaluation = json.loads(row["evaluation_json"])
+                except (json.JSONDecodeError, TypeError):
+                    evaluation = {}
+                rule = (evaluation.get("rule") or {})
+                behavior = str(rule.get("behavior_hash") or "")
+                if not behavior and rule.get("source"):
+                    behavior = revisions.behavior_hash(
+                        str(rule["source"]))
+                if not behavior:
+                    behavior = str(row["source_hash"] or "")
+                fingerprint = finding_fingerprint(
+                    str(row["project_root"] or ""),
+                    str(row["rule_id"] or ""),
+                    str(row["severity"] or ""),
+                    behavior,
+                )
+                conn.execute(
+                    """UPDATE verdicts
+                       SET behavior_hash=?, fingerprint=?
+                       WHERE id=?""",
+                    (behavior, fingerprint, int(row["id"])),
+                )
             conn.execute(f"PRAGMA user_version={FINDING_SCHEMA_VERSION}")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_verdicts_fingerprint "
@@ -177,15 +222,15 @@ class VerdictStore:
                    (rule_id, rule_title, severity, conversation_id,
                     project_root, evaluation_json, fingerprint,
                     trigger_event_id, trigger_kind, suppressed,
-                    suppression_reason, source_hash, ts)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    suppression_reason, source_hash, behavior_hash, ts)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     v.rule_id, v.rule_title, v.severity,
                     v.conversation_id, v.project_root,
                     json.dumps(v.evaluation, ensure_ascii=False),
                     fingerprint, v.trigger_event_id,
                     v.trigger_kind, 1 if v.suppressed else 0,
-                    v.suppression_reason, v.source_hash, v.ts,
+                    v.suppression_reason, v.source_hash, v.behavior_hash, v.ts,
                 ),
             )
             return int(cur.lastrowid)
@@ -238,6 +283,7 @@ class VerdictStore:
                 "warn" if highest == "warning" else highest)
             latest["fingerprint"] = fingerprint
             latest["last_seen"] = max(float(row.get("ts", 0)) for row in occurrences)
+            latest["occurrence_count"] = len(occurrences)
             out.append(latest)
             if limit is not None and len(out) >= limit:
                 break
@@ -285,10 +331,11 @@ class VerdictStore:
         with self._lock, self._connect() as conn:
             rows = [
                 self._decode(row) for row in conn.execute(
-                    """SELECT verdicts.*
+                    """SELECT verdicts.*, latest.occurrence_count
                        FROM verdicts
                        JOIN (
-                           SELECT fingerprint, MAX(id) AS latest_id
+                           SELECT fingerprint, MAX(id) AS latest_id,
+                                  COUNT(*) AS occurrence_count
                            FROM verdicts
                            WHERE acknowledged=0 AND suppressed=0
                            GROUP BY fingerprint

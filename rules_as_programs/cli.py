@@ -291,7 +291,7 @@ def _rules_test(args) -> int:
     print(f"{passed}/{total} passed")
     if passed < total:
         print("Tip: iterate on the SPEC wording/examples (PAW docs), then re-test. "
-              "Once stable, finalize with `--compiler paw-ft-bs48`.")
+              "Use `paw.list_compilers()` to discover higher-accuracy options.")
     return 0 if passed == total else 1
 
 

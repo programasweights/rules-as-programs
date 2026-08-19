@@ -11,6 +11,7 @@ import io
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,6 +19,7 @@ import objc
 from AppKit import (
     NSApplication,
     NSApplicationActivationPolicyAccessory,
+    NSApplicationDidChangeScreenParametersNotification,
     NSColor,
     NSFont,
     NSFontAttributeName,
@@ -38,8 +40,14 @@ from AppKit import (
     NSVariableStatusItemLength,
     NSViewController,
     NSWorkspace,
+    NSWorkspaceDidWakeNotification,
 )
-from Foundation import NSMakeSize, NSMutableAttributedString, NSObject
+from Foundation import (
+    NSMakeSize,
+    NSMutableAttributedString,
+    NSObject,
+    NSNotificationCenter,
+)
 from Foundation import NSData
 from PyObjCTools import AppHelper
 
@@ -59,6 +67,16 @@ _PAW_TEMPLATE = None
 
 def _on_main(callback: Callable[[], None]) -> None:
     AppHelper.callAfter(callback)
+
+
+def _tray_log(message: str) -> None:
+    try:
+        with config.tray_log_path().open("a", encoding="utf-8") as handle:
+            handle.write(
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                f"{message}\n")
+    except OSError:
+        pass
 
 
 def _open_path(path: str) -> None:
@@ -202,6 +220,9 @@ class MacOSController(NSObject):
         self.confirmation: dict[str, Any] | None = None
         self.snapshot = UISnapshot.loading()
         self.status_item = None
+        self._status_watchdog_timer = None
+        self._last_status_repair = 0.0
+        self._status_repair_count = 0
         self.popover = None
         self.content_controller = None
         self.content_view = None
@@ -226,9 +247,11 @@ class MacOSController(NSObject):
         if self.demo:
             self._apply_snapshot(demo_snapshot())
         else:
+            self._start_status_watchdog()
             self.model.start()
 
     def applicationWillTerminate_(self, _notification):
+        self._stop_status_watchdog()
         self.model.stop()
 
     @objc.python_method
@@ -296,6 +319,117 @@ class MacOSController(NSObject):
         button.setAccessibilityLabel_("Rules as Programs")
 
     @objc.python_method
+    def _start_status_watchdog(self) -> None:
+        workspace_center = (
+            NSWorkspace.sharedWorkspace().notificationCenter())
+        workspace_center.addObserver_selector_name_object_(
+            self,
+            "workspaceDidWake:",
+            NSWorkspaceDidWakeNotification,
+            None,
+        )
+        NSNotificationCenter.defaultCenter(
+        ).addObserver_selector_name_object_(
+            self,
+            "screenParametersChanged:",
+            NSApplicationDidChangeScreenParametersNotification,
+            None,
+        )
+        self._schedule_status_watchdog()
+
+    @objc.python_method
+    def _stop_status_watchdog(self) -> None:
+        if self._status_watchdog_timer:
+            self._status_watchdog_timer.cancel()
+            self._status_watchdog_timer = None
+        NSWorkspace.sharedWorkspace().notificationCenter().removeObserver_(self)
+        NSNotificationCenter.defaultCenter().removeObserver_(self)
+
+    def workspaceDidWake_(self, _notification):
+        self._repair_status_item("wake", force=True)
+
+    def screenParametersChanged_(self, _notification):
+        self._repair_status_item("display change", force=True)
+
+    @objc.python_method
+    def _schedule_status_watchdog(self) -> None:
+        if self._status_watchdog_timer:
+            self._status_watchdog_timer.cancel()
+
+        def tick():
+            _on_main(self._status_watchdog_tick)
+
+        timer = threading.Timer(15.0, tick)
+        timer.daemon = True
+        timer.start()
+        self._status_watchdog_timer = timer
+
+    @objc.python_method
+    def _status_watchdog_tick(self) -> None:
+        try:
+            item = self.status_item
+            button = item.button() if item is not None else None
+            visible = bool(
+                item is not None
+                and button is not None
+                and (
+                    not hasattr(item, "isVisible")
+                    or item.isVisible()
+                )
+            )
+            if not visible:
+                if item is not None and hasattr(item, "setVisible_"):
+                    item.setVisible_(True)
+                still_hidden = bool(
+                    item is None
+                    or item.button() is None
+                    or (
+                        hasattr(item, "isVisible")
+                        and not item.isVisible()
+                    )
+                )
+                if (
+                    still_hidden
+                    and time.time() - self._last_status_repair >= 60
+                ):
+                    self._repair_status_item(
+                        "watchdog found invisible item", force=True)
+        finally:
+            self._schedule_status_watchdog()
+
+    @objc.python_method
+    def _repair_status_item(
+        self, reason: str, *, force: bool = False
+    ) -> None:
+        item = self.status_item
+        if (
+            not force
+            and item is not None
+            and item.button() is not None
+            and (
+                not hasattr(item, "isVisible")
+                or item.isVisible()
+            )
+        ):
+            return
+        if self.popover and self.popover.isShown():
+            self.popover.performClose_(None)
+        if item is not None:
+            try:
+                NSStatusBar.systemStatusBar().removeStatusItem_(item)
+            except Exception:
+                pass
+        self.status_item = None
+        self._build_status_item()
+        if hasattr(self.status_item, "setVisible_"):
+            self.status_item.setVisible_(True)
+        self._last_status_repair = time.time()
+        self._status_repair_count += 1
+        _tray_log(
+            f"repaired status item ({reason}); "
+            f"count={self._status_repair_count}")
+
+    @objc.python_method
     def _build_popover(self) -> None:
         self.content_controller = NSViewController.alloc().init()
         self.popover = NSPopover.alloc().init()
@@ -337,6 +471,8 @@ class MacOSController(NSObject):
     def popoverDidClose_(self, _notification):
         if self.status_item:
             self.status_item.button().setHighlighted_(False)
+        if self.renderer:
+            self.renderer.clear_selection()
 
     @objc.python_method
     def quit(self) -> None:
@@ -547,18 +683,7 @@ class MacOSController(NSObject):
     def begin_add_rule(self, project_root: str, sender=None) -> None:
         if project_root:
             self.selected_project = project_root
-            self._new_rule(project_root)
-            return
-        projects = self.snapshot.projects
-        items = [
-            (
-                project.get("name") or Path(project.get("path", "")).name,
-                lambda path=project.get("path", ""): self.begin_add_rule(path),
-                bool(project.get("path")),
-            )
-            for project in projects
-        ]
-        self.renderer.popup_menu(sender, items)
+        self._new_rule(project_root)
 
     @objc.python_method
     def set_inbox_mode(self, mode: str) -> None:
@@ -611,7 +736,16 @@ class MacOSController(NSObject):
                     from .finding_inspector import FindingInspectorManager
                     if self._inspector is None:
                         self._inspector = FindingInspectorManager(
-                            self.model, self.edit_rule)
+                            self.model,
+                            self.edit_rule,
+                            _open_in_cursor,
+                            lambda finding_id: self.open_finding({
+                                "id": finding_id}),
+                            lambda rule_id, project_root: (
+                                self._studio.validation_cases_changed(
+                                    rule_id, project_root)
+                                if self._studio else None),
+                        )
                     self._inspector.open(result)
                     self.banner = ""
                     if self.popover and self.popover.isShown():
@@ -674,13 +808,17 @@ class MacOSController(NSObject):
             lambda result: _on_main(lambda: (
                 self.model.refresh() if result.get("ok")
                 else self._set_banner(
-                    result.get("error", "Could not clear attention state."))
+                    result.get("error", "Could not mark attention handled."))
             )),
         )
 
     @objc.python_method
     def open_attention_project(self, item: dict[str, Any]) -> None:
         _open_in_cursor(item.get("project_root", ""))
+
+    @objc.python_method
+    def open_project_path(self, project_root: str) -> None:
+        _open_in_cursor(project_root)
 
     @objc.python_method
     def _mute(self, group: dict[str, Any]) -> None:
@@ -692,6 +830,22 @@ class MacOSController(NSObject):
                 "The current finding remains until reviewed."
                 if result.get("ok") else result.get(
                     "error", "Could not hide future findings."))),
+        )
+
+    @objc.python_method
+    def _confirm_mute(self, group: dict[str, Any]) -> None:
+        project = Path(str(group.get("project_root", ""))).name
+        rule_name = str(
+            group.get("rule_title") or group.get("rule_id", "this rule"))
+        self.request_confirmation(
+            f"Mute {rule_name}?",
+            (
+                "Future findings from this rule will be hidden in "
+                f"{project or 'this project'}. You can restore them from "
+                "Reviewed findings."
+            ),
+            "Mute Rule",
+            lambda: self._mute(group),
         )
 
     @objc.python_method
@@ -722,7 +876,25 @@ class MacOSController(NSObject):
     @objc.python_method
     def show_finding_menu(self, sender, group: dict[str, Any]) -> None:
         history = self.inbox_mode == "history"
-        items: list[tuple[str, Callable[[], None], bool]] = []
+        project_name = Path(str(group.get("project_root", ""))).name
+        items: list[tuple[str, Any, bool]] = [
+            ("Open Finding", lambda: self.open_finding(group), True),
+            (
+                "Open Project in Cursor",
+                lambda: _open_in_cursor(group.get("project_root", "")),
+                True,
+            ),
+        ]
+        if group.get("review_reason") != "rule_deleted":
+            items.append((
+                "Edit Rule…",
+                lambda: self.edit_rule({
+                    "id": group.get("rule_id"),
+                    "project_root": group.get("project_root"),
+                }),
+                True,
+            ))
+        items.append(("-", lambda: None, True))
         if history:
             if group.get("review_reason") == "rule_deleted":
                 items.append(("Rule deleted — history only", lambda: None, False))
@@ -742,28 +914,65 @@ class MacOSController(NSObject):
                 items.append(("Reopen finding", lambda: self._reopen(group), True))
         else:
             items.extend([
-                ("Mark reviewed", lambda: self.done_group(group), True),
-                ("Tune rule…", lambda: self.edit_rule({
-                    "id": group.get("rule_id"),
-                    "project_root": group.get("project_root"),
-                }), True),
-                ("Hide future findings in this project",
-                 lambda: self._mute(group), True),
-                ("-", lambda: None, True),
-                ("Done as false positive", lambda: self._review_with_reason(
-                    group, "false_positive"), True),
-                ("Done as acceptable risk", lambda: self._review_with_reason(
-                    group, "acceptable_risk"), True),
+                (
+                    "Review",
+                    [
+                        (
+                            "Mark Reviewed",
+                            lambda: self.done_group(group),
+                            True,
+                        ),
+                        (
+                            "False Positive",
+                            lambda: self._review_with_reason(
+                                group, "false_positive"),
+                            True,
+                        ),
+                        (
+                            "Acceptable Risk",
+                            lambda: self._review_with_reason(
+                                group, "acceptable_risk"),
+                            True,
+                        ),
+                    ],
+                    True,
+                ),
+                (
+                    f"Mute This Rule in {project_name or 'Project'}…",
+                    lambda: self._confirm_mute(group),
+                    True,
+                ),
             ])
         items.extend([
             ("-", lambda: None, True),
-            ("Open raw audit log", lambda: _open_path(str(
-                config.project_log_file(group.get("project_root", "")))), True),
-            ("Copy finding JSON", lambda: _copy_text(
-                __import__("json").dumps(
-                    self.finding_detail or group, indent=2, ensure_ascii=False,
-                    default=str)), True),
-            ("Copy project path", lambda: _copy_text(group.get("project_root", "")), True),
+            (
+                "Developer",
+                [
+                    (
+                        "Open Raw Audit Log",
+                        lambda: _open_path(str(config.project_log_file(
+                            group.get("project_root", "")))),
+                        True,
+                    ),
+                    (
+                        "Copy Finding JSON",
+                        lambda: _copy_text(__import__("json").dumps(
+                            self.finding_detail or group,
+                            indent=2,
+                            ensure_ascii=False,
+                            default=str,
+                        )),
+                        True,
+                    ),
+                    (
+                        "Copy Project Path",
+                        lambda: _copy_text(
+                            group.get("project_root", "")),
+                        True,
+                    ),
+                ],
+                True,
+            ),
         ])
         self.renderer.popup_menu(sender, items)
 
@@ -902,6 +1111,11 @@ class MacOSController(NSObject):
                 ),
                 ("Test rule", lambda: self._test_rule_quick(rule), True),
                 (
+                    "Evaluation History…",
+                    lambda: self.open_evaluation_history(rule),
+                    True,
+                ),
+                (
                     "Show future findings",
                     lambda: self._unmute_rule(rule),
                     bool(rule.get("muted")),
@@ -955,6 +1169,24 @@ class MacOSController(NSObject):
                 True,
             ))
         self.renderer.popup_menu(sender, items)
+
+    @objc.python_method
+    def open_evaluation_history(self, rule: dict[str, Any]) -> None:
+        from .evaluation_history import EvaluationHistoryManager
+        if not hasattr(self, "_evaluation_history_manager"):
+            self._evaluation_history_manager = EvaluationHistoryManager(
+                self.model,
+                lambda finding_id: self.open_finding({"id": finding_id}),
+                lambda rule_id, project_root: (
+                    self._studio.validation_cases_changed(
+                        rule_id, project_root)
+                    if self._studio else None),
+            )
+        self._evaluation_history_manager.open(
+            str(rule.get("id", "")),
+            str(rule.get("name") or rule.get("title") or "Rule"),
+            self._rule_project_root(rule),
+        )
 
     @objc.python_method
     def _confirm_delete_rule(self, rule: dict[str, Any]) -> None:
@@ -1322,7 +1554,7 @@ class MacOSController(NSObject):
                 f"{archived} open finding"
                 f"{'s' if archived != 1 else ''} moved to Reviewed.")
         if warnings:
-            messages.append("Cleanup warning: " + "; ".join(warnings))
+            messages.append("Deployment warning: " + "; ".join(warnings))
         if messages:
             self._set_banner(" ".join(messages))
         if self.route == "rules":
@@ -1351,8 +1583,10 @@ class MacOSController(NSObject):
     def _new_rule(
         self, project_root: str | None = None, template: str = "paw"
     ) -> None:
-        project_root = project_root or (
-            self.selected_project if self.rules_context == "project" else "")
+        if project_root is None:
+            project_root = (
+                self.selected_project
+                if self.rules_context == "project" else "")
 
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
@@ -1366,6 +1600,7 @@ class MacOSController(NSObject):
             "type": "new_rule_draft",
             "project_root": project_root,
             "template": template,
+            "coverage_mode": "selected" if project_root else "all",
         }, complete)
 
     @objc.python_method

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 import threading
 
-from rules_as_programs import ipc
+from rules_as_programs import config, ipc
 from rules_as_programs.ui.model import UIModel
 
 
@@ -34,6 +35,28 @@ def test_ensure_daemon_replaces_protocol_mismatch(monkeypatch):
     assert ipc.ensure_daemon(wait=0.2, required_protocol=ipc.PROTOCOL_VERSION)
     assert state["shutdowns"] == 1
     assert state["spawns"] == 1
+
+
+def test_spawn_daemon_persists_stderr_and_enables_faulthandler(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
+    captured = {}
+
+    def popen(_command, **kwargs):
+        captured["stdout"] = kwargs["stdout"].name
+        captured["same_stream"] = kwargs["stdout"] is kwargs["stderr"]
+        captured["env"] = kwargs["env"]
+        return object()
+
+    monkeypatch.setattr(ipc.subprocess, "Popen", popen)
+
+    assert ipc._spawn_daemon()
+    path = config.daemon_stderr_path()
+    assert captured["stdout"] == str(path)
+    assert captured["same_stream"]
+    assert captured["env"]["PYTHONFAULTHANDLER"] == "1"
+    assert os.stat(path).st_mode & 0o777 == 0o600
 
 
 def test_ui_model_publishes_snapshot_off_thread():

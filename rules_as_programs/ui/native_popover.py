@@ -84,6 +84,17 @@ def _project_name(path: str) -> str:
     return Path(path).name or path or "Unknown project"
 
 
+def _finding_input_preview(value: dict[str, Any]) -> str:
+    evaluation = value.get("evaluation") or {}
+    input_data = evaluation.get("input") or {}
+    text = str(
+        input_data.get("text")
+        or value.get("input_preview")
+        or ""
+    )
+    return " ".join(text.split())
+
+
 class RAPPersistentRoot(NSView):
     def isFlipped(self):
         return True
@@ -365,6 +376,44 @@ class PersistentPopoverRenderer:
             sender, "✓ All", size=11.5, color=NSColor.systemGreenColor())
         self.controller.done_project(project_root)
 
+    def _show_project_actions(
+        self, sender: NSButton, project_root: str
+    ) -> None:
+        self.popup_menu(sender, [
+            (
+                "Add Rule…",
+                lambda path=project_root:
+                self.controller.begin_add_rule(path, sender),
+                True,
+            ),
+            (
+                "Manage Rules…",
+                lambda path=project_root:
+                self.controller.open_manage_rules(path),
+                True,
+            ),
+            ("-", lambda: None, True),
+            (
+                "Mark All Reviewed",
+                lambda path=project_root:
+                self.controller.done_project(path),
+                True,
+            ),
+            (
+                "Open Project in Cursor",
+                lambda path=project_root:
+                self.controller.open_project_path(path),
+                True,
+            ),
+        ])
+
+    def _complete_attention(
+        self, sender: NSButton, attention: dict[str, Any]
+    ) -> None:
+        self._set_review_title(
+            sender, "✓", size=17, color=NSColor.systemGreenColor())
+        self.controller.dismiss_attention(attention)
+
     @staticmethod
     def _label(
         text: str, frame, *, size=11, bold=False, weight=None,
@@ -399,15 +448,13 @@ class PersistentPopoverRenderer:
         self.root.addSubview_(self.status_label)
 
         self.project_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(PAD, 56, 180, 27), False)
+            NSMakeRect(PAD, 56, 148, 27), False)
         self._wire(self.project_popup, self._project_changed)
         self.root.addSubview_(self.project_popup)
         self.add_button = self._button(
-            "", (380, 55, 34, 29),
+            "+ Rule", (334, 55, 80, 29),
             self._add_rule,
             role="flat", accessibility="Add rule")
-        set_button_symbol(
-            self.add_button, "plus", "Add rule", fallback="+", point_size=14)
         self.root.addSubview_(self.add_button)
 
         self.back_button = self._button(
@@ -419,7 +466,7 @@ class PersistentPopoverRenderer:
         self.root.addSubview_(self.route_title)
 
         self.mode_control = NSSegmentedControl.alloc().initWithFrame_(
-            NSMakeRect(200, 56, 170, 27))
+            NSMakeRect(168, 56, 160, 27))
         self.mode_control.setSegmentCount_(2)
         self.mode_control.setLabel_forSegment_("Needs Review", 0)
         self.mode_control.setLabel_forSegment_("Reviewed", 1)
@@ -565,13 +612,22 @@ class PersistentPopoverRenderer:
         self.mode_control.setHidden_(not inbox)
         self.search.setHidden_(route != "rules")
         if inbox:
-            self.project_popup.setFrame_(NSMakeRect(PAD, 56, 180, 27))
-            self.mode_control.setFrame_(NSMakeRect(200, 56, 170, 27))
-            self.add_button.setFrame_(NSMakeRect(380, 55, 34, 29))
+            self.project_popup.setFrame_(NSMakeRect(PAD, 56, 148, 27))
+            self.mode_control.setFrame_(NSMakeRect(168, 56, 160, 27))
+            self.add_button.setFrame_(NSMakeRect(334, 55, 80, 29))
             self.status_label.setHidden_(False)
             self.mode_control.setSelectedSegment_(
                 0 if getattr(self.controller, "inbox_mode", "open") == "open"
                 else 1)
+            selected_project = str(
+                getattr(self.controller, "home_project", ""))
+            if selected_project:
+                add_copy = (
+                    f"Add rule for {_project_name(selected_project)}")
+            else:
+                add_copy = "Add rule for all projects"
+            self.add_button.setToolTip_(add_copy)
+            self.add_button.setAccessibilityLabel_(add_copy)
         else:
             self.route_title.setStringValue_(
                 "Rule Library" if route == "rules" else "Projects")
@@ -579,7 +635,18 @@ class PersistentPopoverRenderer:
                 self.back_button.setFrame_(NSMakeRect(PAD, 56, 78, 27))
                 self.route_title.setFrame_(NSMakeRect(100, 59, 100, 20))
                 self.project_popup.setFrame_(NSMakeRect(208, 56, 126, 27))
-                self.add_button.setFrame_(NSMakeRect(380, 55, 34, 29))
+                self.add_button.setFrame_(NSMakeRect(340, 55, 74, 29))
+                if getattr(
+                    self.controller, "rules_context", "library"
+                ) == "library":
+                    add_copy = "Add rule for all projects"
+                else:
+                    add_copy = (
+                        f"Add rule for "
+                        f"{_project_name(getattr(self.controller, 'selected_project', ''))}"
+                    )
+                self.add_button.setToolTip_(add_copy)
+                self.add_button.setAccessibilityLabel_(add_copy)
                 self.status_label.setHidden_(True)
             else:
                 self.status_label.setHidden_(False)
@@ -660,26 +727,6 @@ class PersistentPopoverRenderer:
                 group for group in groups
                 if group.get("project_root") == selected
             ]
-        stale_groups = [
-            group for group in groups if group.get("stale")]
-        groups = [group for group in groups if not group.get("stale")]
-        if stale_groups:
-            rows.append({
-                "type": "section",
-                "title": "Rule changed — needs recheck",
-                "count": len(stale_groups),
-                "section_key": "stale",
-            })
-            rows.extend({
-                "type": "finding",
-                "value": value,
-                "mode": "stale",
-            } for value in sorted(
-                stale_groups,
-                key=lambda item: float(
-                    item.get("last_seen") or item.get("ts", 0)),
-                reverse=True,
-            ))
         grouped: dict[str, list[dict[str, Any]]] = {}
         for group in groups:
             grouped.setdefault(group.get("project_root", ""), []).append(group)
@@ -699,20 +746,49 @@ class PersistentPopoverRenderer:
             rows.append({
                 "type": "section",
                 "title": _project_name(project),
+                "count": len(values),
                 "project_root": project,
                 "section_key": f"project:{project}",
                 "project_actions": mode == "open",
             })
-            rows.extend({
-                "type": "finding", "value": value, "mode": mode,
-            } for value in sorted(
-                values,
+            current = sorted(
+                (value for value in values if not value.get("stale")),
                 key=lambda item: (
                     SEVERITY_RANK.get(item.get("severity", "info"), 0),
                     float(item.get("last_seen") or item.get("ts", 0)),
                 ),
                 reverse=True,
-            ))
+            )
+            stale = sorted(
+                (value for value in values if value.get("stale")),
+                key=lambda item: float(
+                    item.get("last_seen") or item.get("ts", 0)),
+                reverse=True,
+            )
+            stale_by_rule: dict[str, list[dict[str, Any]]] = {}
+            for value in stale:
+                stale_by_rule.setdefault(
+                    str(value.get("rule_id", "")), []).append(value)
+            for value in current:
+                rows.append({
+                    "type": "finding", "value": value, "mode": mode,
+                })
+                for older in stale_by_rule.pop(
+                    str(value.get("rule_id", "")), []
+                ):
+                    rows.append({
+                        "type": "finding",
+                        "value": older,
+                        "mode": "stale" if mode == "open" else mode,
+                        "nested": True,
+                    })
+            for remaining in stale_by_rule.values():
+                rows.extend({
+                    "type": "finding",
+                    "value": older,
+                    "mode": "stale" if mode == "open" else mode,
+                    "nested": False,
+                } for older in remaining)
         if not rows:
             rows.append({
                 "type": "empty",
@@ -782,7 +858,7 @@ class PersistentPopoverRenderer:
             "section": 36,
             "issue": 78,
             "attention": 70,
-            "finding": 48,
+            "finding": 58,
             "rule": 64,
             "rule_error": 72,
             "project": 72,
@@ -824,23 +900,15 @@ class PersistentPopoverRenderer:
                     size=10, color=NSColor.secondaryLabelColor()))
             project_root = str(row.get("project_root", ""))
             if row.get("project_actions") and project_root:
-                cell.addSubview_(self._button(
-                    "+ Rule", (232, 6, 56, 24),
+                cell.addSubview_(self._icon_button(
+                    "ellipsis",
+                    "…",
+                    (374, 4, 36, 28),
                     lambda sender, path=project_root:
-                    self.controller.begin_add_rule(path, sender)))
-                cell.addSubview_(self._button(
-                    "Rules", (290, 6, 52, 24),
-                    lambda _sender, path=project_root:
-                    self.controller.open_manage_rules(path)))
-                review_all = self._button(
-                    "✓ All", (348, 6, 70, 24),
-                    lambda sender, path=project_root:
-                    self._review_project(sender, path),
+                    self._show_project_actions(sender, path),
                     accessibility=(
-                        f"Mark all findings in {_project_name(project_root)} "
-                        "reviewed"))
-                self._set_review_title(review_all, "✓ All", size=11.5)
-                cell.addSubview_(review_all)
+                        f"Actions for {_project_name(project_root)}"),
+                ))
         elif kind == "finding":
             severity = str(value.get("severity", "info"))
             severity_label = {
@@ -857,6 +925,9 @@ class PersistentPopoverRenderer:
                 symbol_name, severity.title(),
                 point_size=13, weight="semibold")
             severity_image = None
+            nested = bool(row.get("nested"))
+            icon_leading = PAD + (14 if nested else 0)
+            text_leading = 56 if nested else 42
             if symbol:
                 severity_image = NSImageView.alloc().init()
                 severity_image.setImage_(symbol)
@@ -869,25 +940,49 @@ class PersistentPopoverRenderer:
                 severity_image.setTranslatesAutoresizingMaskIntoConstraints_(False)
                 NSLayoutConstraint.activateConstraints_([
                     severity_image.leadingAnchor().constraintEqualToAnchor_constant_(
-                        cell.leadingAnchor(), PAD),
+                        cell.leadingAnchor(), icon_leading),
                     severity_image.widthAnchor().constraintEqualToConstant_(16),
                     severity_image.heightAnchor().constraintEqualToConstant_(16),
                 ])
             else:
                 cell.addSubview_(self._label(
-                    "!", (PAD, 15, 16, 18), size=11, bold=True))
+                    "!", (icon_leading, 15, 16, 18), size=11, bold=True))
             title = str(value.get("rule_title") or value.get("rule_id", "Rule"))
             title_field = self._label(
-                title, (42, 14, 200, 20), size=ROW_TITLE_SIZE,
+                title, (text_leading, 7, 200, 20), size=ROW_TITLE_SIZE,
                 weight=NSFontWeightMedium)
             cell.addSubview_(title_field)
+            preview = _finding_input_preview(value)
+            occurrences = max(1, int(value.get("occurrence_count", 1) or 1))
+            if value.get("stale"):
+                subtitle_parts = ["Older revision", "Needs recheck"]
+            else:
+                subtitle_parts = [
+                    f"{occurrences} occurrence"
+                    f"{'s' if occurrences != 1 else ''}"
+                ]
+            if preview:
+                subtitle_parts.append(f"“{preview}”")
+            subtitle = " · ".join(subtitle_parts)
+            subtitle_field = self._label(
+                subtitle,
+                (text_leading, 31, 232, 16),
+                size=META_SIZE,
+                color=(
+                    NSColor.systemOrangeColor()
+                    if value.get("stale")
+                    else NSColor.secondaryLabelColor()
+                ))
+            subtitle_field.setToolTip_(subtitle)
+            cell.addSubview_(subtitle_field)
             age_field = self._label(
                 _relative_time(value.get("last_seen") or value.get("ts", 0)),
-                (278, 15, 38, 18), size=META_SIZE,
+                (278, 8, 38, 18), size=META_SIZE,
                 color=NSColor.secondaryLabelColor())
             cell.addSubview_(age_field)
             for field, leading, width in (
-                (title_field, 42, 232),
+                (title_field, text_leading, 274 - text_leading),
+                (subtitle_field, text_leading, 274 - text_leading),
                 (age_field, 278, 38),
             ):
                 field.setTranslatesAutoresizingMaskIntoConstraints_(False)
@@ -897,8 +992,10 @@ class PersistentPopoverRenderer:
                     field.widthAnchor().constraintEqualToConstant_(width),
                 ])
             NSLayoutConstraint.activateConstraints_([
-                title_field.centerYAnchor().constraintEqualToAnchor_(
-                    cell.centerYAnchor()),
+                title_field.topAnchor().constraintEqualToAnchor_constant_(
+                    cell.topAnchor(), 7),
+                subtitle_field.topAnchor().constraintEqualToAnchor_constant_(
+                    title_field.bottomAnchor(), 1),
                 age_field.firstBaselineAnchor().constraintEqualToAnchor_(
                     title_field.firstBaselineAnchor()),
             ])
@@ -907,14 +1004,14 @@ class PersistentPopoverRenderer:
                     severity_image.centerYAnchor().constraintEqualToAnchor_(
                         title_field.centerYAnchor()),
                 ])
-            if row.get("mode") == "open":
+            if row.get("mode") in ("open", "stale"):
                 cell.addSubview_(self._icon_button(
-                    "ellipsis", "…", (360, 10, 34, 28),
+                    "ellipsis", "…", (360, 15, 34, 28),
                     lambda sender, item=value:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
                 review = self._button(
-                    "✓", (320, 10, 34, 28),
+                    "✓", (320, 15, 34, 28),
                     lambda sender, item=value:
                     self._review_finding(sender, item),
                     role="icon",
@@ -923,12 +1020,13 @@ class PersistentPopoverRenderer:
                 cell.addSubview_(review)
             else:
                 cell.addSubview_(self._icon_button(
-                    "ellipsis", "…", (360, 10, 34, 28),
+                    "ellipsis", "…", (360, 15, 34, 28),
                     lambda sender, item=value:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
             cell.setAccessibilityLabel_(
                 f"{severity_label}, {title}, "
+                f"{subtitle}, "
                 f"{_relative_time(value.get('last_seen') or value.get('ts', 0))}")
         elif kind == "issue":
             cell.addSubview_(self._label(
@@ -962,22 +1060,27 @@ class PersistentPopoverRenderer:
                 cell.addSubview_(image)
             cell.addSubview_(self._label(
                 _project_name(value.get("project_root", "")),
-                (38, 5, 210, 18), size=10.5, bold=True))
+                (38, 5, 176, 18), size=10.5, bold=True))
             cell.addSubview_(self._label(
                 _relative_time(value.get("created_at", 0)),
-                (250, 5, 40, 18), size=9,
+                (220, 5, 40, 18), size=9,
                 color=NSColor.secondaryLabelColor()))
             cell.addSubview_(self._label(
                 str(value.get("message", "Agent needs a reply")),
-                (38, 25, 250, 38), size=10.5, lines=2))
+                (38, 27, 370, 34), size=10.5, lines=2))
             cell.addSubview_(self._button(
-                "Open Cursor", (296, 7, 96, 26),
+                "Open Cursor", (270, 4, 100, 26),
                 lambda _sender, item=value:
                 self.controller.open_attention_project(item)))
-            cell.addSubview_(self._button(
-                "Clear", (344, 38, 48, 24),
-                lambda _sender, item=value:
-                self.controller.dismiss_attention(item)))
+            complete = self._button(
+                "✓", (378, 3, 34, 28),
+                lambda sender, item=value:
+                self._complete_attention(sender, item),
+                role="icon",
+                accessibility="Mark no reply needed")
+            complete.setToolTip_("Mark no reply needed")
+            self._set_review_title(complete, "✓", size=17)
+            cell.addSubview_(complete)
         elif kind == "rule":
             name = str(value.get("name") or value.get("title") or value.get("id"))
             cell.addSubview_(self._label(
@@ -989,6 +1092,11 @@ class PersistentPopoverRenderer:
                 states.append("Findings hidden")
             if value.get("warm_status") == "failed":
                 states.append("Check failed")
+            active_compiler = str(
+                (value.get("active") or {}).get("compiler", ""))
+            if value.get("active"):
+                states.append(
+                    f"Compiler: {active_compiler or 'server default'}")
             cell.addSubview_(self._label(
                 " · ".join(states) or "Deployed",
                 (PAD, 31, 270, 18), size=9.5,
@@ -1113,6 +1221,18 @@ class PersistentPopoverRenderer:
         row = int(self.table.selectedRow())
         if 0 <= row < len(self.rows):
             self._selected_key = self.row_key(self.rows[row])
+        else:
+            self._selected_key = ""
+
+    def clear_selection(self) -> None:
+        self._selected_key = ""
+        route = getattr(self.controller, "route", "inbox")
+        mode = (
+            getattr(self.controller, "inbox_mode", "open")
+            if route == "inbox" else "")
+        self._view_states.setdefault(f"{route}:{mode}", {}).pop(
+            "selected_key", None)
+        self.table.deselectAll_(None)
 
     @staticmethod
     def row_is_actionable(row: dict[str, Any]) -> bool:
@@ -1141,6 +1261,7 @@ class PersistentPopoverRenderer:
             self.controller.edit_rule(value)
         elif model.get("type") == "project":
             self.controller.open_manage_rules(value.get("path", ""))
+        self.clear_selection()
 
     def _health_copy(self, snapshot: UISnapshot):
         if snapshot.status == "loading":
@@ -1262,26 +1383,42 @@ class PersistentPopoverRenderer:
     def popup_menu(
         self,
         sender: Any,
-        items: list[tuple[str, Callable[[], None], bool]],
+        items: list[tuple[str, Any, bool]],
     ) -> None:
         menu = NSMenu.alloc().initWithTitle_("Actions")
         self._menus.append(menu)
         tags = []
-        for title, callback, enabled in items:
-            if title == "-":
-                menu.addItem_(NSMenuItem.separatorItem())
-                continue
-            tag = self._next_menu_tag
-            self._next_menu_tag += 1
-            self._menu_callbacks[tag] = callback
-            item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-                title, "invoke:", "")
-            item.setTag_(tag)
-            item.setTarget_(self._menu_target)
-            item.setAction_("invoke:")
-            item.setEnabled_(enabled)
-            menu.addItem_(item)
-            tags.append(tag)
+
+        def add_items(
+            target: NSMenu, values: list[tuple[str, Any, bool]]
+        ) -> None:
+            for title, callback, enabled in values:
+                if title == "-":
+                    target.addItem_(NSMenuItem.separatorItem())
+                    continue
+                if isinstance(callback, list):
+                    item = NSMenuItem.alloc(
+                    ).initWithTitle_action_keyEquivalent_(title, None, "")
+                    submenu = NSMenu.alloc().initWithTitle_(title)
+                    self._menus.append(submenu)
+                    add_items(submenu, callback)
+                    item.setSubmenu_(submenu)
+                    item.setEnabled_(enabled)
+                    target.addItem_(item)
+                    continue
+                tag = self._next_menu_tag
+                self._next_menu_tag += 1
+                self._menu_callbacks[tag] = callback
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    title, "invoke:", "")
+                item.setTag_(tag)
+                item.setTarget_(self._menu_target)
+                item.setAction_("invoke:")
+                item.setEnabled_(enabled)
+                target.addItem_(item)
+                tags.append(tag)
+
+        add_items(menu, items)
         view = (
             sender if sender is not None
             else getattr(self.controller, "content_view", None)
@@ -1293,7 +1430,7 @@ class PersistentPopoverRenderer:
             finally:
                 for tag in tags:
                     self._menu_callbacks.pop(tag, None)
-                try:
-                    self._menus.remove(menu)
-                except ValueError:
-                    pass
+                self._menus = [
+                    value for value in self._menus
+                    if value is not menu and value.supermenu() is not menu
+                ]

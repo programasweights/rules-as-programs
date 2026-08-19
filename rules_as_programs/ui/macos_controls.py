@@ -118,8 +118,11 @@ def style_button(
         button.setBezelStyle_(NSBezelStyleRounded)
         button.setBordered_(True)
         button.setShowsBorderOnlyWhileMouseInside_(False)
-        if role == "primary" and hasattr(button, "setContentTintColor_"):
-            button.setContentTintColor_(NSColor.controlAccentColor())
+        if role == "primary":
+            if hasattr(button, "setBezelColor_"):
+                button.setBezelColor_(NSColor.controlAccentColor())
+            if hasattr(button, "setContentTintColor_"):
+                button.setContentTintColor_(NSColor.whiteColor())
     button.setFocusRingType_(NSFocusRingTypeExterior)
     if role == "destructive" and hasattr(button, "setContentTintColor_"):
         button.setContentTintColor_(NSColor.systemRedColor())

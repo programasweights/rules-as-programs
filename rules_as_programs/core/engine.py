@@ -14,10 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from . import audit
+from . import audit, evaluation_log, revisions
 from .events import Event
 from .ledger import Ledger
 from .rule import LoadedRule
@@ -161,6 +163,20 @@ class Engine:
     def evaluate(
         self, rule: LoadedRule, ledger: Ledger, trigger_event: Event | None = None
     ) -> Verdict | None:
+        evaluation_id = uuid.uuid4().hex
+        started_at = time.time()
+        rule_source = ""
+        if rule.source_path:
+            try:
+                rule_source = Path(rule.source_path).read_text(encoding="utf-8")
+            except OSError:
+                rule_source = ""
+        rule_hash = (
+            hashlib.sha256(rule_source.encode("utf-8")).hexdigest()
+            if rule_source else ""
+        )
+        rule_behavior_hash = (
+            revisions.behavior_hash(rule_source) if rule_source else "")
         initial_events = ledger.events()
         trigger_index = next(
             (
@@ -175,6 +191,26 @@ class Engine:
             trigger_event.hook_name if trigger_event else rule.trigger)
         raw_payload = (
             trigger_event.raw_payload if trigger_event else {})
+        start_record = {
+            "evaluation_id": evaluation_id,
+            "timestamp": started_at,
+            "project_root": ledger.project_root,
+            "conversation_id": ledger.conversation_id,
+            "rule": {
+                "id": rule.id,
+                "name": rule.title,
+                "source_hash": rule_hash,
+                "behavior_hash": rule_behavior_hash,
+                "compiler": rule.compiler or "",
+                "compiler_snapshot": rule.compiler_snapshot or "",
+                "program_id": rule.program_id or "",
+            },
+            "trigger": {
+                "hook": hook_name,
+                "event_id": trigger_event.id if trigger_event else "",
+                "kind": trigger_event.kind if trigger_event else "",
+            },
+        }
         try:
             input_text, input_pointer, input_type, input_overridden = (
                 extract_input(
@@ -189,15 +225,60 @@ class Engine:
                     "input too large: "
                     f"{input_bytes} bytes exceeds {rule.max_input_bytes}")
         except InputPointerError as exc:
+            definition = TRIGGERS.get(rule.trigger or hook_name)
+            evaluation_log.started(ledger.project_root, {
+                **start_record,
+                "input": {
+                    "json_pointer": (
+                        rule.input_pointer
+                        or (definition.input_pointer if definition else "")),
+                    "pointer_source": (
+                        "override" if rule.input_pointer else "default"),
+                    "text": None,
+                },
+            })
+            evaluation_log.failed(ledger.project_root, {
+                "evaluation_id": evaluation_id,
+                "timestamp": time.time(),
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "error_code": (
+                    "input_too_large"
+                    if "input too large" in str(exc)
+                    else "input_field_missing"),
+                "error": str(exc),
+            })
             if self.on_error:
                 self.on_error(rule, ledger.project_root, str(exc))
             return None
+        evaluation_log.started(ledger.project_root, {
+            **start_record,
+            "input": {
+                "json_pointer": input_pointer,
+                "pointer_source": (
+                    "override" if input_overridden else "default"),
+                "value_type": input_type,
+                "text": input_text,
+                "sha256": hashlib.sha256(
+                    input_text.encode("utf-8")).hexdigest(),
+                "byte_count": input_bytes,
+            },
+        })
         ctx = RuleContext(
             ledger, self.runtime, rule.compiler or None, through_seq, input_text)
         try:
             result = rule.fn(ctx)
             parsed = self._parse_result(rule, result)
         except Exception as exc:
+            evaluation_log.failed(ledger.project_root, {
+                "evaluation_id": evaluation_id,
+                "timestamp": time.time(),
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "error_code": (
+                    "invalid_output"
+                    if "invalid fuzzy severity" in str(exc)
+                    else "runtime_exception"),
+                "error": str(exc),
+            })
             if self.on_error:
                 try:
                     self.on_error(rule, ledger.project_root, str(exc))
@@ -210,6 +291,14 @@ class Engine:
             except Exception:
                 pass
         if parsed is None:
+            evaluation_log.completed(ledger.project_root, {
+                "evaluation_id": evaluation_id,
+                "timestamp": time.time(),
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "result": _result_label(ctx.trace, None),
+                "finding_id": None,
+                "suppressed": False,
+            })
             return None
         severity = parsed
         suppressed = False
@@ -219,20 +308,21 @@ class Engine:
             except TypeError:  # pragma: no cover - upgrade compatibility
                 suppressed = bool(self.is_muted(rule.id))
 
-        rule_source = ""
-        if rule.source_path:
-            try:
-                rule_source = Path(rule.source_path).read_text(encoding="utf-8")
-            except OSError:
-                rule_source = ""
-        rule_hash = (
-            hashlib.sha256(rule_source.encode("utf-8")).hexdigest()
-            if rule_source else ""
-        )
-        sig = f"{severity}|source={rule_hash}|suppressed={int(suppressed)}"
+        sig = (
+            f"{severity}|behavior={rule_behavior_hash}|"
+            f"suppressed={int(suppressed)}")
         dedup_key = f"{ledger.conversation_id}:{rule.id}"
         with self._lock:
             if self._last_sig.get(dedup_key) == sig:
+                evaluation_log.completed(ledger.project_root, {
+                    "evaluation_id": evaluation_id,
+                    "timestamp": time.time(),
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "result": _result_label(ctx.trace, severity),
+                    "finding_id": None,
+                    "suppressed": suppressed,
+                    "deduplicated": True,
+                })
                 return None
             self._last_sig[dedup_key] = sig
 
@@ -244,20 +334,23 @@ class Engine:
             context_through_seq=through_seq,
             rule_source=rule_source,
             rule_source_hash=rule_hash,
+            rule_behavior_hash=rule_behavior_hash,
             input_text=input_text,
             input_pointer=input_pointer,
             input_type=input_type,
             input_overridden=input_overridden,
+            evaluation_id=evaluation_id,
         )
         verdict = Verdict(
             rule_id=rule.id, rule_title=rule.title, severity=severity,
             conversation_id=ledger.conversation_id,
             project_root=ledger.project_root, evaluation=evaluation,
             fingerprint=finding_fingerprint(
-                ledger.project_root, rule.id, severity, rule_hash),
+                ledger.project_root, rule.id, severity, rule_behavior_hash),
             trigger_event_id=trigger_event.id if trigger_event else "",
             trigger_kind=trigger_event.kind if trigger_event else "",
             source_hash=rule_hash,
+            behavior_hash=rule_behavior_hash,
             suppressed=suppressed,
             suppression_reason="rule muted" if suppressed else "",
         )
@@ -283,6 +376,14 @@ class Engine:
             rule_source=rule_source,
             evaluation=evaluation,
         )
+        evaluation_log.completed(ledger.project_root, {
+            "evaluation_id": evaluation_id,
+            "timestamp": time.time(),
+            "duration_ms": int((time.time() - started_at) * 1000),
+            "result": _result_label(ctx.trace, severity),
+            "finding_id": verdict.id,
+            "suppressed": verdict.suppressed,
+        })
         if self.on_verdict:
             try:
                 self.on_verdict(verdict)
@@ -319,10 +420,12 @@ def _evaluation_snapshot(
     context_through_seq: int,
     rule_source: str,
     rule_source_hash: str,
+    rule_behavior_hash: str,
     input_text: str,
     input_pointer: str,
     input_type: str,
     input_overridden: bool,
+    evaluation_id: str,
 ) -> dict[str, Any]:
     input_bytes = input_text.encode("utf-8")
     events = ledger.events()
@@ -336,12 +439,15 @@ def _evaluation_snapshot(
     through_seq = min(len(events), max(0, int(context_through_seq)))
     return {
         "schema_version": 4,
+        "evaluation_id": evaluation_id,
         "rule": {
             "id": rule.id,
             "name": rule.title,
             "compiler": rule.compiler,
+            "compiler_snapshot": rule.compiler_snapshot,
             "program_id": rule.program_id,
             "source_hash": rule_source_hash,
+            "behavior_hash": rule_behavior_hash,
             "source": rule_source,
         },
         "input": {
@@ -372,3 +478,19 @@ def _evaluation_snapshot(
         },
         "context_through_seq": through_seq,
     }
+
+
+def _result_label(
+    trace: list[dict[str, Any]], severity: str | None
+) -> str:
+    for item in reversed(trace):
+        if item.get("type") == "paw":
+            output = str(item.get("output", "")).strip().upper()
+            if output:
+                return output
+    return {
+        None: "OK",
+        "info": "INFO",
+        "warn": "WARNING",
+        "critical": "CRITICAL",
+    }.get(severity, str(severity or "OK").upper())

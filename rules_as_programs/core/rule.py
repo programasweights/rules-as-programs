@@ -69,6 +69,7 @@ class LoadedRule:
     source_path: str = ""
     working_source_path: str = ""
     compiler: str = ""
+    compiler_snapshot: str = ""
     program_id: str = ""
 
     @classmethod

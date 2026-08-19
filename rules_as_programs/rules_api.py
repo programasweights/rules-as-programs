@@ -15,6 +15,7 @@ import io
 import json
 import os
 import re
+import secrets
 import threading
 import time
 import tokenize
@@ -179,6 +180,7 @@ def _summary(
         "probes": r.probes,
         "channel": r.channel,
         "n_examples": len(r.examples),
+        "validation_cases": validation_cases_for_path(r.source_path),
         "source_path": r.source_path,
         "enabled": assignment["effective_enabled"],
         **assignment,
@@ -371,6 +373,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
                 **enabled_state(bundled_rule.id, project_root),
                 "muted": is_muted(bundled_rule.id, project_root),
                 "definition": None,
+                "validation_cases": [],
                 **revisions.working_status(
                     bundled_rule.id, str(src), source),
                 **metadata,
@@ -416,6 +419,7 @@ def get_rule(rule_id: str, project_root: str | None) -> dict[str, Any] | None:
         "customized_from": customized_from,
         "definition": _definition_identity(
             resolved_id, scope, path, project_root, source_bytes),
+        "validation_cases": validation_cases_for_path(str(path)),
         **revisions.working_status(resolved_id, str(path), source),
         **metadata,
     }
@@ -481,6 +485,90 @@ def spec_examples(spec: str | None) -> list[tuple[str, str]]:
         if current is not None:
             current.append(line)
     return [(text, label) for text, label in examples if text and label]
+
+
+def normalize_validation_cases(
+    cases: list[dict[str, Any]] | None,
+) -> list[dict[str, str]]:
+    normalized = []
+    for value in cases or []:
+        input_text = str(value.get("input", ""))
+        expected = str(value.get("expected", "")).upper()
+        if not input_text or expected not in PAW_LEVELS:
+            continue
+        normalized.append({
+            "id": str(value.get("id") or secrets.token_hex(8)),
+            "input": input_text,
+            "expected": expected,
+            "note": str(value.get("note", "")),
+        })
+    return normalized
+
+
+def validation_cases_for_path(source_path: str) -> list[dict[str, str]]:
+    if not source_path:
+        return []
+    path = Path(source_path).parent / "tests.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    return normalize_validation_cases(
+        value.get("cases") if isinstance(value, dict) else [])
+
+
+def validation_cases(
+    rule_id: str, project_root: str | None = None
+) -> list[dict[str, str]]:
+    info = get_rule(rule_id, project_root)
+    source_path = str(
+        ((info or {}).get("definition") or {}).get("source_path", ""))
+    return validation_cases_for_path(source_path)
+
+
+def save_validation_cases(
+    source_path: str,
+    cases: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    if not source_path:
+        return {"ok": False, "error": "rule source path is unavailable"}
+    normalized = normalize_validation_cases(cases)
+    path = Path(source_path).parent / "tests.json"
+    temporary = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps({
+            "version": 1,
+            "cases": normalized,
+        }, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "path": str(path), "cases": normalized}
+
+
+def add_validation_case(
+    rule_id: str,
+    project_root: str | None,
+    input_text: str,
+    expected: str,
+) -> dict[str, Any]:
+    info = get_rule(rule_id, project_root)
+    source_path = str(
+        ((info or {}).get("definition") or {}).get("source_path", ""))
+    if not source_path:
+        return {"ok": False, "error": "rule source path is unavailable"}
+    cases = validation_cases_for_path(source_path)
+    replacement = {
+        "id": secrets.token_hex(8),
+        "input": str(input_text),
+        "expected": str(expected).upper(),
+        "note": "Added from observed evaluation",
+    }
+    cases = [
+        case for case in cases if case.get("input") != replacement["input"]]
+    cases.append(replacement)
+    return save_validation_cases(source_path, cases)
 
 
 def _is_rule_decorator(node: ast.expr) -> bool:
@@ -633,7 +721,7 @@ def source_projection(source: str) -> dict[str, Any]:
         MANAGED_FUZZY_MARKER in source
         and bool(spec)
         and managed_v4_shape
-        and trigger in TRIGGERS
+        and (not trigger or trigger in TRIGGERS)
     )
     description = ""
     output_labels: list[str] = []
@@ -688,6 +776,7 @@ def source_projection(source: str) -> dict[str, Any]:
         ),
         "custom": custom,
         "source_hash": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+        "behavior_hash": revisions.behavior_hash(source),
     }
 
 
@@ -1123,40 +1212,44 @@ def rename_rule(
 
 MANAGED_FUZZY_MARKER = "# RAP_MANAGED_FUZZY_V4"
 
-DEFAULT_FUZZY_DESCRIPTION = (
-    "Decide whether rsync or scp was used to synchronize project source code "
-    "instead of Git. Directly copying source code is a violation; transferring "
-    "assets, build artifacts, backups, or release packages is allowed."
+DEFAULT_FUZZY_SPEC = (
+    "Decide whether this input should be shown to the user.\n\n"
+    "Return OK when it should not be shown.\n"
+    "Return WARNING when it should be shown."
 )
-DEFAULT_FUZZY_CASES = [
-    ("git push", "OK"),
-    ("rsync -av src/ deploy@host:/srv/app/src/", "WARNING"),
-    ("scp public/logo.png cdn@host:/srv/assets/", "OK"),
-]
+PAW_LEVELS = ("OK", "INFO", "WARNING", "CRITICAL")
+
+
+def inspect_spec_levels(spec: str) -> dict[str, Any]:
+    text = str(spec or "")
+    found = [level for level in PAW_LEVELS if level in text]
+    valid = "OK" in found and any(
+        level in found for level in ("INFO", "WARNING", "CRITICAL"))
+    return {
+        "ok": valid,
+        "levels": found,
+        "warning": (
+            ""
+            if valid
+            else "Include OK and at least one of INFO, WARNING, or CRITICAL "
+            "so PAW knows when to create a finding."
+        ),
+    }
 
 
 def generate_managed_fuzzy_source(
     rule_id: str,
     name: str,
-    description: str,
+    spec: str,
     *,
     trigger: str,
     input_pointer: str = "",
     max_input_bytes: int = 65536,
     channel: str = "finding",
-    cases: list[tuple[str, str]] | None = None,
 ) -> str:
     if not is_rule_id(rule_id):
         raise ValueError("rule_id must be a valid 16-character ID")
-    case_text = "\n\n".join(
-        f"Input: {evidence}\nOutput: {label}"
-        for evidence, label in (cases or [])
-    )
-    spec = (
-        description.strip()
-        + "\nReturn ONLY one of: OK, INFO, WARNING, CRITICAL"
-        + (f"\n\n{case_text}" if case_text else "")
-    )
+    spec = str(spec).strip()
     function_name = scaffold.slugify(name).replace("-", "_")
     safe_spec = spec.replace('"""', '\\"\\"\\"')
     safe_name = name.replace('"""', '\\"\\"\\"')
@@ -1191,13 +1284,12 @@ def generate_managed_fuzzy_source(
 def draft_rule_source(rule_id: str, title: str | None = None) -> str:
     if not is_rule_id(rule_id):
         raise ValueError("rule_id must be a valid 16-character ID")
-    title = title or "Do not use rsync."
+    title = title or "Untitled rule"
     return generate_managed_fuzzy_source(
         rule_id,
         title,
-        DEFAULT_FUZZY_DESCRIPTION,
+        DEFAULT_FUZZY_SPEC,
         trigger="afterShellExecution",
-        cases=DEFAULT_FUZZY_CASES,
     )
 
 
@@ -1863,6 +1955,9 @@ def save_deployment_coverage_draft(
             if root
         )),
         "confirmed": bool(coverage.get("confirmed")),
+        "compiler": str(coverage.get("compiler", "")),
+        "compiler_snapshot": str(
+            coverage.get("compiler_snapshot", "")),
     }
     try:
         _save(config.rule_deployment_drafts_path(), state)
