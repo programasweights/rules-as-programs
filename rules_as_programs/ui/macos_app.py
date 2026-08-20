@@ -304,6 +304,9 @@ class MacOSController(NSObject):
     def _build_status_item(self) -> None:
         self.status_item = NSStatusBar.systemStatusBar().statusItemWithLength_(
             NSVariableStatusItemLength)
+        if hasattr(self.status_item, "setAutosaveName_"):
+            self.status_item.setAutosaveName_(
+                "com.programasweights.rules-as-programs.status-item")
         self.status_item.setHighlightMode_(True)
         button = self.status_item.button()
         image = _paw_template_image()
@@ -367,6 +370,8 @@ class MacOSController(NSObject):
     @objc.python_method
     def _status_watchdog_tick(self) -> None:
         try:
+            if self.popover and self.popover.isShown():
+                self._reconcile_popover_size()
             item = self.status_item
             button = item.button() if item is not None else None
             visible = bool(
@@ -458,6 +463,7 @@ class MacOSController(NSObject):
         window = self.popover.contentViewController().view().window()
         if window:
             window.makeKeyWindow()
+        _on_main(self._reconcile_popover_size)
 
     @objc.python_method
     def defer_menu_action(self, callback: Callable[[], None]) -> None:
@@ -525,9 +531,20 @@ class MacOSController(NSObject):
         self.content_view, size = self.renderer.render(
             self.snapshot, max_height=max_height)
         self.content_controller.setView_(self.content_view)
-        if self.popover and size != self._last_popover_size:
-            self.popover.setContentSize_(NSMakeSize(*size))
-            self._last_popover_size = size
+        self._last_popover_size = size
+        self._reconcile_popover_size()
+
+    @objc.python_method
+    def _reconcile_popover_size(self) -> None:
+        if not self.popover or not self._last_popover_size:
+            return
+        width, height = self._last_popover_size
+        actual = self.popover.contentSize()
+        if (
+            abs(float(actual.width) - float(width)) > 0.5
+            or abs(float(actual.height) - float(height)) > 0.5
+        ):
+            self.popover.setContentSize_(NSMakeSize(width, height))
 
     @objc.python_method
     def _set_banner(

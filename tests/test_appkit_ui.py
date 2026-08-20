@@ -243,6 +243,16 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     snapshot = demo_snapshot()
     controller._apply_snapshot(snapshot)
     controller._render()
+    desired_size = controller._last_popover_size
+    assert desired_size[1] < 600
+    controller.popover.setContentSize_((430, 600))
+    # Simulate AppKit drifting to a stale maximum while our desired-size cache
+    # still contains the correct content fit.
+    controller._last_popover_size = desired_size
+    controller._render()
+    assert abs(
+        controller.popover.contentSize().height - desired_size[1]
+    ) <= 0.5
     assert controller.renderer._health_copy(snapshot)[0] == ""
     icon = _paw_template_image()
     assert icon.size().height == 18
@@ -565,8 +575,12 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert not inspector.input_scroll.hasHorizontalScroller()
     assert inspector.input_view.textContainer().widthTracksTextView()
     inspector.set_wrap_mode("nowrap")
-    assert inspector.input_scroll.hasHorizontalScroller()
+    assert not inspector.input_scroll.hasHorizontalScroller()
     assert not inspector.input_view.textContainer().widthTracksTextView()
+    inspector.input_view.setString_("x" * 2000)
+    inspector._sync_input_text_layout()
+    assert inspector.input_scroll.hasHorizontalScroller()
+    inspector._refresh_input()
     inspector.presentation["input_typography"] = "monospace"
     inspector.set_wrap_mode("auto")
     assert not inspector.input_should_wrap()
@@ -601,7 +615,21 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         lambda _path: None)
     edit_manager.edit_rule(controller.finding_detail)
     assert edit_payloads[0]["_finding_context"]["evaluation"]["severity"] == "warn"
+    inspector.window.setContentSize_((700, 500))
+    inspector.window.setFrameOrigin_((120, 160))
+    inspector.windowDidResize_(None)
+    inspector.windowDidMove_(None)
+    saved_frame = inspector.window.frame()
     inspector.window.close()
+    inspectors.open(controller.finding_detail)
+    restored = next(iter(inspectors.inspectors.values()))
+    assert abs(restored.window.frame().origin.x - saved_frame.origin.x) < 1
+    assert abs(restored.window.frame().origin.y - saved_frame.origin.y) < 1
+    assert abs(restored.window.frame().size.width - saved_frame.size.width) < 1
+    assert abs(restored.window.frame().size.height - saved_frame.size.height) < 1
+    restored.reset_window_frame()
+    assert not restored._frame_restored
+    restored.window.close()
     controller.request_confirmation(
         "Disable?", "Stops evaluation.", "Disable", lambda: None)
     assert controller.confirmation

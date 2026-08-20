@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable
@@ -159,6 +160,12 @@ class RAPFindingInspector(NSObject):
         self.page = "detail"
         self.expanded_event_id = ""
         self.included_event_ids: set[str] = set()
+        self._frame_autosave_name = ""
+        self._frame_restored = False
+        self._user_resized = False
+        self._adjusting_frame = False
+        self._has_shown = False
+        self._measured_input_width = 0.0
         saved_wrap_mode = str(
             NSUserDefaults.standardUserDefaults().stringForKey_(
                 WRAP_MODE_KEY) or "auto")
@@ -198,6 +205,16 @@ class RAPFindingInspector(NSObject):
         self.window.setTitle_("")
         self.window.setTitleVisibility_(NSWindowTitleHidden)
         self.window.setTitlebarAppearsTransparent_(True)
+        state_key = hashlib.sha256(
+            str(config.state_dir()).encode("utf-8")
+        ).hexdigest()[:12]
+        self._frame_autosave_name = (
+            f"RulesAsPrograms.FindingInspector.{state_key}")
+        self._frame_restored = bool(
+            self.window.setFrameUsingName_(self._frame_autosave_name))
+        self.window.setFrameAutosaveName_(self._frame_autosave_name)
+        if self._frame_restored:
+            self._ensure_frame_on_screen()
 
     @objc.python_method
     def _wire(self, control, callback):
@@ -600,12 +617,19 @@ class RAPFindingInspector(NSObject):
             70, min(320, self._sync_input_text_layout()))
         activity_height = 40 if p.get("additional_activity_count") else 0
         self._detail_height = 82 + 42 + input_height + activity_height + 24
-        if self.page == "detail":
-            self.window.setContentSize_(NSMakeSize(
-                max(640, self.window.contentView().frame().size.width),
-                self._detail_height))
+        preserve_frame = self._frame_restored or self._user_resized
+        if self.page == "detail" and not preserve_frame:
+            target_width = (
+                760.0
+                if self.input_should_wrap()
+                else max(640.0, min(900.0, self._measured_input_width + 44))
+            )
+            self._adjusting_frame = True
+            self.window.setContentSize_(
+                NSMakeSize(target_width, self._detail_height))
             self.window.contentView().layoutSubtreeIfNeeded()
             self._sync_input_text_layout()
+            self._adjusting_frame = False
 
     @objc.python_method
     def input_should_wrap(self) -> bool:
@@ -626,7 +650,7 @@ class RAPFindingInspector(NSObject):
         width = max(120.0, float(viewport.width))
         height = max(1.0, float(viewport.height))
         wrap = self.input_should_wrap()
-        scroll.setHasHorizontalScroller_(not wrap)
+        scroll.setHasHorizontalScroller_(False)
         editor.setHorizontallyResizable_(not wrap)
         container.setWidthTracksTextView_(wrap)
         container.setContainerSize_(NSMakeSize(
@@ -652,6 +676,9 @@ class RAPFindingInspector(NSObject):
                 width,
                 float(used.size.width) + float(inset.width) * 2 + 8,
             )
+        self._measured_input_width = document_width
+        scroll.setHasHorizontalScroller_(
+            bool(not wrap and document_width > width + 1))
         editor.setFrameSize_(NSMakeSize(
             document_width, max(height, measured_height)))
         return measured_height
@@ -680,9 +707,12 @@ class RAPFindingInspector(NSObject):
     @objc.python_method
     def show_detail(self) -> None:
         self._show_page("detail")
-        self.window.setContentSize_(NSMakeSize(
-            max(640, self.window.contentView().frame().size.width),
-            getattr(self, "_detail_height", 320)))
+        if not (self._frame_restored or self._user_resized):
+            self._adjusting_frame = True
+            self.window.setContentSize_(NSMakeSize(
+                max(640, self.window.contentView().frame().size.width),
+                getattr(self, "_detail_height", 320)))
+            self._adjusting_frame = False
 
     @objc.python_method
     def filtered_context_events(self) -> list[dict[str, Any]]:
@@ -736,9 +766,12 @@ class RAPFindingInspector(NSObject):
             if screen else 680)
         maximum = max(360, min(680, available))
         desired = max(300, min(maximum, fixed + max(72, rows_height)))
-        self.window.setContentSize_(NSMakeSize(
-            max(640, self.window.contentView().frame().size.width),
-            desired))
+        if not (self._frame_restored or self._user_resized):
+            self._adjusting_frame = True
+            self.window.setContentSize_(NSMakeSize(
+                max(640, self.window.contentView().frame().size.width),
+                desired))
+            self._adjusting_frame = False
 
     @staticmethod
     def event_time(event: dict[str, Any]) -> str:
@@ -824,6 +857,7 @@ class RAPFindingInspector(NSObject):
             ("Copy Context JSONL", self.copy_context_jsonl),
             ("Open Audit Log", self.open_audit),
             ("Open Ledger", self.open_ledger),
+            ("Reset Window Position", self.reset_window_frame),
         ):
             item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
                 title, "invoke:", "")
@@ -934,11 +968,68 @@ class RAPFindingInspector(NSObject):
     def show(self) -> None:
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         self.window.makeKeyAndOrderFront_(None)
+        if not self._has_shown:
+            if not self._frame_restored:
+                self.window.center()
+            self._has_shown = True
+
+    @objc.python_method
+    def _ensure_frame_on_screen(self) -> None:
+        frame = self.window.frame()
+        visible = False
+        for screen in NSScreen.screens():
+            bounds = screen.visibleFrame()
+            overlap_width = max(
+                0.0,
+                min(
+                    frame.origin.x + frame.size.width,
+                    bounds.origin.x + bounds.size.width,
+                ) - max(frame.origin.x, bounds.origin.x),
+            )
+            overlap_height = max(
+                0.0,
+                min(
+                    frame.origin.y + frame.size.height,
+                    bounds.origin.y + bounds.size.height,
+                ) - max(frame.origin.y, bounds.origin.y),
+            )
+            if overlap_width >= 80 and overlap_height >= 80:
+                visible = True
+                break
+        if not visible:
+            self._frame_restored = False
+            self.window.center()
+
+    @objc.python_method
+    def reset_window_frame(self) -> None:
+        defaults = NSUserDefaults.standardUserDefaults()
+        defaults.removeObjectForKey_(
+            f"NSWindow Frame {self._frame_autosave_name}")
+        self._frame_restored = False
+        self._user_resized = False
+        self._adjusting_frame = True
+        self.window.setContentSize_(NSMakeSize(760, 360))
+        self._adjusting_frame = False
+        self._refresh_input()
         self.window.center()
+        self.window.saveFrameUsingName_(self._frame_autosave_name)
 
     def windowDidResize_(self, _notification):
-        if self.page == "detail" and self.input_view is not None:
+        if (
+            self.page == "detail"
+            and getattr(self, "input_view", None) is not None
+        ):
             self._sync_input_text_layout()
+        if (
+            self.window.isVisible()
+            and not self._adjusting_frame
+        ):
+            self._user_resized = True
+            self.window.saveFrameUsingName_(self._frame_autosave_name)
+
+    def windowDidMove_(self, _notification):
+        if self.window.isVisible() and not self._adjusting_frame:
+            self.window.saveFrameUsingName_(self._frame_autosave_name)
 
     def windowWillClose_(self, _notification):
         if self.manager:
