@@ -11,14 +11,17 @@ actions and reports violations in a top-right menu-bar item. v1 is
 Run in the project root:
 
 ```bash
-pip install rules-as-programs --extra-index-url https://pypi.programasweights.com/simple/
+python -m pip install "git+https://github.com/programasweights/rules-as-programs.git" \
+  --extra-index-url https://pypi.programasweights.com/simple/
 ```
 
-This also installs [ProgramAsWeights](https://programasweights.com) (`programasweights`),
-which compiles each rule's natural-language spec into a small local neural
-program. If `pip` is not the right environment manager here, use the project's
-manager (e.g. `pipx install`, `uv pip install`, `poetry add`) with the same
-`--extra-index-url`.
+This installs Rules as Programs directly from GitHub. It also installs
+[ProgramAsWeights](https://programasweights.com) (`programasweights`), which
+compiles each rule's natural-language spec into a small local neural program.
+The ProgramAsWeights package index supplies prebuilt `llama-cpp-python` wheels
+for local inference; it does not host Rules as Programs. If `pip` is not the
+right environment manager here, use the project's manager (e.g. `pipx install`,
+`uv pip install`, `poetry add`) with the same `--extra-index-url`.
 
 ## 2. Initialize
 

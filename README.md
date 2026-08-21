@@ -27,14 +27,19 @@ coding agents can be added later.
 
 ---
 
-## Install in one command
+## Install from GitHub
 
 From the root of an existing Cursor project:
 
 ```bash
-pip install rules-as-programs --extra-index-url https://pypi.programasweights.com/simple/
+python -m pip install "git+https://github.com/programasweights/rules-as-programs.git" \
+  --extra-index-url https://pypi.programasweights.com/simple/
 rap init --scan
 ```
+
+Rules as Programs is installed directly from GitHub. The extra index is
+maintained by ProgramAsWeights and supplies prebuilt `llama-cpp-python` wheels
+for PAW's local inference runtime.
 
 That single `rap init` will:
 
