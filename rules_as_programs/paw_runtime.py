@@ -55,6 +55,7 @@ class PawRuntime:
         self.compile_timeout = compile_timeout
         self._id_by_hash: dict[str, str] = self._load_cache()
         self._lock = threading.Lock()
+        self._compile_futures: dict[str, Any] = {}
         self._catalog_lock = threading.Lock()
         self._inference_worker = (
             inference_worker or PawInferenceProcess())
@@ -157,6 +158,35 @@ class PawRuntime:
             {},
         )
 
+    def automatic_base_compiler(self) -> dict:
+        """Return the fast local compiler used by Automatic mode."""
+        compilers = self.list_compilers().get("compilers") or []
+        default = next(
+            (dict(item) for item in compilers if item.get("default")),
+            {},
+        )
+        if (
+            default
+            and default.get("compiler_kind") != "finetune_lora"
+            and default.get("supports_local_sdk", True)
+        ):
+            return default
+        return next(
+            (
+                dict(item) for item in compilers
+                if item.get("compiler_kind") == "mapper_lora"
+                and item.get("supports_local_sdk", True)
+            ),
+            next(
+                (
+                    dict(item) for item in compilers
+                    if item.get("compiler_kind") != "finetune_lora"
+                    and item.get("supports_local_sdk", True)
+                ),
+                default,
+            ),
+        )
+
     # --- disk cache of spec-hash -> program id ---------------------------
     def _load_cache(self) -> dict[str, str]:
         p = config.paw_cache_path()
@@ -203,12 +233,23 @@ class PawRuntime:
         if not self.available:
             return None
         key = self._cache_key_for_spec(spec, compiler)
+        created = False
         with self._lock:
             cached = self._id_by_hash.get(key)
-        if cached:
-            return cached
+            if cached:
+                return cached
+            fut = self._compile_futures.get(key)
+            if fut is None:
+                fut = self._compile_pool.submit(self._compile, spec, compiler)
+                self._compile_futures[key] = fut
+                created = True
+        if created:
+            fut.add_done_callback(
+                lambda completed, cache_key=key: (
+                    self._finish_compile(cache_key, completed)
+                )
+            )
         try:
-            fut = self._compile_pool.submit(self._compile, spec, compiler)
             program = fut.result(timeout=(
                 self.compile_timeout if timeout is None else timeout))
         except (FuturesTimeout, Exception):
@@ -220,6 +261,19 @@ class PawRuntime:
             self._id_by_hash[key] = pid
             self._save_cache()
         return pid
+
+    def _finish_compile(self, key: str, future: Any) -> None:
+        try:
+            program = future.result()
+            pid = getattr(program, "id", None)
+        except Exception:
+            pid = None
+        with self._lock:
+            if self._compile_futures.get(key) is future:
+                self._compile_futures.pop(key, None)
+            if pid:
+                self._id_by_hash[key] = str(pid)
+                self._save_cache()
 
     def _compile(self, spec: str, compiler: str | None):
         if compiler:

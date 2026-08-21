@@ -61,12 +61,16 @@ class RuleContext:
         default_compiler: str | None = None,
         through_seq: int | None = None,
         input_text: str = "",
+        default_program_id: str | None = None,
+        default_spec: str | None = None,
     ):
         self._ledger = ledger
         self._runtime = runtime
         self.project_root = ledger.project_root
         self.conversation_id = ledger.conversation_id
         self._default_compiler = default_compiler
+        self._default_program_id = default_program_id
+        self._default_spec = default_spec
         self.through_seq = through_seq
         self._input = input_text
         self.trace: list[dict[str, Any]] = []
@@ -83,7 +87,15 @@ class RuleContext:
                     "PAW input must be the exact trigger field ctx.input")
             resolved_compiler = (
                 compiler if compiler is not None else self._default_compiler)
-            pid = self._runtime.program_id_for_spec(spec, resolved_compiler)
+            pid = (
+                self._default_program_id
+                if (
+                    compiler is None
+                    and self._default_program_id
+                    and spec.strip() == str(self._default_spec or "").strip()
+                )
+                else self._runtime.program_id_for_spec(spec, resolved_compiler)
+            )
             label = (self._runtime.run(pid, text) if pid else None) or ""
             trace_index = len(self.trace)
             self.trace.append({"type": "paw", "input": text, "output": label})
@@ -143,7 +155,10 @@ class Engine:
             if not rule.spec:
                 results[rule.id] = False
                 continue
-            pid = self.runtime.program_id_for_spec(rule.spec, None)
+            pid = (
+                rule.program_id
+                or self.runtime.program_id_for_spec(rule.spec, rule.compiler or None)
+            )
             results[rule.id] = bool(pid) and self.runtime.warm(pid)
         return results
 
@@ -264,7 +279,14 @@ class Engine:
             },
         })
         ctx = RuleContext(
-            ledger, self.runtime, rule.compiler or None, through_seq, input_text)
+            ledger,
+            self.runtime,
+            rule.compiler or None,
+            through_seq=through_seq,
+            input_text=input_text,
+            default_program_id=rule.program_id or None,
+            default_spec=rule.spec,
+        )
         try:
             result = rule.fn(ctx)
             parsed = self._parse_result(rule, result)

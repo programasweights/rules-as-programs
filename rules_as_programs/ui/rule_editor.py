@@ -280,6 +280,9 @@ class RAPRuleEditorDocument(NSObject):
         self.active_compiler = ""
         self.active_compiler_snapshot = ""
         self.active_program_id = ""
+        self.active_compiler_mode = revisions.AUTOMATIC_COMPILER_MODE
+        self.active_artifacts: dict[str, dict[str, Any]] = {}
+        self.compiler_mode = revisions.AUTOMATIC_COMPILER_MODE
         self.draft_compiler = ""
         self.draft_compiler_snapshot = ""
         self._draft_compiler_explicit = False
@@ -304,8 +307,6 @@ class RAPRuleEditorDocument(NSObject):
         self._draft_generation = 0
         self._confirmed_spec_warning_hash = ""
         self._confirmed_build_discard_hash = ""
-        self._allow_failed_validation_hash = ""
-        self._allow_untested_validation_hash = ""
         self.validation_cases: list[dict[str, str]] = []
         self._saved_validation_cases = "[]"
         self._validation_dirty = False
@@ -370,19 +371,26 @@ class RAPRuleEditorDocument(NSObject):
             (rule.get("active") or {}).get("compiler_snapshot", ""))
         self.active_program_id = str(
             (rule.get("active") or {}).get("program_id", ""))
+        self.active_compiler_mode = str(
+            (rule.get("active") or {}).get("compiler_mode")
+            or revisions.AUTOMATIC_COMPILER_MODE)
+        self.active_artifacts = dict(
+            (rule.get("active") or {}).get("artifacts") or {})
+        self.compiler_mode = self.active_compiler_mode
         self._active_behavior_hash = str(
             (rule.get("active") or {}).get("behavior_hash")
             or rule.get("active_behavior_hash", ""))
         self.draft_compiler = self.active_compiler
         self.draft_compiler_snapshot = self.active_compiler_snapshot
+        if (draft_coverage or {}).get("compiler_mode") in revisions.COMPILER_MODES:
+            self.compiler_mode = str(draft_coverage["compiler_mode"])
         if (draft_coverage or {}).get("compiler"):
             self.draft_compiler = str(draft_coverage["compiler"])
             self.draft_compiler_snapshot = str(
                 (draft_coverage or {}).get("compiler_snapshot", ""))
-            self._draft_compiler_explicit = True
-        self._compiler_dirty = bool(
-            self.draft_compiler
-            and self.draft_compiler != self.active_compiler)
+            self._draft_compiler_explicit = (
+                self.compiler_mode == revisions.EXPLICIT_COMPILER_MODE)
+        self._compiler_dirty = self._compiler_selection_dirty()
         self._working_hash = str(rule.get("working_hash", ""))
         self._definition_hash = str(
             (rule.get("definition") or {}).get("source_hash", ""))
@@ -1276,6 +1284,13 @@ class RAPRuleEditorDocument(NSObject):
         )
         raw_job = self._finetune_status.get("job") or {}
         raw_job_status = str(raw_job.get("status", ""))
+        automatic_optimizing = bool(
+            raw_job.get("automatic")
+            and raw_job_status in (
+                "waiting_for_build", "building", "checking", "deploying",
+            )
+            and self._job_matches_current_behavior(raw_job)
+        )
         stale_build_running = bool(
             raw_job_status == "building"
             and not self._job_matches_current_behavior(raw_job)
@@ -1301,11 +1316,18 @@ class RAPRuleEditorDocument(NSObject):
         )
         if not self._active_hash:
             deployed_copy = "Not deployed"
-        elif job_status == "building":
-            deployed_copy = f"Deployed: {active_compiler_label}"
+        elif self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
+            deployed_copy = f"Automatic · Active: {active_compiler_label}"
+            if automatic_optimizing:
+                deployed_copy += " · optimizing…"
         else:
             deployed_copy = f"Deployed: {active_compiler_label}"
-        if job_status == "building":
+        if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
+            draft_copy = (
+                f"Deploys with {draft_compiler_label} · optimizes in background"
+            )
+            compiler_action = "Choose…"
+        elif job_status == "building":
             draft_copy = f"Draft: {draft_compiler_label} · building…"
             compiler_action = "Building…"
         elif draft_requires_build and not draft_ready:
@@ -1364,7 +1386,7 @@ class RAPRuleEditorDocument(NSObject):
         elif queue_pending:
             deploy_tooltip = (
                 "This exact draft will deploy automatically after its compiler "
-                "build and validation pass.")
+                "build finishes.")
         elif not basic_ready:
             deploy_tooltip = "Complete the rule name, trigger, and specification."
         elif not deploy_needed:
@@ -1372,7 +1394,7 @@ class RAPRuleEditorDocument(NSObject):
         elif can_queue:
             deploy_tooltip = (
                 f"Queue this exact draft to deploy after "
-                f"{draft_compiler_label} finishes building and tests pass.")
+                f"{draft_compiler_label} finishes building.")
         elif not draft_ready:
             deploy_tooltip = (
                 f"Build {draft_compiler_label} for the current draft before "
@@ -2581,9 +2603,14 @@ class RAPRuleEditorDocument(NSObject):
                 self.active_compiler_snapshot = str(
                     active.get("compiler_snapshot", ""))
                 self.active_program_id = str(active.get("program_id", ""))
-                self.draft_compiler = self.active_compiler
-                self.draft_compiler_snapshot = self.active_compiler_snapshot
-                self._draft_compiler_explicit = False
+                self.active_compiler_mode = str(
+                    active.get("compiler_mode")
+                    or revisions.AUTOMATIC_COMPILER_MODE)
+                self.active_artifacts = dict(active.get("artifacts") or {})
+                self.compiler_mode = self.active_compiler_mode
+                self._draft_compiler_explicit = (
+                    self.compiler_mode == revisions.EXPLICIT_COMPILER_MODE)
+                self._sync_draft_compiler_for_source()
                 self._compiler_dirty = False
                 self._source_dirty = False
                 self._coverage_dirty = False
@@ -2625,15 +2652,6 @@ class RAPRuleEditorDocument(NSObject):
                     str(value.get("error") or "Queued deployment failed."),
                     str(value.get("id", "")),
                 )
-                result = value.get("result") or {}
-                if (
-                    result.get("validation_failed")
-                    and self.window.isVisible()
-                ):
-                    self.confirm_validation_failure(
-                        result.get("validation") or {},
-                        str(value.get("source_hash", "")),
-                    )
         self._refresh_ui()
 
     @objc.python_method
@@ -2677,8 +2695,6 @@ class RAPRuleEditorDocument(NSObject):
     @objc.python_method
     def _cancel_queue_for_draft_change(self, reason: str) -> None:
         self._draft_generation += 1
-        self._allow_failed_validation_hash = ""
-        self._allow_untested_validation_hash = ""
         if self._queue_is_pending():
             self.cancel_queued_deployment(reason)
 
@@ -2743,15 +2759,68 @@ class RAPRuleEditorDocument(NSObject):
         return description.split("—", 1)[0].strip() or "Server default"
 
     @objc.python_method
+    def automatic_base_compiler_info(self) -> dict[str, Any]:
+        default = self.compiler_info()
+        if (
+            default.get("compiler_kind") != "finetune_lora"
+            and default.get("supports_local_sdk", True)
+        ):
+            return default
+        return next(
+            (
+                dict(item) for item in self.compiler_catalog
+                if item.get("compiler_kind") == "mapper_lora"
+                and item.get("supports_local_sdk", True)
+            ),
+            next(
+                (
+                    dict(item) for item in self.compiler_catalog
+                    if item.get("compiler_kind") != "finetune_lora"
+                    and item.get("supports_local_sdk", True)
+                ),
+                default,
+            ),
+        )
+
+    @objc.python_method
     def resolved_active_compiler(self) -> str:
         return str(
             self.active_compiler or self.compiler_info().get("name", ""))
 
     @objc.python_method
     def resolved_draft_compiler(self) -> str:
+        if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
+            return str(self.automatic_base_compiler_info().get("name", ""))
         return str(
             self.draft_compiler
             or self.compiler_info().get("name", ""))
+
+    @objc.python_method
+    def _artifact_for_compiler(self, compiler: str) -> dict[str, Any]:
+        if self._current_behavior_hash != self._active_behavior_hash:
+            return {}
+        candidates = [
+            dict(item)
+            for item in self.active_artifacts.values()
+            if isinstance(item, dict)
+            and str(item.get("compiler", "")) == compiler
+            and item.get("program_id")
+        ]
+        return max(
+            candidates,
+            key=lambda item: float(item.get("created_at", 0) or 0),
+            default={},
+        )
+
+    @objc.python_method
+    def _compiler_selection_dirty(self) -> bool:
+        if not self._active_hash:
+            return False
+        if self.compiler_mode != self.active_compiler_mode:
+            return True
+        if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
+            return False
+        return self.resolved_draft_compiler() != self.resolved_active_compiler()
 
     @objc.python_method
     def compiler_requires_build(self, name: str) -> bool:
@@ -2787,6 +2856,9 @@ class RAPRuleEditorDocument(NSObject):
             and compiler == self.resolved_active_compiler()
         ):
             return self.active_program_id
+        artifact = self._artifact_for_compiler(compiler)
+        if artifact:
+            return str(artifact.get("program_id", ""))
         job = self._draft_candidate_job()
         if str(job.get("status", "")) == "ready":
             return str(job.get("program_id", ""))
@@ -2801,13 +2873,46 @@ class RAPRuleEditorDocument(NSObject):
         self._clear_diagnostics()
         self.draft_compiler = str(name)
         info = self.compiler_info(self.draft_compiler)
+        artifact = self._artifact_for_compiler(self.draft_compiler)
         self.draft_compiler_snapshot = str(
-            info.get("latest_snapshot", ""))
+            artifact.get("compiler_snapshot")
+            or info.get("latest_snapshot", ""))
         self._draft_compiler_explicit = explicit
-        self._compiler_dirty = (
-            self.resolved_draft_compiler()
-            != self.resolved_active_compiler()
+        if explicit:
+            self.compiler_mode = revisions.EXPLICIT_COMPILER_MODE
+        self._compiler_dirty = self._compiler_selection_dirty()
+        self._validation_target = {
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "program_id": self._draft_program_id(),
+        }
+        self._reconcile_validation_results()
+        self._refresh_validation_result_labels()
+        self._dirty = (
+            self._source_dirty
+            or self._coverage_dirty
+            or self._compiler_dirty
+            or self._validation_dirty
         )
+        self.window.setDocumentEdited_(self._dirty)
+        self._refresh_ui()
+
+    @objc.python_method
+    def _set_compiler_mode(self, mode: str) -> None:
+        if mode not in revisions.COMPILER_MODES:
+            return
+        self._cancel_queue_for_draft_change(
+            "Draft compiler mode changed after deployment was queued.")
+        self._clear_diagnostics()
+        self.compiler_mode = mode
+        self._draft_compiler_explicit = (
+            mode == revisions.EXPLICIT_COMPILER_MODE)
+        if mode == revisions.AUTOMATIC_COMPILER_MODE:
+            info = self.automatic_base_compiler_info()
+            self.draft_compiler = str(info.get("name", ""))
+            self.draft_compiler_snapshot = str(
+                info.get("latest_snapshot", ""))
+        self._compiler_dirty = self._compiler_selection_dirty()
         self._validation_target = {
             "compiler": self.resolved_draft_compiler(),
             "compiler_snapshot": self.draft_compiler_snapshot,
@@ -2830,13 +2935,22 @@ class RAPRuleEditorDocument(NSObject):
             not self._active_hash
             or self._current_behavior_hash != self._active_behavior_hash
         )
-        if not self.draft_compiler:
+        if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
+            automatic = self.automatic_base_compiler_info()
+            self.draft_compiler = str(automatic.get("name", ""))
+            self._draft_compiler_explicit = False
+        elif not self.draft_compiler:
             self.draft_compiler = str(
                 self.compiler_info().get("name", ""))
-        if not draft_source_changed and not self._draft_compiler_explicit:
+        if (
+            self.compiler_mode == revisions.EXPLICIT_COMPILER_MODE
+            and not draft_source_changed
+            and not self._draft_compiler_explicit
+        ):
             self.draft_compiler = self.resolved_active_compiler()
         if (
-            draft_source_changed
+            self.compiler_mode == revisions.EXPLICIT_COMPILER_MODE
+            and draft_source_changed
             and not self._draft_compiler_explicit
             and self.compiler_requires_build(
                 self.resolved_draft_compiler())
@@ -2844,18 +2958,23 @@ class RAPRuleEditorDocument(NSObject):
             self.draft_compiler = str(
                 self.compiler_info().get("name", ""))
         info = self.compiler_info(self.resolved_draft_compiler())
-        self.draft_compiler_snapshot = str(
-            info.get("latest_snapshot", ""))
-        self._compiler_dirty = (
-            self.resolved_draft_compiler()
-            != self.resolved_active_compiler()
+        artifact = (
+            self._artifact_for_compiler(self.resolved_draft_compiler())
+            if self.compiler_mode == revisions.EXPLICIT_COMPILER_MODE
+            else {}
         )
+        self.draft_compiler_snapshot = str(
+            artifact.get("compiler_snapshot")
+            or info.get("latest_snapshot", ""))
+        self._compiler_dirty = self._compiler_selection_dirty()
 
     @objc.python_method
     def compiler_sheet_items(
         self, active: dict[str, Any]
     ) -> list[dict[str, Any]]:
         deployed = bool(active.get("source_hash") or self._active_hash)
+        if isinstance(active.get("artifacts"), dict):
+            self.active_artifacts = dict(active.get("artifacts") or {})
         default_info = self.compiler_info()
         active_name = str(
             active.get("compiler")
@@ -2881,7 +3000,9 @@ class RAPRuleEditorDocument(NSObject):
                 item.get("description") or name or "Unnamed compiler")
             label, separator, detail = raw_description.partition("—")
             is_active = bool(deployed and name == active_name)
-            is_draft = bool(name == draft_name)
+            is_draft = bool(
+                self.compiler_mode == revisions.EXPLICIT_COMPILER_MODE
+                and name == draft_name)
             requires_build = (
                 str(item.get("compiler_kind", "")) == "finetune_lora")
             job_matches = (
@@ -2891,9 +3012,13 @@ class RAPRuleEditorDocument(NSObject):
             job_status = (
                 str(candidate_job.get("status", ""))
                 if job_matches else "")
+            artifact = (
+                self._artifact_for_compiler(name)
+                if source_matches_active else {})
             ready = bool(
                 not requires_build
                 or (is_active and source_matches_active)
+                or artifact
                 or job_status == "ready"
             )
             if requires_build and job_status == "building":
@@ -2952,7 +3077,40 @@ class RAPRuleEditorDocument(NSObject):
                 else 2
             ),
         ))
-        return rows
+        automatic_selected = (
+            self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE)
+        automatic_active = bool(
+            deployed
+            and str(
+                active.get("compiler_mode")
+                or self.active_compiler_mode
+                or revisions.AUTOMATIC_COMPILER_MODE
+            ) == revisions.AUTOMATIC_COMPILER_MODE
+        )
+        automatic = {
+            "name": "__automatic__",
+            "label": "Automatic",
+            "description": (
+                "Automatic — deploy quickly, then optimize the deployed "
+                "revision in the background"
+            ),
+            "detail": (
+                "Uses a fast compatible compiler for Deploy and Run Tests, "
+                "then automatically switches to a compatible finetuned build."
+            ),
+            "latest_snapshot": "managed dynamically",
+            "is_active": automatic_active,
+            "is_draft": automatic_selected,
+            "is_paw_default": False,
+            "requires_build": False,
+            "ready_for_draft": True,
+            "job_status": "",
+            "action": "" if automatic_selected else "automatic",
+            "action_title": "" if automatic_selected else "Use",
+            "can_build": not automatic_selected,
+            "supports_local_sdk": True,
+        }
+        return [automatic, *rows]
 
     @objc.python_method
     def compiler_catalog_accessory(
@@ -3073,8 +3231,14 @@ class RAPRuleEditorDocument(NSObject):
             document.addSubview_(detail)
 
             technical = self._label(
-                f"{item.get('name') or 'unknown'} · "
-                f"{item.get('latest_snapshot') or 'snapshot unavailable'}",
+                (
+                    "Managed from the current PAW compiler catalog"
+                    if item.get("name") == "__automatic__"
+                    else (
+                        f"{item.get('name') or 'unknown'} · "
+                        f"{item.get('latest_snapshot') or 'snapshot unavailable'}"
+                    )
+                ),
                 size=8.5,
                 color=NSColor.tertiaryLabelColor(),
             )
@@ -3168,9 +3332,17 @@ class RAPRuleEditorDocument(NSObject):
         alert.setMessageText_("Draft compiler")
         alert.setInformativeText_(
             (
-                f"{active_label} is deployed. Choose or build the compiler "
-                "for the current editor draft; Deploy is the only action that "
-                "changes the running rule."
+                (
+                    f"Automatic is active with {active_label}. Deploy uses a "
+                    "fast compiler, then optimizes in the background. Choose "
+                    "a specific compiler to pin it instead."
+                )
+                if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE
+                else (
+                    f"{active_label} is deployed. Choose or build the compiler "
+                    "for the current editor draft; Deploy is the only action "
+                    "that changes the running rule."
+                )
             )
             if self._active_hash
             else (
@@ -3188,7 +3360,9 @@ class RAPRuleEditorDocument(NSObject):
         def finished(_response):
             compiler = str(catalog_action.get("compiler", ""))
             action = str(catalog_action.get("action", ""))
-            if action == "select" and compiler:
+            if action == "automatic":
+                self._set_compiler_mode(revisions.AUTOMATIC_COMPILER_MODE)
+            elif action == "select" and compiler:
                 self._set_draft_compiler(compiler, explicit=True)
             elif action == "deploy_now" and compiler:
                 self._set_draft_compiler(compiler, explicit=True)
@@ -3277,6 +3451,15 @@ class RAPRuleEditorDocument(NSObject):
         self.active_compiler_snapshot = str(
             active.get("compiler_snapshot", ""))
         self.active_program_id = str(active.get("program_id", ""))
+        self.active_compiler_mode = str(
+            active.get("compiler_mode")
+            or self.active_compiler_mode
+            or revisions.AUTOMATIC_COMPILER_MODE)
+        self.active_artifacts = dict(
+            active.get("artifacts") or self.active_artifacts)
+        if not self._compiler_dirty:
+            self.compiler_mode = self.active_compiler_mode
+            self._sync_draft_compiler_for_source()
         job = result.get("job") or {}
         job_status = str(job.get("status", ""))
         job_id = str(job.get("id", ""))
@@ -3288,9 +3471,9 @@ class RAPRuleEditorDocument(NSObject):
                 job_id,
             )
         self._refresh_ui()
-        if job_status == "building":
+        if job_status in ("waiting_for_build", "building"):
             self._schedule_finetune_poll()
-        elif job_status == "ready":
+        elif job_status == "ready" and not job.get("automatic"):
             self.reload_validation_results()
 
     @objc.python_method
@@ -3500,9 +3683,6 @@ class RAPRuleEditorDocument(NSObject):
             return
         source_hash = revisions.hash_source(source)
         source_changed = source_hash != self._active_hash
-        validation_policy = self._validation_policy_for_deploy(source_hash)
-        if validation_policy is None:
-            return
         build_job = self._finetune_status.get("job") or {}
         if (
             self.compiler_requires_build(draft_compiler)
@@ -3514,7 +3694,7 @@ class RAPRuleEditorDocument(NSObject):
                 and str(build_job.get("compiler", "")) == draft_compiler
             ):
                 self._queue_current_deployment(
-                    source, source_hash, level_check, validation_policy)
+                    source, source_hash, level_check)
             else:
                 self._set_compilation_message(
                     f"Build {self.compiler_label(draft_compiler)} for this "
@@ -3532,132 +3712,8 @@ class RAPRuleEditorDocument(NSObject):
             self.confirm_deploy_during_compiler_build(source_hash)
             return
         self._queue_current_deployment(
-            source, source_hash, level_check, validation_policy)
+            source, source_hash, level_check)
         return
-        self._set_busy(
-            True, "Checking rule…", busy_label="Deploying")
-        _after_delay(0.35, self._show_compile_progress)
-
-        def prepared(result: dict[str, Any]) -> None:
-            def apply() -> None:
-                if not result.get("ok"):
-                    if result.get("validation_failed"):
-                        self._set_busy(False)
-                        self.confirm_validation_failure(
-                            result.get("validation") or {}, source_hash)
-                        return
-                    self._deployment_failed(
-                        result.get("error", "Deployment preparation failed."))
-                    return
-                self.diagnostics_label.setStringValue_(
-                    "Activating revision and project coverage…")
-                self.model.perform({
-                    "type": "commit_deployment",
-                    "token": result["token"],
-                }, committed, timeout=30)
-            _on_main(apply)
-
-        def committed(result: dict[str, Any]) -> None:
-            def apply() -> None:
-                if not result.get("ok"):
-                    self._deployment_failed(
-                        result.get("error", "Deployment failed."))
-                    return
-                old_id = self.rule_id
-                info = dict(result.get("rule") or {})
-                info["projection"] = rules_api.source_projection(
-                    info.get("source", source))
-                info["deployment"] = {
-                    "coverage": result.get("coverage") or {},
-                    "projects": self.projects,
-                    "impact_count": result.get("impact_count", 0),
-                }
-                self.rule.update(info)
-                self.source_scope = str(info.get("scope", "global"))
-                self.rule["new_draft"] = False
-                self.rule_id = str(info.get("id", self.rule_id))
-                self.full_source = str(info.get("source", source))
-                self._apply_projection(info["projection"])
-                coverage = result.get("coverage") or {}
-                self.coverage_mode = str(
-                    coverage.get("mode", self.coverage_mode))
-                self.selected_projects = list(
-                    coverage.get("selected_projects") or [])
-                self._active_coverage = {
-                    "mode": self.coverage_mode,
-                    "selected_projects": sorted(
-                        self.selected_projects
-                        if self.coverage_mode == "selected" else []),
-                }
-                self._active_hash = str(
-                    (result.get("active") or {}).get("source_hash", ""))
-                self._active_behavior_hash = str(
-                    (result.get("active") or {}).get("behavior_hash")
-                    or self._current_behavior_hash)
-                self.active_compiler = str(
-                    (result.get("active") or {}).get("compiler", ""))
-                self.active_compiler_snapshot = str(
-                    (result.get("active") or {}).get(
-                        "compiler_snapshot", ""))
-                self.active_program_id = str(
-                    (result.get("active") or {}).get("program_id", ""))
-                self.draft_compiler = self.active_compiler
-                self.draft_compiler_snapshot = self.active_compiler_snapshot
-                self._draft_compiler_explicit = False
-                self._compiler_dirty = False
-                self._finetune_status = {}
-                self._working_hash = str(
-                    info.get("working_hash", self._active_hash))
-                self._definition_hash = str(
-                    (info.get("definition") or {}).get("source_hash", ""))
-                self._saved_source_hash = revisions.hash_source(self.full_source)
-                self._current_source_hash = self._saved_source_hash
-                self._current_source_hash = self._saved_source_hash
-                self._source_dirty = False
-                self._coverage_dirty = False
-                self.validation_cases = list(
-                    info.get("validation_cases") or self.validation_cases)
-                self._saved_validation_cases = json.dumps(
-                    self.validation_cases, sort_keys=True)
-                self._validation_dirty = False
-                self._dirty = False
-                self.rule["_deploy_failed"] = False
-                self.window.setDocumentEdited_(False)
-                self.window.setTitle_("Rule Editor")
-                self.diagnostics_label.setStringValue_(
-                    f"✓ Deployed to {result.get('impact_count', 0)} project(s).")
-                self.diagnostics_label.setTextColor_(
-                    NSColor.systemGreenColor())
-                self.diagnostics_label.setHidden_(False)
-                self._set_busy(False)
-                self._refresh_ui(sync_text=True)
-                if self.manager:
-                    if old_id != self.rule_id:
-                        self.manager.renamed(self, old_id, self.rule_id)
-                    self.manager.changed(result)
-                _after_delay(0.7, self._close_deployed_editor)
-            _on_main(apply)
-
-        self.model.perform({
-            "type": "prepare_deployment",
-            "rule_id": self.rule_id,
-            "project_root": self.project_root,
-            "source": source,
-            "source_changed": source_changed,
-            "expected_active_hash": self._active_hash,
-            "coverage": {
-                "mode": self.coverage_mode,
-                "selected_projects": self.selected_projects,
-            },
-            "warnings": (
-                [level_check["warning"]] if not level_check["ok"] else []),
-            "validation_cases": self.validation_cases,
-            "compiler": self.resolved_draft_compiler(),
-            "compiler_snapshot": self.draft_compiler_snapshot,
-            "program_id": self._draft_program_id(),
-            "allow_failed_validation": (
-                self._allow_failed_validation_hash == source_hash),
-        }, prepared, timeout=180)
 
     @objc.python_method
     def _validate_form_before_deploy(self) -> bool:
@@ -3680,83 +3736,11 @@ class RAPRuleEditorDocument(NSObject):
         return True
 
     @objc.python_method
-    def _validation_policy_for_deploy(
-        self, source_hash: str
-    ) -> str | None:
-        self._capture_validation_cases()
-        if not self.validation_cases:
-            return "skip"
-        self._reconcile_validation_results()
-        completed = [
-            self._validation_results.get(str(case.get("id", "")))
-            for case in self.validation_cases
-        ]
-        completed = [
-            result for result in completed
-            if result and not result.get("running")
-        ]
-        if len(completed) != len(self.validation_cases):
-            if self._allow_untested_validation_hash == source_hash:
-                return "skip"
-            self.confirm_untested_validation(
-                len(self.validation_cases) - len(completed),
-                source_hash,
-            )
-            return None
-        if any(not result.get("ok") for result in completed):
-            if self._allow_failed_validation_hash == source_hash:
-                return "allow_failed"
-            self.confirm_validation_failure(
-                {
-                    "passed": sum(
-                        1 for result in completed if result.get("ok")),
-                    "total": len(completed),
-                    "results": completed,
-                },
-                source_hash,
-            )
-            return None
-        return "cached"
-
-    @objc.python_method
-    def confirm_untested_validation(
-        self, missing: int, source_hash: str
-    ) -> None:
-        compiler = self.resolved_draft_compiler()
-        can_run = bool(
-            not self.compiler_requires_build(compiler)
-            or self._draft_program_id()
-        )
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_(
-            f"{missing} validation case"
-            f"{'s have' if missing != 1 else ' has'} not been run")
-        alert.setInformativeText_(
-            "Deploy never runs validation cases automatically. Run them "
-            "explicitly, or deploy this exact draft without testing.")
-        alert.addButtonWithTitle_(
-            "Run Tests" if can_run else "Wait for Compiler")
-        alert.addButtonWithTitle_("Deploy Without Testing")
-        alert.addButtonWithTitle_("Cancel")
-        alert.buttons()[0].setEnabled_(can_run)
-
-        def completed(response):
-            if response == NSAlertFirstButtonReturn and can_run:
-                self.run_validation_cases()
-            elif response == NSAlertSecondButtonReturn:
-                self._allow_untested_validation_hash = source_hash
-                self.deploy()
-
-        alert.beginSheetModalForWindow_completionHandler_(
-            self.window, completed)
-
-    @objc.python_method
     def _queue_current_deployment(
         self,
         source: str,
         source_hash: str,
         level_check: dict[str, Any],
-        validation_policy: str,
     ) -> None:
         self._capture_validation_cases()
         self.rule["_deploy_failed"] = False
@@ -3766,6 +3750,7 @@ class RAPRuleEditorDocument(NSObject):
         deployment_id = self._pending_deployment_id
         queued_generation = self._draft_generation
         queued_compiler = self.resolved_draft_compiler()
+        queued_compiler_mode = self.compiler_mode
         queued_compiler_snapshot = self.draft_compiler_snapshot
         queued_cases = json.dumps(
             self.validation_cases, sort_keys=True, ensure_ascii=False)
@@ -3788,6 +3773,7 @@ class RAPRuleEditorDocument(NSObject):
             "source_hash": source_hash,
             "expected_active_hash": self._active_hash,
             "compiler": queued_compiler,
+            "compiler_mode": self.compiler_mode,
             "compiler_snapshot": queued_compiler_snapshot,
             "program_id": self._draft_program_id(),
             "coverage": {
@@ -3797,9 +3783,6 @@ class RAPRuleEditorDocument(NSObject):
             "warnings": (
                 [level_check["warning"]] if not level_check["ok"] else []),
             "validation_cases": self.validation_cases,
-            "allow_failed_validation": (
-                self._allow_failed_validation_hash == source_hash),
-            "validation_policy": validation_policy,
         }
 
         def apply_result(result):
@@ -3821,6 +3804,7 @@ class RAPRuleEditorDocument(NSObject):
                 self._draft_generation != queued_generation
                 or self._current_source_hash != source_hash
                 or self.resolved_draft_compiler() != queued_compiler
+                or self.compiler_mode != queued_compiler_mode
                 or self.draft_compiler_snapshot
                 != queued_compiler_snapshot
                 or current_cases != queued_cases
@@ -3834,8 +3818,7 @@ class RAPRuleEditorDocument(NSObject):
             self._apply_deployment_queue(
                 dict(result.get("queue") or {}))
             self.diagnostics_label.setStringValue_(
-                "Deployment queued. It will run only if the compiler "
-                "build and validation succeed.")
+                "Deployment queued for this exact draft.")
             self.diagnostics_label.setTextColor_(
                 NSColor.systemBlueColor())
             self.diagnostics_label.setHidden_(False)
@@ -3918,41 +3901,6 @@ class RAPRuleEditorDocument(NSObject):
         worker.start()
 
     @objc.python_method
-    def confirm_validation_failure(
-        self, validation: dict[str, Any], source_hash: str
-    ) -> None:
-        failures = [
-            item for item in validation.get("results", [])
-            if not item.get("ok")]
-        detail = ""
-        if failures:
-            first = failures[0]
-            detail = (
-                f"\n\nExpected {first.get('expected')}, got "
-                f"{first.get('actual') or '(empty)'} for:\n"
-                f"{str(first.get('input', ''))[:300]}"
-            )
-        alert = NSAlert.alloc().init()
-        alert.setMessageText_(
-            f"{validation.get('passed', 0)}/"
-            f"{validation.get('total', 0)} validation cases passed")
-        alert.setInformativeText_(
-            "The candidate program did not match the expected "
-            "results." + detail)
-        alert.addButtonWithTitle_("Edit Specification")
-        alert.addButtonWithTitle_("Deploy Anyway")
-
-        def completed(response):
-            if response == NSAlertSecondButtonReturn:
-                self._allow_failed_validation_hash = source_hash
-                self.deploy()
-            else:
-                self.window.makeFirstResponder_(self.description_editor)
-
-        alert.beginSheetModalForWindow_completionHandler_(
-            self.window, completed)
-
-    @objc.python_method
     def confirm_spec_warning(self, warning: str, warning_hash: str) -> None:
         alert = NSAlert.alloc().init()
         alert.setMessageText_("PAW output levels may be unclear")
@@ -3994,26 +3942,6 @@ class RAPRuleEditorDocument(NSObject):
             self.window, completed)
 
     @objc.python_method
-    def _close_deployed_editor(self) -> None:
-        if not self._busy and not self._dirty and self.window.isVisible():
-            self.window.close()
-
-    @objc.python_method
-    def _show_compile_progress(self) -> None:
-        if (
-            self._busy
-            and str(self.diagnostics_label.stringValue()) == "Checking rule…"
-        ):
-            self.diagnostics_label.setStringValue_(
-                f"Preparing this draft with "
-                f"{self.compiler_label(self.resolved_draft_compiler())}… "
-                "Exact matching test results will be reused. A first local "
-                "runtime load may take longer.")
-            self.diagnostics_label.setTextColor_(
-                NSColor.secondaryLabelColor())
-            self.diagnostics_label.setHidden_(False)
-
-    @objc.python_method
     def _deployment_failed(self, error: str) -> None:
         self.rule["_deploy_failed"] = True
         self.diagnostics_label.setStringValue_(
@@ -4053,6 +3981,7 @@ class RAPRuleEditorDocument(NSObject):
                     "selected_projects": self.selected_projects,
                     "confirmed": self._scope_confirmed,
                     "compiler": self.resolved_draft_compiler(),
+                    "compiler_mode": self.compiler_mode,
                     "compiler_snapshot": self.draft_compiler_snapshot,
                 },
                 "validation_cases": self.validation_cases,
@@ -4069,6 +3998,7 @@ class RAPRuleEditorDocument(NSObject):
                     "selected_projects": self.selected_projects,
                     "confirmed": self._scope_confirmed,
                     "compiler": self.resolved_draft_compiler(),
+                    "compiler_mode": self.compiler_mode,
                     "compiler_snapshot": self.draft_compiler_snapshot,
                 },
                 "validation_cases": self.validation_cases,

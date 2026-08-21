@@ -84,6 +84,7 @@ def test_compiler_catalog_is_discovered_and_cached(
     assert not first["cached"]
     assert second["cached"]
     assert runtime.compiler_info()["name"] == "future-standard"
+    assert runtime.automatic_base_compiler()["name"] == "future-standard"
     assert runtime.compatible_finetune_compiler()["name"] == (
         "future-finetune")
     runtime.shutdown()
@@ -123,6 +124,37 @@ def test_program_cache_is_scoped_to_compiler_snapshot(
     assert first == "program-1"
     assert second == "program-2"
     assert fake.compile_calls == 2
+    runtime.shutdown()
+
+
+def test_concurrent_compile_requests_share_one_build(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path))
+    fake = FakePaw()
+    original_compile = fake.compile
+
+    def slow_compile(spec, **kwargs):
+        time.sleep(0.05)
+        return original_compile(spec, **kwargs)
+
+    fake.compile = slow_compile
+    monkeypatch.setattr(paw_runtime, "paw", fake)
+    runtime = paw_runtime.PawRuntime()
+    runtime.list_compilers(refresh=True)
+    results = []
+    workers = [
+        threading.Thread(
+            target=lambda: results.append(
+                runtime.program_id_for_spec("same spec")))
+        for _ in range(4)
+    ]
+
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+
+    assert results == ["program-1"] * 4
+    assert fake.compile_calls == 1
     runtime.shutdown()
 
 

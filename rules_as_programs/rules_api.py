@@ -1946,6 +1946,11 @@ def save_deployment_coverage_draft(
     mode = str(coverage.get("mode", "selected"))
     if mode not in ("all", "selected"):
         return {"ok": False, "error": "invalid coverage mode"}
+    compiler_mode = str(
+        coverage.get("compiler_mode")
+        or revisions.AUTOMATIC_COMPILER_MODE)
+    if compiler_mode not in revisions.COMPILER_MODES:
+        return {"ok": False, "error": "invalid compiler mode"}
     state = _load(config.rule_deployment_drafts_path())
     rules = state.setdefault("rules", {})
     rules[rule_id] = {
@@ -1956,6 +1961,7 @@ def save_deployment_coverage_draft(
         )),
         "confirmed": bool(coverage.get("confirmed")),
         "compiler": str(coverage.get("compiler", "")),
+        "compiler_mode": compiler_mode,
         "compiler_snapshot": str(
             coverage.get("compiler_snapshot", "")),
     }

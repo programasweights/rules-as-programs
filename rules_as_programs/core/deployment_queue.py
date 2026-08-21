@@ -14,6 +14,12 @@ from .. import config
 PENDING_STATUSES = {
     "waiting_for_build", "building", "checking", "validating", "deploying",
 }
+DEPLOYMENT_KIND = "deployment"
+OPTIMIZATION_KIND = "optimization"
+
+
+def _kind(value: dict[str, Any]) -> str:
+    return str(value.get("kind") or DEPLOYMENT_KIND)
 
 
 class DeploymentQueueStore:
@@ -70,11 +76,14 @@ class DeploymentQueueStore:
             value = self._load().get(queue_id)
         return dict(value) if value else None
 
-    def active_for_rule(self, rule_id: str) -> dict[str, Any] | None:
+    def active_for_rule(
+        self, rule_id: str, *, kind: str = DEPLOYMENT_KIND
+    ) -> dict[str, Any] | None:
         with self._lock:
             values = [
                 value for value in self._load().values()
                 if str(value.get("rule_id", "")) == rule_id
+                and _kind(value) == kind
                 and value.get("status") in PENDING_STATUSES
             ]
         if not values:
@@ -82,22 +91,26 @@ class DeploymentQueueStore:
         return dict(max(
             values, key=lambda value: float(value.get("created_at", 0))))
 
-    def latest_for_rule(self, rule_id: str) -> dict[str, Any] | None:
+    def latest_for_rule(
+        self, rule_id: str, *, kind: str = DEPLOYMENT_KIND
+    ) -> dict[str, Any] | None:
         with self._lock:
             values = [
                 value for value in self._load().values()
                 if str(value.get("rule_id", "")) == rule_id
+                and _kind(value) == kind
             ]
         if not values:
             return None
         return dict(max(
             values, key=lambda value: float(value.get("created_at", 0))))
 
-    def pending(self) -> list[dict[str, Any]]:
+    def pending(self, *, kind: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             values = [
                 dict(value) for value in self._load().values()
                 if value.get("status") in PENDING_STATUSES
+                and (kind is None or _kind(value) == kind)
             ]
         return values
 

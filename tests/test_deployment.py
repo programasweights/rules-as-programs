@@ -39,7 +39,11 @@ class Runtime:
         if name:
             return {
                 "name": name,
-                "latest_snapshot": f"{name}-snapshot",
+                "latest_snapshot": (
+                    "finetune-snapshot"
+                    if name == "paw-ft-bs48"
+                    else f"{name}-snapshot"
+                ),
                 "runtime_id": "runtime",
                 "compiler_kind": (
                     "finetune_lora" if "ft" in name else "mapper_lora"),
@@ -104,6 +108,7 @@ def _daemon(monkeypatch, tmp_path, projects, *, fail_cases=False):
     daemon.deployment_queue = DeploymentQueueStore(
         tmp_path / "deployment-queue.json")
     daemon.work = Work()
+    daemon.optimization_work = Work()
     daemon._state_lock = threading.Lock()
     daemon._warmed = set()
     daemon._warm_state = {}
@@ -209,6 +214,50 @@ def test_rule_name_changes_do_not_change_behavior_identity(
     )
     assert revisions.behavior_hash(changed_spec) != (
         revisions.behavior_hash(renamed))
+
+
+def test_compiler_artifacts_are_retained_for_atomic_rollback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Artifact rollback")
+    source_path = tmp_path / "rule.py"
+    source_path.write_text(source)
+    deployed = revisions.activate(
+        rule_id,
+        source_path,
+        source,
+        compiler="future-standard",
+        compiler_snapshot="standard-snapshot",
+        program_id="standard-program",
+        compiler_mode=revisions.AUTOMATIC_COMPILER_MODE,
+    )
+    optimized = revisions.activate_artifact(
+        rule_id,
+        source_path,
+        deployed["behavior_hash"],
+        compiler="future-finetune",
+        compiler_snapshot="finetune-snapshot",
+        program_id="finetune-program",
+        compiler_mode=revisions.AUTOMATIC_COMPILER_MODE,
+    )
+
+    assert optimized["compiler"] == "future-finetune"
+    assert len(optimized["artifacts"]) == 2
+    rolled_back = revisions.activate_artifact(
+        rule_id,
+        source_path,
+        deployed["behavior_hash"],
+        compiler="future-standard",
+        compiler_snapshot="standard-snapshot",
+        program_id="standard-program",
+        compiler_mode=revisions.EXPLICIT_COMPILER_MODE,
+    )
+
+    assert rolled_back["compiler"] == "future-standard"
+    assert rolled_back["compiler_mode"] == revisions.EXPLICIT_COMPILER_MODE
+    assert len(rolled_back["artifacts"]) == 2
 
 
 def test_finalized_deployment_tests_and_compiles_same_compiler(
@@ -636,6 +685,7 @@ def test_draft_compiler_build_deploys_exact_draft_and_reuses_tests(
         candidate["program_id"],
     )
     assert tested["validation"]["passed"] == 1
+    runs_after_test = daemon.runtime.runs
 
     prepared = daemon.prepare_rule_deployment({
         "rule_id": rule_id,
@@ -655,7 +705,8 @@ def test_draft_compiler_build_deploys_exact_draft_and_reuses_tests(
     })
 
     assert prepared["ok"], prepared
-    assert prepared["validation"]["cached"]
+    assert prepared["validation"]["total"] == 0
+    assert daemon.runtime.runs == runs_after_test
     deployed = daemon.commit_rule_deployment(prepared["token"])
     assert deployed["active"]["source_hash"] == revisions.hash_source(changed)
     assert deployed["active"]["compiler"] == "future-ft-v2"
@@ -734,7 +785,7 @@ def test_deploy_when_ready_runs_in_background_and_persists_status(
         revisions.hash_source(changed))
 
 
-def test_queued_deployment_never_deploys_failed_validation(
+def test_queued_deployment_ignores_failed_validation(
     monkeypatch, tmp_path
 ):
     project = tmp_path / "queued-validation-failure"
@@ -767,14 +818,26 @@ def test_queued_deployment_never_deploys_failed_validation(
         "expected_active_hash": committed["active"]["source_hash"],
     })
     daemon._run_finetune(rule_id, started["job"]["id"])
+    candidate = daemon.finetune_status(rule_id, str(project))["job"]
+    tested = daemon.validate_rule_cases(
+        rule_id,
+        str(project),
+        changed,
+        cases,
+        "future-ft-v2",
+        candidate["compiler_snapshot"],
+        candidate["program_id"],
+    )
+    assert tested["validation"]["passed"] == 0
+    runs_after_test = daemon.runtime.runs
     daemon._run_queued_deployment(queued["queue"]["id"])
 
     status = daemon.deployment_queue_status(rule_id)["queue"]
-    assert status["status"] == "failed"
-    assert "validation" in status["phase"].lower()
-    assert rules_api.get_rule(
-        rule_id, str(project))["active"]["source_hash"] == (
-        committed["active"]["source_hash"])
+    assert status["status"] == "succeeded"
+    assert daemon.runtime.runs == runs_after_test
+    assert status["result"]["active"]["behavior_hash"] == (
+        revisions.behavior_hash(changed))
+    assert status["result"]["active"]["compiler"] == "future-ft-v2"
 
 
 def test_standard_deployment_uses_persistent_idempotent_queue(
@@ -811,13 +874,189 @@ def test_standard_deployment_uses_persistent_idempotent_queue(
         "expected_active_hash": committed["active"]["source_hash"],
     })
 
-    assert queued["queue"]["status"] == "building"
+    assert queued["queue"]["status"] in ("building", "checking")
     daemon._run_queued_deployment("standard-intent")
     finished = daemon.deployment_queue_status(
         rule_id, "standard-intent")["queue"]
     assert finished["status"] == "succeeded"
     assert finished["result"]["active"]["source_hash"] == (
         revisions.hash_source(changed))
+
+
+def test_automatic_deploy_promotes_background_finetune_without_tests(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "automatic-optimization"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Automatic optimization")
+    prepared = daemon.prepare_rule_deployment({
+        "rule_id": rule_id,
+        "source": source,
+        "project_root": str(project),
+        "source_changed": True,
+        "expected_active_hash": "",
+        "compiler_mode": revisions.AUTOMATIC_COMPILER_MODE,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "validation_cases": [{
+            "id": "never-run",
+            "input": "git push",
+            "expected": "WARNING",
+        }],
+    })
+
+    assert prepared["ok"]
+    assert prepared["compiler_mode"] == revisions.AUTOMATIC_COMPILER_MODE
+    committed = daemon.commit_rule_deployment(prepared["token"])
+    optimization = committed["optimization"]
+    assert committed["active"]["compiler"] == "future-standard"
+    assert committed["active"]["compiler_mode"] == (
+        revisions.AUTOMATIC_COMPILER_MODE)
+    assert optimization["status"] == "waiting_for_build"
+    assert daemon.runtime.runs == 0
+    duplicate = daemon._queue_automatic_optimization(
+        rule_id=rule_id,
+        project_root=str(project),
+        source_path=committed["active"]["source_path"],
+        source=source,
+        active=committed["active"],
+    )
+    assert duplicate["id"] == optimization["id"]
+    assert len(daemon.deployment_queue.pending(kind="optimization")) == 1
+
+    daemon._run_optimization(optimization["id"])
+
+    active = rules_api.get_rule(rule_id, str(project))["active"]
+    assert active["compiler"] == "paw-ft-bs48"
+    assert active["compiler_mode"] == revisions.AUTOMATIC_COMPILER_MODE
+    assert {
+        artifact["compiler"]
+        for artifact in active["artifacts"].values()
+    } == {"future-standard", "paw-ft-bs48"}
+    assert daemon.runtime.runs == 0
+    finished = daemon.deployment_queue.latest_for_rule(
+        rule_id, kind="optimization")
+    assert finished["status"] == "succeeded"
+
+
+def test_explicit_compiler_deploy_does_not_schedule_optimization(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "explicit-compiler"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Explicit compiler")
+    prepared = daemon.prepare_rule_deployment({
+        "rule_id": rule_id,
+        "source": source,
+        "project_root": str(project),
+        "source_changed": True,
+        "expected_active_hash": "",
+        "compiler": "future-standard",
+        "compiler_mode": revisions.EXPLICIT_COMPILER_MODE,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+    })
+
+    committed = daemon.commit_rule_deployment(prepared["token"])
+
+    assert committed["active"]["compiler_mode"] == (
+        revisions.EXPLICIT_COMPILER_MODE)
+    assert committed["optimization"] == {}
+    assert daemon.deployment_queue.latest_for_rule(
+        rule_id, kind="optimization") is None
+
+
+def test_pending_automatic_optimization_resumes_after_restart(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "restart-optimization"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Restart optimization")
+    prepared = daemon.prepare_rule_deployment({
+        "rule_id": rule_id,
+        "source": source,
+        "project_root": str(project),
+        "source_changed": True,
+        "expected_active_hash": "",
+        "compiler_mode": revisions.AUTOMATIC_COMPILER_MODE,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+    })
+    committed = daemon.commit_rule_deployment(prepared["token"])
+    queue_id = committed["optimization"]["id"]
+
+    restarted = _daemon(monkeypatch, tmp_path, [project])
+    pending = restarted.deployment_queue.pending(kind="optimization")
+    assert [item["id"] for item in pending] == [queue_id]
+
+    restarted._run_optimization(queue_id)
+
+    active = revisions.active_info(
+        rule_id, committed["rule"]["definition"]["source_path"])
+    assert active["compiler"] == "paw-ft-bs48"
+    assert restarted.deployment_queue.get(queue_id)["status"] == "succeeded"
+
+
+def test_new_explicit_deploy_cancels_stale_automatic_promotion(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "stale-optimization"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Stale optimization")
+    automatic = daemon.prepare_rule_deployment({
+        "rule_id": rule_id,
+        "source": source,
+        "project_root": str(project),
+        "source_changed": True,
+        "expected_active_hash": "",
+        "compiler_mode": revisions.AUTOMATIC_COMPILER_MODE,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+    })
+    first = daemon.commit_rule_deployment(automatic["token"])
+    stale_queue_id = first["optimization"]["id"]
+    changed = source.replace(
+        "Decide whether this input should be shown to the user.",
+        "Decide whether this newer revision should be shown to the user.",
+    )
+    explicit = daemon.prepare_rule_deployment({
+        "rule_id": rule_id,
+        "source": changed,
+        "project_root": str(project),
+        "source_changed": True,
+        "expected_active_hash": first["active"]["source_hash"],
+        "compiler": "future-standard",
+        "compiler_mode": revisions.EXPLICIT_COMPILER_MODE,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+    })
+    second = daemon.commit_rule_deployment(explicit["token"])
+
+    assert daemon.deployment_queue.get(stale_queue_id)["status"] == "cancelled"
+    daemon._run_optimization(stale_queue_id)
+    active = revisions.active_info(
+        rule_id, second["rule"]["definition"]["source_path"])
+    assert active["behavior_hash"] == revisions.behavior_hash(changed)
+    assert active["compiler_mode"] == revisions.EXPLICIT_COMPILER_MODE
+    assert active["compiler"] == "future-standard"
 
 
 def test_deploy_anyway_warning_is_stored_with_revision(
@@ -846,7 +1085,7 @@ def test_deploy_anyway_warning_is_stored_with_revision(
     assert committed["active"]["warnings"] == [warning]
 
 
-def test_validation_cases_run_before_deploy_and_persist(
+def test_validation_cases_persist_without_running_during_deploy(
     monkeypatch, tmp_path
 ):
     project = tmp_path / "validation-project"
@@ -862,6 +1101,7 @@ def test_validation_cases_run_before_deploy_and_persist(
             "expected": "WARNING",
         },
     ]
+    runs_before = daemon.runtime.runs
     prepared = daemon.prepare_rule_deployment({
         "rule_id": rule_id,
         "source": source,
@@ -876,15 +1116,16 @@ def test_validation_cases_run_before_deploy_and_persist(
     })
 
     assert prepared["ok"], prepared
-    assert prepared["validation"]["passed"] == 2
+    assert prepared["validation"]["total"] == 0
+    assert daemon.runtime.runs == runs_before
     committed = daemon.commit_rule_deployment(prepared["token"])
-    assert committed["validation"]["passed"] == 2
+    assert committed["validation"]["total"] == 0
+    assert daemon.runtime.runs == runs_before
     daemon.validation_results = ValidationResultStore(
         tmp_path / "validation-results.db")
     cached = daemon.cached_validation_results(
         rule_id, str(project), source, cases)
-    assert cached["validation"]["matched"] == 2
-    assert cached["validation"]["passed"] == 2
+    assert cached["validation"]["matched"] == 0
     assert cached["target"]["compiler"] == "future-standard"
     source_path = committed["rule"]["definition"]["source_path"]
     assert rules_api.validation_cases_for_path(source_path) == [
@@ -898,7 +1139,7 @@ def test_validation_cases_run_before_deploy_and_persist(
     ]
 
 
-def test_failed_validation_requires_explicit_deploy_anyway(
+def test_failed_validation_does_not_gate_deployment(
     monkeypatch, tmp_path
 ):
     project = tmp_path / "failed-validation"
@@ -923,17 +1164,21 @@ def test_failed_validation_requires_explicit_deploy_anyway(
         }],
     }
 
-    failed = daemon.prepare_rule_deployment(request)
-    assert not failed["ok"]
-    assert failed["validation_failed"]
-    assert failed["validation"]["results"][0]["actual"] == "OK"
-
-    request["allow_failed_validation"] = True
+    tested = daemon.validate_rule_cases(
+        rule_id,
+        str(project),
+        source,
+        request["validation_cases"],
+    )
+    assert tested["validation"]["passed"] == 0
+    runs_after_test = daemon.runtime.runs
     prepared = daemon.prepare_rule_deployment(request)
     assert prepared["ok"]
+    assert prepared["validation"]["total"] == 0
+    assert daemon.runtime.runs == runs_after_test
 
 
-def test_deploy_never_runs_validation_without_explicit_policy(
+def test_deploy_never_runs_validation_for_any_policy(
     monkeypatch, tmp_path
 ):
     project = tmp_path / "explicit-validation"
@@ -956,17 +1201,12 @@ def test_deploy_never_runs_validation_without_explicit_policy(
     }
 
     runs_before = daemon.runtime.runs
-    skipped = daemon.prepare_rule_deployment({
-        **request, "validation_policy": "skip"})
-    assert skipped["ok"]
-    assert skipped["validation"]["skipped"]
-    assert daemon.runtime.runs == runs_before
-
-    missing = daemon.prepare_rule_deployment({
-        **request, "validation_policy": "cached"})
-    assert not missing["ok"]
-    assert missing["validation_missing"]
-    assert daemon.runtime.runs == runs_before
+    for policy in ("skip", "cached", "allow_failed", "run"):
+        prepared = daemon.prepare_rule_deployment({
+            **request, "validation_policy": policy})
+        assert prepared["ok"]
+        assert prepared["validation"]["total"] == 0
+        assert daemon.runtime.runs == runs_before
 
 
 def test_finetuned_build_does_not_run_validation_cases(

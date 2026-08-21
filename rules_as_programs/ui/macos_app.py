@@ -203,6 +203,10 @@ class MacOSController(NSObject):
         self.inbox_mode = "open"
         self.history_groups: list[dict[str, Any]] = []
         self.history_loading = False
+        self.expanded_occurrence_fingerprint = ""
+        self.occurrences_by_fingerprint: dict[
+            str, list[dict[str, Any]]] = {}
+        self.occurrences_loading: set[str] = set()
         self.selected_finding: dict[str, Any] | None = None
         self.finding_detail: dict[str, Any] | None = None
         self.detail_loading = False
@@ -791,6 +795,74 @@ class MacOSController(NSObject):
 
     # --- finding actions ------------------------------------------------
     @objc.python_method
+    def toggle_occurrences(self, group: dict[str, Any]) -> None:
+        fingerprint = str(group.get("fingerprint", ""))
+        if not fingerprint:
+            return
+        if self.expanded_occurrence_fingerprint == fingerprint:
+            self.expanded_occurrence_fingerprint = ""
+            self._render()
+            return
+        self.expanded_occurrence_fingerprint = fingerprint
+        if fingerprint in self.occurrences_by_fingerprint:
+            self._render()
+            return
+        self.occurrences_loading.add(fingerprint)
+        self._render()
+
+        def complete(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                self.occurrences_loading.discard(fingerprint)
+                if result.get("ok"):
+                    self.occurrences_by_fingerprint[fingerprint] = list(
+                        result.get("occurrences") or [])
+                else:
+                    self._set_banner(
+                        result.get("error", "Occurrences could not be loaded."))
+                self._render()
+            _on_main(apply)
+
+        self.model.query({
+            "type": "finding_occurrences",
+            "fingerprint": fingerprint,
+            "limit": 100,
+        }, complete)
+
+    @objc.python_method
+    def done_occurrence(self, finding: dict[str, Any]) -> None:
+        finding_id = int(finding.get("id", 0) or 0)
+        fingerprint = str(finding.get("fingerprint", ""))
+        if not finding_id:
+            return
+
+        def complete(result: dict[str, Any]) -> None:
+            def apply() -> None:
+                if not result.get("ok"):
+                    self._set_banner(
+                        result.get("error", "Occurrence could not be reviewed."))
+                    return
+                cached = self.occurrences_by_fingerprint.get(fingerprint, [])
+                remaining = [
+                    item for item in cached
+                    if int(item.get("id", 0) or 0) != finding_id
+                ]
+                if cached:
+                    self.occurrences_by_fingerprint[fingerprint] = remaining
+                if not remaining and (
+                    self.expanded_occurrence_fingerprint == fingerprint
+                ):
+                    self.expanded_occurrence_fingerprint = ""
+                self._set_banner("Reviewed one occurrence.")
+                self.model.refresh()
+            _on_main(apply)
+
+        self.model.perform({
+            "type": "review",
+            "ids": [finding_id],
+            "reason": "reviewed",
+        }, complete)
+
+    @objc.python_method
     def done_group(self, group: dict[str, Any]) -> None:
         def complete(result: dict[str, Any]) -> None:
             def apply() -> None:
@@ -808,6 +880,21 @@ class MacOSController(NSObject):
                 "fingerprint": group.get("fingerprint", ""),
             },
             complete,
+        )
+
+    @objc.python_method
+    def confirm_review_all_occurrences(
+        self, group: dict[str, Any]
+    ) -> None:
+        count = max(2, int(group.get("occurrence_count", 2) or 2))
+        self.request_confirmation(
+            f"Review all {count} occurrences?",
+            (
+                "Every currently open occurrence in this group will move to "
+                "Reviewed. New occurrences will still appear normally."
+            ),
+            f"Review All {count}",
+            lambda: self.done_group(group),
         )
 
     @objc.python_method
@@ -880,7 +967,7 @@ class MacOSController(NSObject):
         self.model.perform(
             {
                 "type": "review",
-                "fingerprint": group.get("fingerprint", ""),
+                "ids": [int(group.get("id", 0))],
                 "reason": reason,
             },
             lambda result: _on_main(lambda: (
@@ -894,6 +981,8 @@ class MacOSController(NSObject):
     def show_finding_menu(self, sender, group: dict[str, Any]) -> None:
         history = self.inbox_mode == "history"
         project_name = Path(str(group.get("project_root", ""))).name
+        occurrence_count = max(
+            1, int(group.get("occurrence_count", 1) or 1))
         items: list[tuple[str, Any, bool]] = [
             ("Open Finding", lambda: self.open_finding(group), True),
             (
@@ -902,6 +991,12 @@ class MacOSController(NSObject):
                 True,
             ),
         ]
+        if not history and occurrence_count > 1:
+            items.append((
+                f"View {occurrence_count} Occurrences",
+                lambda: self.toggle_occurrences(group),
+                True,
+            ))
         if group.get("review_reason") != "rule_deleted":
             items.append((
                 "Edit Rule…",
@@ -930,28 +1025,38 @@ class MacOSController(NSObject):
             else:
                 items.append(("Reopen finding", lambda: self._reopen(group), True))
         else:
+            review_items: list[tuple[str, Any, bool]] = [
+                (
+                    "Review This Occurrence",
+                    lambda: self.done_occurrence(group),
+                    True,
+                ),
+                (
+                    "False Positive",
+                    lambda: self._review_with_reason(
+                        group, "false_positive"),
+                    True,
+                ),
+                (
+                    "Acceptable Risk",
+                    lambda: self._review_with_reason(
+                        group, "acceptable_risk"),
+                    True,
+                ),
+            ]
+            if occurrence_count > 1:
+                review_items.extend([
+                    ("-", lambda: None, True),
+                    (
+                        f"Review All {occurrence_count} Occurrences…",
+                        lambda: self.confirm_review_all_occurrences(group),
+                        True,
+                    ),
+                ])
             items.extend([
                 (
                     "Review",
-                    [
-                        (
-                            "Mark Reviewed",
-                            lambda: self.done_group(group),
-                            True,
-                        ),
-                        (
-                            "False Positive",
-                            lambda: self._review_with_reason(
-                                group, "false_positive"),
-                            True,
-                        ),
-                        (
-                            "Acceptable Risk",
-                            lambda: self._review_with_reason(
-                                group, "acceptable_risk"),
-                            True,
-                        ),
-                    ],
+                    review_items,
                     True,
                 ),
                 (

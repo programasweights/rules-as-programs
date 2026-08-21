@@ -369,7 +369,7 @@ class PersistentPopoverRenderer:
     def _review_finding(self, sender: NSButton, finding: dict[str, Any]) -> None:
         self._set_review_title(
             sender, "✓", size=17, color=NSColor.systemGreenColor())
-        self.controller.done_group(finding)
+        self.controller.done_occurrence(finding)
 
     def _review_project(self, sender: NSButton, project_root: str) -> None:
         self._set_review_title(
@@ -709,6 +709,46 @@ class PersistentPopoverRenderer:
                 if item.get("project_root") == selected
             ]
         rows: list[dict[str, Any]] = []
+
+        def append_finding(
+            value: dict[str, Any],
+            row_mode: str,
+            *,
+            nested: bool = False,
+        ) -> None:
+            rows.append({
+                "type": "finding",
+                "value": value,
+                "mode": row_mode,
+                "nested": nested,
+            })
+            fingerprint = str(value.get("fingerprint", ""))
+            if (
+                int(value.get("occurrence_count", 1) or 1) <= 1
+                or fingerprint != str(getattr(
+                    self.controller,
+                    "expanded_occurrence_fingerprint",
+                    "",
+                ))
+            ):
+                return
+            loading = getattr(
+                self.controller, "occurrences_loading", set())
+            if fingerprint in loading:
+                rows.append({
+                    "type": "occurrence_loading",
+                    "value": value,
+                })
+                return
+            occurrences = getattr(
+                self.controller, "occurrences_by_fingerprint", {}
+            ).get(fingerprint, [])
+            rows.extend({
+                "type": "occurrence",
+                "value": occurrence,
+                "mode": "occurrence",
+                "nested": True,
+            } for occurrence in occurrences)
         if attention:
             rows.append({
                 "type": "section", "title": "Needs reply",
@@ -770,25 +810,21 @@ class PersistentPopoverRenderer:
                 stale_by_rule.setdefault(
                     str(value.get("rule_id", "")), []).append(value)
             for value in current:
-                rows.append({
-                    "type": "finding", "value": value, "mode": mode,
-                })
+                append_finding(value, mode)
                 for older in stale_by_rule.pop(
                     str(value.get("rule_id", "")), []
                 ):
-                    rows.append({
-                        "type": "finding",
-                        "value": older,
-                        "mode": "stale" if mode == "open" else mode,
-                        "nested": True,
-                    })
+                    append_finding(
+                        older,
+                        "stale" if mode == "open" else mode,
+                        nested=True,
+                    )
             for remaining in stale_by_rule.values():
-                rows.extend({
-                    "type": "finding",
-                    "value": older,
-                    "mode": "stale" if mode == "open" else mode,
-                    "nested": False,
-                } for older in remaining)
+                for older in remaining:
+                    append_finding(
+                        older,
+                        "stale" if mode == "open" else mode,
+                    )
         if not rows:
             rows.append({
                 "type": "empty",
@@ -859,6 +895,8 @@ class PersistentPopoverRenderer:
             "issue": 78,
             "attention": 70,
             "finding": 58,
+            "occurrence": 54,
+            "occurrence_loading": 40,
             "rule": 64,
             "rule_error": 72,
             "project": 72,
@@ -909,7 +947,7 @@ class PersistentPopoverRenderer:
                     accessibility=(
                         f"Actions for {_project_name(project_root)}"),
                 ))
-        elif kind == "finding":
+        elif kind in ("finding", "occurrence"):
             severity = str(value.get("severity", "info"))
             severity_label = {
                 "critical": "Critical",
@@ -956,14 +994,15 @@ class PersistentPopoverRenderer:
             occurrences = max(1, int(value.get("occurrence_count", 1) or 1))
             if value.get("stale"):
                 subtitle_parts = ["Older revision", "Needs recheck"]
+            elif kind == "occurrence":
+                subtitle_parts = []
+            elif occurrences > 1:
+                subtitle_parts = [f"{occurrences} occurrences"]
             else:
-                subtitle_parts = [
-                    f"{occurrences} occurrence"
-                    f"{'s' if occurrences != 1 else ''}"
-                ]
+                subtitle_parts = []
             if preview:
                 subtitle_parts.append(f"“{preview}”")
-            subtitle = " · ".join(subtitle_parts)
+            subtitle = " · ".join(subtitle_parts) or "Finding"
             subtitle_field = self._label(
                 subtitle,
                 (text_leading, 31, 232, 16),
@@ -1004,20 +1043,47 @@ class PersistentPopoverRenderer:
                     severity_image.centerYAnchor().constraintEqualToAnchor_(
                         title_field.centerYAnchor()),
                 ])
-            if row.get("mode") in ("open", "stale"):
+            if row.get("mode") in ("open", "stale", "occurrence"):
                 cell.addSubview_(self._icon_button(
                     "ellipsis", "…", (360, 15, 34, 28),
                     lambda sender, item=value:
                     self.controller.show_finding_menu(sender, item),
                     accessibility=f"Actions for {title}"))
-                review = self._button(
-                    "✓", (320, 15, 34, 28),
-                    lambda sender, item=value:
-                    self._review_finding(sender, item),
-                    role="icon",
-                    accessibility=f"Mark {title} reviewed")
-                self._set_review_title(review, "✓", size=17)
-                cell.addSubview_(review)
+                if kind == "finding" and occurrences > 1:
+                    fingerprint = str(value.get("fingerprint", ""))
+                    expanded = bool(
+                        fingerprint
+                        and fingerprint == str(getattr(
+                            self.controller,
+                            "expanded_occurrence_fingerprint",
+                            "",
+                        ))
+                    )
+                    disclosure_action = "Hide" if expanded else "Show"
+                    disclosure = self._button(
+                        f"{occurrences} {'▾' if expanded else '▸'}",
+                        (312, 8, 44, 42),
+                        lambda _sender, item=value:
+                        self.controller.toggle_occurrences(item),
+                        role="flat",
+                        accessibility=(
+                            f"{disclosure_action} {occurrences} "
+                            f"occurrences for {title}"),
+                    )
+                    disclosure.setToolTip_(
+                        f"{disclosure_action} {occurrences} individually "
+                        "reviewable occurrences")
+                    cell.addSubview_(disclosure)
+                else:
+                    review = self._button(
+                        "✓", (320, 15, 34, 28),
+                        lambda sender, item=value:
+                        self._review_finding(sender, item),
+                        role="icon",
+                        accessibility=f"Mark {title} occurrence reviewed")
+                    self._set_review_title(review, "✓", size=17)
+                    review.setToolTip_("Review this occurrence")
+                    cell.addSubview_(review)
             else:
                 cell.addSubview_(self._icon_button(
                     "ellipsis", "…", (360, 15, 34, 28),
@@ -1028,6 +1094,18 @@ class PersistentPopoverRenderer:
                 f"{severity_label}, {title}, "
                 f"{subtitle}, "
                 f"{_relative_time(value.get('last_seen') or value.get('ts', 0))}")
+        elif kind == "occurrence_loading":
+            cell.addSubview_(self._label(
+                "Loading occurrences…",
+                (56, 10, 240, 20),
+                size=10,
+                color=NSColor.secondaryLabelColor(),
+            ))
+            spinner = NSProgressIndicator.alloc().initWithFrame_(
+                NSMakeRect(28, 10, 18, 18))
+            spinner.setStyle_(NSProgressIndicatorStyleSpinning)
+            spinner.startAnimation_(None)
+            cell.addSubview_(spinner)
         elif kind == "issue":
             cell.addSubview_(self._label(
                 str(value.get("summary", "Monitoring issue")),
@@ -1236,7 +1314,8 @@ class PersistentPopoverRenderer:
 
     @staticmethod
     def row_is_actionable(row: dict[str, Any]) -> bool:
-        return row.get("type") in ("finding", "rule", "project")
+        return row.get("type") in (
+            "finding", "occurrence", "rule", "project")
 
     def separator_config(self, index: int) -> tuple[bool, float]:
         # The popover groups rows through spacing and typography. Content
@@ -1255,7 +1334,7 @@ class PersistentPopoverRenderer:
 
     def _activate_row(self, model: dict[str, Any]) -> None:
         value = model.get("value") or {}
-        if model.get("type") == "finding":
+        if model.get("type") in ("finding", "occurrence"):
             self.controller.open_finding(value)
         elif model.get("type") == "rule":
             self.controller.edit_rule(value)

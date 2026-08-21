@@ -122,6 +122,7 @@ def test_stale_findings_stay_with_project_and_are_reviewable():
     snapshot = demo_snapshot()
     project = next(iter(snapshot.findings_by_project))
     current = dict(snapshot.findings_by_project[project][0])
+    current["fingerprint"] = "current-revision"
     current["evaluation"] = {
         "input": {"text": "Current evaluated input"}}
     current["occurrence_count"] = 3
@@ -131,6 +132,7 @@ def test_stale_findings_stay_with_project_and_are_reviewable():
         "fingerprint": "older-revision",
         "stale": True,
         "last_seen": float(current.get("last_seen", time.time())) - 60,
+        "occurrence_count": 1,
         "evaluation": {"input": {"text": "Older evaluated input"}},
     }
     snapshot.data["findings_by_project"][project] = [current, stale]
@@ -158,6 +160,24 @@ def test_stale_findings_stay_with_project_and_are_reviewable():
     assert project_row["count"] == 2
     finding_rows = [
         row for row in rows if row.get("type") == "finding"]
+    current_cell = renderer.row_view(finding_rows[0])
+    collapsed_disclosure = next(
+        control for control in _walk(current_cell)
+        if isinstance(control, NSButton)
+        and str(control.accessibilityLabel() or "").startswith("Show 3 ")
+    )
+    assert str(collapsed_disclosure.title()) == "3 ▸"
+    assert collapsed_disclosure.frame().size.height >= 42
+    assert any(
+        isinstance(control, NSButton)
+        and str(control.accessibilityLabel() or "").startswith("Show 3 ")
+        for control in _walk(current_cell)
+    )
+    assert not any(
+        isinstance(control, NSButton)
+        and str(control.accessibilityLabel() or "").startswith("Mark ")
+        for control in _walk(current_cell)
+    )
     assert finding_rows[1]["mode"] == "stale"
     assert finding_rows[1]["nested"]
     stale_cell = renderer.row_view(finding_rows[1])
@@ -165,6 +185,36 @@ def test_stale_findings_stay_with_project_and_are_reviewable():
         isinstance(control, NSButton)
         and str(control.accessibilityLabel() or "").startswith("Mark ")
         for control in _walk(stale_cell)
+    )
+    controller.expanded_occurrence_fingerprint = current["fingerprint"]
+    controller.occurrences_loading = set()
+    controller.occurrences_by_fingerprint = {
+        current["fingerprint"]: [
+            {**current, "id": 201, "occurrence_count": 1},
+            {**current, "id": 200, "occurrence_count": 1},
+        ]
+    }
+    expanded_rows = renderer._finding_models()
+    expanded_group_cell = renderer.row_view(finding_rows[0])
+    expanded_disclosure = next(
+        control for control in _walk(expanded_group_cell)
+        if isinstance(control, NSButton)
+        and str(control.accessibilityLabel() or "").startswith("Hide 3 ")
+    )
+    assert str(expanded_disclosure.title()) == "3 ▾"
+    occurrence_rows = [
+        row for row in expanded_rows if row.get("type") == "occurrence"]
+    assert [row["value"]["id"] for row in occurrence_rows] == [201, 200]
+    occurrence_cell = renderer.row_view(occurrence_rows[0])
+    assert any(
+        isinstance(control, NSButton)
+        and str(control.accessibilityLabel() or "").startswith("Mark ")
+        for control in _walk(occurrence_cell)
+    )
+    assert not any(
+        isinstance(control, NSTextField)
+        and str(control.stringValue()).startswith("1 occurrence")
+        for control in _walk(occurrence_cell)
     )
     assert any(
         isinstance(control, NSTextField)
@@ -330,7 +380,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert {
         str(button.accessibilityLabel() or "") for button in finding_buttons
     } >= {
-        f"Mark {group['rule_title']} reviewed",
+            f"Mark {group['rule_title']} occurrence reviewed",
         f"Actions for {group['rule_title']}",
     }
     action_button = next(
@@ -593,6 +643,20 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert inspector.input_view.frame().size.width <= (
         inspector.input_scroll.contentSize().width + 1)
     inspector._refresh_input()
+    original_input = inspector.presentation["input_text"]
+    original_typography = inspector.presentation["input_typography"]
+    inspector.presentation["input_text"] = (
+        "rsync -avz --progress \\\n"
+        "  /Users/example/project/ user@host:~/project/")
+    inspector.presentation["input_typography"] = "monospace"
+    inspector._frame_restored = False
+    inspector._user_resized = False
+    inspector._refresh_input()
+    assert inspector.window.contentView().frame().size.width == 560
+    assert not inspector.input_scroll.hasHorizontalScroller()
+    inspector.presentation["input_text"] = original_input
+    inspector.presentation["input_typography"] = original_typography
+    inspector._refresh_input()
     inspector.show_context()
     assert inspector.detail_page.isHidden()
     assert not inspector.context_page.isHidden()
@@ -715,10 +779,18 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     assert {"Open Finding", "Edit Rule…", "Review", "Developer"} <= set(
         finding_actions)
     assert [item[0] for item in finding_actions["Review"]] == [
-        "Mark Reviewed", "False Positive", "Acceptable Risk"]
+        "Review This Occurrence", "False Positive", "Acceptable Risk"]
     assert any(
         title.startswith("Mute This Rule in ")
         for title in finding_actions)
+    captured.clear()
+    controller.show_finding_menu(
+        None, {**group, "occurrence_count": 3})
+    multi_actions = {
+        title: callback for title, callback, _enabled in captured}
+    assert "Review All 3 Occurrences…" in [
+        item[0] for item in multi_actions["Review"]]
+    assert "View 3 Occurrences" in multi_actions
 
     deleted_group = {
         "id": 99,
@@ -1334,13 +1406,15 @@ def test_existing_clean_rule_shows_disabled_deployed_action(monkeypatch):
     assert not document.deploy_button.isHidden()
     assert document.deploy_button.superview() is not None
     assert [row["name"] for row in compiler_rows] == [
-        "future-standard", "future-finetune", "future-compact"]
+        "__automatic__", "future-standard",
+        "future-finetune", "future-compact"]
     assert compiler_rows[0]["is_active"]
     assert not compiler_rows[0]["can_build"]
     assert compiler_rows[1]["can_build"]
-    assert compiler_rows[1]["action"] == "build"
+    assert compiler_rows[1]["action"] == "select"
     assert compiler_rows[2]["can_build"]
-    assert compiler_rows[2]["action"] == "select"
+    assert compiler_rows[2]["action"] == "build"
+    assert compiler_rows[3]["action"] == "select"
     assert compiler_accessory.frame().size.width == 560
     document._finetune_status = {
         "job": {
@@ -1411,11 +1485,11 @@ def test_existing_clean_rule_shows_disabled_deployed_action(monkeypatch):
     document._refresh_ui()
     assert str(document.deploy_button.title()) == "Deploy When Ready"
     assert document.deploy_button.isEnabled()
-    document._allow_untested_validation_hash = (
-        document._current_source_hash)
     document.deploy()
     assert model.requests[-1]["type"] == "queue_deployment"
-    assert model.requests[-1]["validation_policy"] == "skip"
+    assert model.requests[-1]["compiler_mode"] == (
+        revisions.EXPLICIT_COMPILER_MODE)
+    assert "validation_policy" not in model.requests[-1]
     document._apply_deployment_queue({
         "id": "queue",
         "rule_id": rule_id,

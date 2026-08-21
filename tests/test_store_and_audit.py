@@ -157,6 +157,26 @@ def test_review_by_fingerprint_handles_all_hidden_occurrences(tmp_path):
     assert store.by_project() == {}
 
 
+def test_reviewing_one_occurrence_keeps_group_until_all_are_reviewed(
+    tmp_path
+):
+    store = VerdictStore(tmp_path / "verdicts.db")
+    project = str(tmp_path)
+    first = store.record(_verdict(project))
+    second = store.record(_verdict(project))
+    group = store.by_project()[project][0]
+    assert group["occurrence_count"] == 2
+    assert group["id"] == second
+
+    assert store.acknowledge(ids=[second], reason="reviewed") == 1
+    remaining = store.by_project()[project][0]
+    assert remaining["occurrence_count"] == 1
+    assert remaining["id"] == first
+
+    assert store.acknowledge(ids=[first], reason="reviewed") == 1
+    assert store.by_project() == {}
+
+
 def test_development_reset_removes_db_ledgers_and_audits(monkeypatch, tmp_path):
     state = tmp_path / "state"
     project = tmp_path / "project"

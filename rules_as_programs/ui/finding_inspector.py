@@ -16,6 +16,7 @@ from AppKit import (
     NSControlStateValueOff,
     NSControlStateValueOn,
     NSFont,
+    NSFontAttributeName,
     NSImageView,
     NSLayoutConstraint,
     NSLineBreakByTruncatingTail,
@@ -43,7 +44,13 @@ from AppKit import (
     NSWindowTitleHidden,
     NSWorkspace,
 )
-from Foundation import NSMakeRect, NSMakeSize, NSObject, NSUserDefaults
+from Foundation import (
+    NSAttributedString,
+    NSMakeRect,
+    NSMakeSize,
+    NSObject,
+    NSUserDefaults,
+)
 from PyObjCTools import AppHelper
 
 from .. import config
@@ -201,7 +208,7 @@ class RAPFindingInspector(NSObject):
             NSBackingStoreBuffered, False)
         self.window.setReleasedWhenClosed_(False)
         self.window.setDelegate_(self)
-        self.window.setContentMinSize_(NSMakeSize(640, 240))
+        self.window.setContentMinSize_(NSMakeSize(560, 240))
         self.window.setTitle_("")
         self.window.setTitleVisibility_(NSWindowTitleHidden)
         self.window.setTitlebarAppearsTransparent_(True)
@@ -209,7 +216,7 @@ class RAPFindingInspector(NSObject):
             str(config.state_dir()).encode("utf-8")
         ).hexdigest()[:12]
         self._frame_autosave_name = (
-            f"RulesAsPrograms.FindingInspector.{state_key}")
+            f"RulesAsPrograms.FindingInspector.v2.{state_key}")
         self._frame_restored = bool(
             self.window.setFrameUsingName_(self._frame_autosave_name))
         self.window.setFrameAutosaveName_(self._frame_autosave_name)
@@ -622,7 +629,7 @@ class RAPFindingInspector(NSObject):
             target_width = (
                 760.0
                 if self.input_should_wrap()
-                else max(640.0, min(900.0, self._measured_input_width + 44))
+                else max(560.0, min(900.0, self._measured_input_width + 44))
             )
             self._adjusting_frame = True
             self.window.setContentSize_(
@@ -664,19 +671,33 @@ class RAPFindingInspector(NSObject):
                 max(width, float(editor.frame().size.width)), height))
         layout = editor.layoutManager()
         layout.ensureLayoutForTextContainer_(container)
-        glyph_range = layout.glyphRangeForTextContainer_(container)
-        used = layout.boundingRectForGlyphRange_inTextContainer_(
-            glyph_range, container)
+        layout.glyphRangeForTextContainer_(container)
+        # Resolving the glyph range forces non-contiguous AppKit layout. The
+        # used rect then reports actual glyph bounds; the glyph bounding rect
+        # can incorrectly return our artificial 10M-point container width.
+        used = layout.usedRectForTextContainer_(container)
         inset = editor.textContainerInset()
         measured_height = max(
             24.0, float(used.size.height) + float(inset.height) * 2 + 4)
         document_width = width
         if not wrap:
+            attributes = {NSFontAttributeName: editor.font()}
+            natural_width = max(
+                (
+                    float(NSAttributedString.alloc(
+                    ).initWithString_attributes_(
+                        line or " ", attributes).size().width)
+                    for line in str(editor.string()).splitlines() or [""]
+                ),
+                default=0.0,
+            ) + float(inset.width) * 2 + 8
             document_width = max(
                 width,
-                float(used.size.width) + float(inset.width) * 2 + 8,
+                natural_width,
             )
-        self._measured_input_width = document_width
+            self._measured_input_width = natural_width
+        else:
+            self._measured_input_width = width
         scroll.setHasHorizontalScroller_(
             bool(not wrap and document_width > width + 1))
         editor.setFrameSize_(NSMakeSize(
@@ -710,7 +731,7 @@ class RAPFindingInspector(NSObject):
         if not (self._frame_restored or self._user_resized):
             self._adjusting_frame = True
             self.window.setContentSize_(NSMakeSize(
-                max(640, self.window.contentView().frame().size.width),
+                max(560, self.window.contentView().frame().size.width),
                 getattr(self, "_detail_height", 320)))
             self._adjusting_frame = False
 
@@ -769,7 +790,7 @@ class RAPFindingInspector(NSObject):
         if not (self._frame_restored or self._user_resized):
             self._adjusting_frame = True
             self.window.setContentSize_(NSMakeSize(
-                max(640, self.window.contentView().frame().size.width),
+                max(560, self.window.contentView().frame().size.width),
                 desired))
             self._adjusting_frame = False
 

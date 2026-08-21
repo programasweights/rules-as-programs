@@ -15,6 +15,9 @@ from .. import config
 
 _lock = threading.Lock()
 _VERSION = 1
+AUTOMATIC_COMPILER_MODE = "automatic"
+EXPLICIT_COMPILER_MODE = "explicit"
+COMPILER_MODES = {AUTOMATIC_COMPILER_MODE, EXPLICIT_COMPILER_MODE}
 
 
 def hash_source(source: str) -> str:
@@ -93,7 +96,59 @@ def active_info(
     if not info or info.get("id") != rule_id:
         return None
     cache_path = Path(info.get("cache_path", ""))
-    return dict(info) if cache_path.exists() else None
+    if not cache_path.exists():
+        return None
+    normalized = dict(info)
+    normalized["compiler_mode"] = _compiler_mode(
+        normalized.get("compiler_mode"))
+    normalized["artifacts"] = _normalized_artifacts(
+        normalized.get("artifacts"))
+    current = _artifact(
+        str(normalized.get("compiler", "")),
+        str(normalized.get("program_id", "")),
+        str(normalized.get("compiler_snapshot", "")),
+        created_at=float(normalized.get("activated_at", 0) or 0),
+    )
+    if current:
+        normalized["artifacts"].setdefault(current["key"], current)
+    return normalized
+
+
+def _compiler_mode(value: Any) -> str:
+    mode = str(value or AUTOMATIC_COMPILER_MODE)
+    return mode if mode in COMPILER_MODES else AUTOMATIC_COMPILER_MODE
+
+
+def artifact_key(compiler: str, compiler_snapshot: str = "") -> str:
+    return f"{compiler or 'default'}@{compiler_snapshot or 'unknown'}"
+
+
+def _artifact(
+    compiler: str,
+    program_id: str,
+    compiler_snapshot: str,
+    *,
+    created_at: float | None = None,
+) -> dict[str, Any] | None:
+    if not program_id:
+        return None
+    return {
+        "key": artifact_key(compiler, compiler_snapshot),
+        "compiler": compiler,
+        "compiler_snapshot": compiler_snapshot,
+        "program_id": program_id,
+        "created_at": float(created_at or time.time()),
+    }
+
+
+def _normalized_artifacts(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): dict(item)
+        for key, item in value.items()
+        if isinstance(item, dict) and item.get("program_id")
+    }
 
 
 def activate(
@@ -105,6 +160,7 @@ def activate(
     program_id: str | None = None,
     warnings: list[str] | None = None,
     compiler_snapshot: str | None = None,
+    compiler_mode: str | None = None,
 ) -> dict[str, Any]:
     digest = hash_source(source)
     cache_dir = config.revision_dir() / rule_id
@@ -118,23 +174,94 @@ def activate(
         )
         os.replace(temporary, cache_path)
     key = source_key(source_path)
-    info = {
-        "id": rule_id,
-        "source_path": key,
-        "source_hash": digest,
-        "behavior_hash": behavior_hash(source),
-        "cache_path": str(cache_path),
-        "activated_at": time.time(),
-        "compiler": compiler or "",
-        "program_id": program_id or "",
-        "warnings": list(warnings or []),
-        "compiler_snapshot": compiler_snapshot or "",
-    }
     with _lock:
         state = _load()
+        previous = state["sources"].get(key) or {}
+        source_behavior_hash = behavior_hash(source)
+        preserve_artifacts = bool(
+            previous.get("id") == rule_id
+            and str(previous.get("behavior_hash", "")) == source_behavior_hash
+        )
+        artifacts = (
+            _normalized_artifacts(previous.get("artifacts"))
+            if preserve_artifacts else {}
+        )
+        current_artifact = _artifact(
+            compiler or "",
+            program_id or "",
+            compiler_snapshot or "",
+        )
+        if current_artifact:
+            artifacts[current_artifact["key"]] = current_artifact
+        info = {
+            "id": rule_id,
+            "source_path": key,
+            "source_hash": digest,
+            "behavior_hash": source_behavior_hash,
+            "cache_path": str(cache_path),
+            "activated_at": time.time(),
+            "compiler": compiler or "",
+            "program_id": program_id or "",
+            "warnings": list(warnings or []),
+            "compiler_snapshot": compiler_snapshot or "",
+            "compiler_mode": _compiler_mode(
+                compiler_mode
+                if compiler_mode is not None
+                else previous.get("compiler_mode")),
+            "artifacts": artifacts,
+        }
         state["sources"][key] = info
         _save(state)
     return dict(info)
+
+
+def activate_artifact(
+    rule_id: str,
+    source_path: str | os.PathLike[str],
+    expected_behavior_hash: str,
+    *,
+    compiler: str,
+    program_id: str,
+    compiler_snapshot: str = "",
+    compiler_mode: str | None = None,
+    expected_compiler_mode: str | None = None,
+) -> dict[str, Any] | None:
+    """Atomically switch the active compiled artifact for one deployed behavior."""
+    key = source_key(source_path)
+    with _lock:
+        state = _load()
+        current = state["sources"].get(key)
+        if (
+            not current
+            or current.get("id") != rule_id
+            or str(current.get("behavior_hash", "")) != expected_behavior_hash
+        ):
+            return None
+        current_mode = _compiler_mode(current.get("compiler_mode"))
+        if (
+            expected_compiler_mode is not None
+            and current_mode != _compiler_mode(expected_compiler_mode)
+        ):
+            return None
+        artifact = _artifact(compiler, program_id, compiler_snapshot)
+        if artifact is None:
+            return None
+        artifacts = _normalized_artifacts(current.get("artifacts"))
+        artifacts[artifact["key"]] = artifact
+        updated = {
+            **current,
+            "compiler": compiler,
+            "program_id": program_id,
+            "compiler_snapshot": compiler_snapshot,
+            "compiler_mode": _compiler_mode(
+                compiler_mode
+                if compiler_mode is not None else current_mode),
+            "compiler_activated_at": time.time(),
+            "artifacts": artifacts,
+        }
+        state["sources"][key] = updated
+        _save(state)
+        return dict(updated)
 
 
 def restore_active(

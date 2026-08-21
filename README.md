@@ -83,6 +83,10 @@ Click it to open the native macOS popover:
 - Findings stay grouped by project. Older rule revisions appear directly below
   the matching current rule as **Older revision · Needs recheck**, with the
   evaluated-input preview, occurrence count, and the same review action.
+- A single-occurrence group shows no redundant count and has a direct review
+  action. Multi-occurrence groups expand into individually reviewable events;
+  reviewing one decrements the count, while **Review All N Occurrences…** is an
+  explicit confirmed menu action.
 - Project-level actions live under the project `…` menu. Finding `…` menus
   group review reasons and developer artifacts, and muting names the exact rule
   and project before confirmation.
@@ -101,14 +105,16 @@ Click it to open the native macOS popover:
   searchable. Advanced input mapping can override the trigger’s default JSON
   Pointer for one rule. Basic mode edits the exact PAW `SPEC`; RAP never appends
   or rewrites it. A simple warning checks for `OK` plus one finding level.
-- **Compilation…** separates the deployed compiler from the compiler selected
-  for the editor draft. Builds always fingerprint the current draft. **Deploy**
-  is the only action that changes the running rule: it commits the exact draft,
-  compiler snapshot, and compiled program together.
+- **Compilation…** defaults to **Automatic (Recommended)**. Deploy first commits
+  the exact draft with a fast compiler, then builds and warms a compatible
+  finetuned artifact in a durable low-priority background job. If the deployed
+  behavior is still current, RAP atomically promotes it. **Explicit compiler**
+  pins a catalog compiler instead; ready artifacts remain available for
+  rollback.
 - While a long compiler is building, **Deploy When Ready** persists an immutable
-  deployment intent. Validation cases never run implicitly: when results are
-  missing, the user chooses Run Tests or Deploy Without Testing before queuing.
-  Editing the draft, tests, compiler, or project scope cancels the queue;
+  deployment intent. Validation cases never run implicitly and never gate
+  deployment or automatic promotion; only **Run Tests** executes them. Editing
+  the draft, compiler, or project scope cancels the deployment queue;
   **Use & Deploy…** can switch to PAW's default compiler without stopping the
   background build. Once accepted, the editor dismisses and the tray monitors
   completion.
@@ -157,7 +163,8 @@ Action names are deliberately precise:
 - **Pause monitoring** stops all evaluation for its project or globally and
   requires confirmation.
 
-**Deploy** validates, tests, compiles, activates, and applies project coverage.
+**Deploy** validates the rule source, compiles, activates, and applies project
+coverage. It never runs Validation Cases.
 A failed deployment leaves the previous active revision and coverage running.
 `Command-S` can still save a local draft without deploying it.
 
@@ -243,10 +250,9 @@ never included in the PAW specification. Results are stored locally in
 `~/.cache/rules-as-programs/validation-results.db`, keyed by the exact spec,
 compiler snapshot, and individual case. Matching results therefore survive
 reopening the editor, while editing one case invalidates only that case.
-Only **Run Tests** executes cases. Deploy reuses exact matching results; known
-failures require Deploy Anyway, while missing/stale results prompt Run Tests or
-Deploy Without Testing. Observed Runs can be labelled and added as validation
-cases.
+Only **Run Tests** executes cases. Results are advisory: passing, failing,
+missing, or stale cases do not affect Deploy or Automatic compiler promotion.
+Observed Runs can be labelled and added as validation cases.
 
 Local PAW inference runs through one supervised subprocess. Calls are strictly
 serialized; a native timeout kills and replaces the worker so llama.cpp cannot

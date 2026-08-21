@@ -569,15 +569,20 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
     assert "expected OK, INFO, WARNING, or CRITICAL" in errors[0]
 
 
-def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
+def test_active_rule_program_id_is_used_by_default_paw_calls(tmp_path):
     class TrackingRuntime(FakeRuntime):
         def __init__(self):
             super().__init__(output="WARNING")
             self.compilers = []
+            self.program_ids = []
 
         def program_id_for_spec(self, _spec, compiler=None):
             self.compilers.append(compiler)
             return "program"
+
+        def run(self, program_id, _text):
+            self.program_ids.append(program_id)
+            return self.output
 
     runtime = TrackingRuntime()
     project = str(tmp_path)
@@ -601,6 +606,7 @@ def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
         compiler="paw-ft-bs48",
+        program_id="finetuned-program",
     )
     engine = Engine(
         runtime,
@@ -610,4 +616,5 @@ def test_active_rule_compiler_is_used_by_default_paw_calls(tmp_path):
     )
 
     assert engine.evaluate(rule, ledger, event) is not None
-    assert runtime.compilers == ["paw-ft-bs48"]
+    assert runtime.compilers == []
+    assert runtime.program_ids == ["finetuned-program"]

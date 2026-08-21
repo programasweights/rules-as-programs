@@ -427,11 +427,22 @@ class VerdictStore:
                 "SELECT * FROM verdicts WHERE id=?", (finding_id,)).fetchone()
         return self._decode(row) if row else None
 
-    def occurrences(self, fingerprint: str, limit: int = 100) -> list[dict[str, Any]]:
+    def occurrences(
+        self,
+        fingerprint: str,
+        limit: int = 100,
+        *,
+        include_reviewed: bool = True,
+    ) -> list[dict[str, Any]]:
+        reviewed_clause = "" if include_reviewed else (
+            " AND acknowledged=0 AND suppressed=0")
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                """SELECT * FROM verdicts WHERE fingerprint=?
-                   ORDER BY ts DESC LIMIT ?""", (fingerprint, limit)).fetchall()
+                f"""SELECT * FROM verdicts
+                    WHERE fingerprint=?{reviewed_clause}
+                    ORDER BY ts DESC LIMIT ?""",
+                (fingerprint, limit),
+            ).fetchall()
         return [self._decode(row) for row in rows]
 
     def occurrence_count(self, fingerprint: str) -> int:

@@ -115,6 +115,9 @@ plus any you converted.
 - The Findings list keeps older-revision findings beneath their project and
   matching current rule, with a preview, occurrence count, and consistent
   review control. Project and advanced finding actions live in `…` menus.
+- Grouping never implies bulk review: one-occurrence rows have a direct check,
+  while multi-occurrence rows disclose individually reviewable events.
+  **Review All N Occurrences…** must remain explicit and confirmed.
 - The finding Inspector wraps prose by default and leaves structured
   commands/code/JSON unwrapped. **… → Line Wrapping** persists an Auto,
   Always, or Never override without changing copied raw input.
