@@ -3,8 +3,9 @@
 You are helping a user add **Rules as Programs** to their existing Cursor
 project. Rules as Programs turns each agent rule into an independent Python
 function (PAW-backed for fuzzy judgment) that audits the agent's reasoning and
-actions and reports violations in a top-right menu-bar item. v1 is
-**non-blocking** (observability only). Follow these steps.
+actions and reports violations. v1 is **non-blocking** (observability only).
+macOS has the full native menu-bar inbox and Rule Editor; Linux and Windows use
+a reduced tray menu. Follow these steps.
 
 ## 1. Install the package
 
@@ -19,9 +20,16 @@ This installs Rules as Programs directly from GitHub. It also installs
 [ProgramAsWeights](https://programasweights.com) (`programasweights`), which
 compiles each rule's natural-language spec into a small local neural program.
 The ProgramAsWeights package index supplies prebuilt `llama-cpp-python` wheels
-for local inference; it does not host Rules as Programs. If `pip` is not the
-right environment manager here, use the project's manager (e.g. `pipx install`,
-`uv pip install`, `poetry add`) with the same `--extra-index-url`.
+for local inference; it does not host Rules as Programs. For an isolated CLI
+installation, the equivalent pipx form is:
+
+```bash
+pipx install "git+https://github.com/programasweights/rules-as-programs.git" \
+  --pip-args="--extra-index-url https://pypi.programasweights.com/simple/"
+```
+
+Python 3.10 or newer is required. Use an environment that will remain available
+because the hook and login-autostart entry retain its interpreter path.
 
 ## 2. Initialize
 
@@ -40,10 +48,12 @@ launches the daemon + menu-bar item.
 
 ## 3. Convert the user's existing rules (do this well)
 
-This is the highest-value step. For each existing plain-text rule you find in
+This is the highest-value step. For each independent rule expressed in
 `.cursor/rules/*.mdc`, `.cursor/rules/*.md`, `AGENTS.md`, or `.cursorrules`,
-author a real rule program. `rap init --scan` will have created *disabled* `.py`
-drafts in `.cursor/rules-as-programs/rules/` as a starting point; upgrade each.
+author a real rule program. `rap init --scan` creates one *disabled* rough draft
+per top-level source document from a short excerpt; it does not split documents
+into rules. Treat those drafts as starting points, create separate programs
+where needed, and do not rerun the scanner because it can create duplicates.
 
 A rule defaults to a managed fuzzy description in the UI. Its canonical source
 is one `@rule`-decorated Python function under `rules/<id>/rule.py`; Advanced
@@ -79,12 +89,20 @@ For each rule:
 2. Write a tight `SPEC` ending in `Return ONLY one of: ...` with 3-5 `Input:`/
    `Output:` examples containing that exact scalar field. `rap rules test`
    parses these cases directly; do not duplicate them
-   in a separate `EXAMPLES` list.
+   in a separate `EXAMPLES` list. Never put secrets in the `SPEC` or examples:
+   PAW sends the specification to its compile service.
 3. Test and iterate until it passes: `rap rules test <id>`. Adjust the SPEC
    wording/examples, re-test. This is the PAW spec-engineering loop.
-4. When it behaves well, enable it: `rap rules enable <id>`.
-5. (Optional) Use `paw.list_compilers()` to discover a current
-   higher-accuracy compiler, then pass its name with `--compiler`.
+4. For agent-led CLI setup, `rap rules enable <id>` assigns the working source
+   so it can run in this project. It does not create a deployed revision or
+   persist a compiler choice. Append `--global` only when the user explicitly
+   requested a global setup.
+5. On macOS, tell the user to open the rule in Rule Editor and click **Deploy**
+   for the managed compiler, revision, migration, and coverage lifecycle. On
+   Linux/Windows, stop after test + enable and explain that the reduced tray has
+   no managed Deploy action.
+6. (Optional) Use `paw.list_compilers()` to discover compilers and pass one to
+   `rap rules test --compiler`; that selection applies only to that test run.
 
 Keep each rule simple and single-purpose; several small rules beat one vague one.
 
@@ -97,21 +115,25 @@ rap rules list
 
 `rap doctor` should show the PAW SDK installed, the daemon running, and the
 project `hooks.json` present. `rap rules list` should list the built-in rules
-plus any you converted.
+plus any you converted. These checks do not prove that Cursor reloaded the
+hook. After reloading Cursor, run one agent turn and inspect the macOS tray's
+project activity or `.cursor/rules-as-programs/log/evaluations.jsonl`.
 
 ## 5. Tell the user what to do next
 
 - **Reload Cursor** (or restart it) so it picks up `.cursor/hooks.json`. Hooks
   do not activate until Cursor reloads them.
+- The detailed interface below is macOS-only. Linux and Windows expose a
+  reduced system-tray menu; Windows users must start it with `rap tray`.
 - Findings appear in the **top-right menu-bar item** as a severity-colored
   number beside the paw. The count remains primary when monitoring has an
   operational issue; concrete project/rule failures appear separately with
   Retry/Test/Details actions. A purple `?` separately indicates that an agent
   likely needs a reply.
 - The project-aware Findings popover always exposes **+ Rule**. Clicking a
-  finding opens the latest occurrence as an expanded tray row with the exact
-  evaluated input. Session Activity is separate and never silently evaluated. **Edit Rule…** retains
-  that strict finding record as tuning/test-case context.
+  finding closes the popover and opens a separate Inspector with the exact
+  evaluated input. Session Activity is separate and never silently evaluated.
+  **Edit Rule…** retains that strict finding record as tuning/test-case context.
 - **All Projects → + Rule** creates an all-project draft directly; when one
   project is selected, the same action creates a confirmed project-scoped
   draft. Project-header **… → Add Rule…** always targets that project.
@@ -127,19 +149,20 @@ plus any you converted.
 - Rule source opens in the intent-first **Rule Editor**: Name, one Trigger, its
   derived Input, and the exact PAW `SPEC`. RAP never appends or rewrites the
   specification; it warns if `OK` plus a finding level are missing. **Deploy**
-  validates, tests, compiles,
-  activates, and applies All Projects or Selected Projects coverage; failure
-  leaves the previous deployment running. **View Python…** exposes the
-  underlying program. Standard `Command-A` and `Control-A` select all text in
-  the active field; `Command-S` saves a local draft.
-- **Compilation…** distinguishes the deployed compiler from the editor draft's
-  compiler and groups compatible options by runtime family. Builds always use
-  the exact current draft. **Deploy** is the only activation action and commits
-  the draft, compiler snapshot, and program together.
-- **Deploy When Ready** persists the exact draft/compiler/test/scope intent
-  while a long compiler builds. Tests never run implicitly: missing results
-  require an explicit Run Tests or Deploy Without Testing choice. Any
-  subsequent draft edit cancels the queue; accepted queues dismiss the editor.
+  validates the source, compiles, activates, and applies All Projects or
+  Selected Projects coverage; failure leaves the previous deployment running.
+  Validation Cases run only when the user clicks **Run Tests** and never gate
+  Deploy or compiler promotion. **View Python…** exposes the underlying
+  program. Standard `Command-A` and `Control-A` select all text in the active
+  field; `Command-S` saves a local draft.
+- **Compilation…** defaults to **Automatic (Recommended)**: Deploy activates a
+  compatible fast artifact, then, when a compatible finetune compiler is
+  available, a durable background job builds, warms, and promotes it if that
+  behavior is still current. **Explicit compiler** pins a catalog compiler.
+  Builds always use the exact current draft.
+- **Deploy When Ready** persists the exact draft/compiler/scope intent while a
+  compiler builds. Any subsequent draft edit cancels the queue; accepted
+  queues dismiss the editor.
 - All deployments use persistent idempotency IDs. A disconnected editor checks
   status after reconnecting and retries only an unchanged draft. Daemon
   stdout/stderr and worker tracebacks are retained in
@@ -151,9 +174,14 @@ plus any you converted.
   Version…** as appropriate. Removal moves orphaned open findings to
   **Reviewed** as **Rule deleted**, while keeping their recorded source and
   audit history.
-- Rules live at `.cursor/rules-as-programs/rules/<id>/rule.py`; per-project
-  violation logs are at `.cursor/rules-as-programs/log/audit.jsonl`; all
-  invocation outcomes are at `evaluations.jsonl` and in Evaluation History.
+- Project-owned sources live at
+  `.cursor/rules-as-programs/rules/<id>/rule.py`; shared/deployed sources live
+  at `~/.cursor/rules-as-programs/rules/<id>/rule.py`. A project override that
+  shares a library rule's ID cannot currently Deploy until the source conflict
+  is resolved. Project assignment lives in
+  `.cursor/rules-as-programs/config.json`; per-project finding occurrences are
+  at `.cursor/rules-as-programs/log/audit.jsonl`, and all invocation outcomes
+  are at `evaluations.jsonl` and in Evaluation History.
 - Rule names are mutable display metadata. Rename operations must not stale
   findings, invalidate compiler candidates, or require new PAW programs;
   behavior identity comes from the canonical metadata-neutral behavior hash.
@@ -168,11 +196,18 @@ plus any you converted.
 
 ## Notes
 
-- Setup is non-destructive: `rap init` merges into an existing `hooks.json` and
-  never overwrites existing rule files.
+- `rap init` merges valid existing hook JSON and preserves existing rule files.
+  Back up malformed hook configuration because it may be replaced.
 - Rules drafted by `--scan` are created **disabled**. Review the fuzzy
-  description and project coverage, then use **Deploy** before relying on it.
-- Judging is local-only and private (PAW runs on-device; the only remote step is
-  the one-time compile). Do not commit secrets. The tool stores observed
-  events/verdicts under `~/.cache/rules-as-programs/` (override with
-  `RAP_STATE_DIR`); per-project audit logs are auto-`.gitignore`d.
+  description and project coverage. On macOS, use **Deploy** before relying on
+  the rule. On Linux/Windows, test and enable it from the CLI; explain that this
+  bypasses managed revision and compiler deployment.
+- Managed PAW rules judge observed inputs locally. Creating or refreshing an
+  artifact sends the rule `SPEC`, not observed trigger inputs, to the compile
+  service; this can happen again after spec/compiler changes or Automatic
+  optimization. Advanced Python rules are unsandboxed and can access or
+  transmit their inputs. RAP stores observed events and verdicts locally in
+  plaintext under `~/.cache/rules-as-programs/` (override with `RAP_STATE_DIR`)
+  and project log directories. Pause stops evaluation, not collection. Do not
+  commit secrets, and verify project ignore rules before sharing generated
+  logs or test cases.
