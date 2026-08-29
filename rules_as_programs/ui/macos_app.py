@@ -84,11 +84,11 @@ def _open_path(path: str) -> None:
         NSWorkspace.sharedWorkspace().openFile_(str(path))
 
 
-def _open_in_cursor(path: str) -> None:
+def _open_in_codex(path: str) -> None:
     if not path:
         return
     try:
-        subprocess.Popen(["open", "-a", "Cursor", path])
+        subprocess.Popen(["open", "-a", "ChatGPT", path])
     except OSError:
         _open_path(path)
 
@@ -759,7 +759,7 @@ class MacOSController(NSObject):
                         self._inspector = FindingInspectorManager(
                             self.model,
                             self.edit_rule,
-                            _open_in_cursor,
+                            _open_in_codex,
                             lambda finding_id: self.open_finding({
                                 "id": finding_id}),
                             lambda rule_id, project_root: (
@@ -918,11 +918,11 @@ class MacOSController(NSObject):
 
     @objc.python_method
     def open_attention_project(self, item: dict[str, Any]) -> None:
-        _open_in_cursor(item.get("project_root", ""))
+        _open_in_codex(item.get("project_root", ""))
 
     @objc.python_method
     def open_project_path(self, project_root: str) -> None:
-        _open_in_cursor(project_root)
+        _open_in_codex(project_root)
 
     @objc.python_method
     def _mute(self, group: dict[str, Any]) -> None:
@@ -986,8 +986,8 @@ class MacOSController(NSObject):
         items: list[tuple[str, Any, bool]] = [
             ("Open Finding", lambda: self.open_finding(group), True),
             (
-                "Open Project in Cursor",
-                lambda: _open_in_cursor(group.get("project_root", "")),
+                "Open Project in Codex",
+                lambda: _open_in_codex(group.get("project_root", "")),
                 True,
             ),
         ]
@@ -1691,7 +1691,7 @@ class MacOSController(NSObject):
             ("New PAW rule", self._new_rule, True),
             ("New plain Python rule",
              lambda: self._new_rule(template="python"), True),
-            ("Convert existing Cursor rules", self._convert_rules, True),
+            ("Convert existing agent rules", self._convert_rules, True),
             ("-", lambda: None, True),
         ]
         items.extend([

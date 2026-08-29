@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "ProgramAsWeights" }]
-keywords = ["cursor", "agent", "rules", "programasweights", "paw", "observability", "hooks"]
+keywords = ["codex", "agent", "rules", "programasweights", "paw", "observability", "hooks"]
 
 dependencies = [
     "programasweights>=0.4",
@@ -26,7 +26,7 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 rap = "rules_as_programs.cli:main"
-rap-hook = "rules_as_programs.adapters.cursor.hook_client:main"
+rap-hook = "rules_as_programs.adapters.codex.hook_client:main"
 
 [project.urls]
 Homepage = "https://github.com/programasweights/rules-as-programs"
@@ -37,7 +37,7 @@ packages = [
     "rules_as_programs",
     "rules_as_programs.core",
     "rules_as_programs.adapters",
-    "rules_as_programs.adapters.cursor",
+    "rules_as_programs.adapters.codex",
     "rules_as_programs.ui",
 ]
 

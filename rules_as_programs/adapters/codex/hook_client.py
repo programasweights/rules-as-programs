@@ -1,14 +1,4 @@
-"""Thin Cursor hook client (the ``rap-hook`` entry point).
-
-Cursor spawns this once per hook event with the event JSON on stdin. It must be
-near-instant and fail-open so the agent is never stalled:
-
-1. read + parse stdin (best-effort),
-2. normalize to events and hand them to the daemon over the socket,
-3. if the daemon is down, fire-and-forget spawn it (never wait),
-4. always print an empty JSON object and exit 0 (observation-only: no
-   permission/continue/followup fields -> Cursor just proceeds).
-"""
+"""Fast, observation-only client for Codex lifecycle command hooks."""
 
 from __future__ import annotations
 
@@ -17,7 +7,7 @@ import os
 import subprocess
 import sys
 
-from ... import config, ipc
+from ... import ipc
 from .adapter import normalize
 
 
@@ -36,7 +26,6 @@ def _spawn_daemon() -> None:
 
 
 def main() -> int:
-    # Whatever happens, emit valid JSON and never block the agent.
     try:
         raw_text = sys.stdin.read()
         raw = json.loads(raw_text) if raw_text.strip() else {}
@@ -50,15 +39,17 @@ def main() -> int:
 
     daemon_down = False
     for event in events:
-        resp = ipc.send_request({"type": "event", "event": event.to_dict()}, timeout=0.6)
-        if resp is None:
+        response = ipc.send_request(
+            {"type": "event", "event": event.to_dict()}, timeout=0.6
+        )
+        if response is None:
             daemon_down = True
             break
-
     if daemon_down:
-        # Start it for next time; do not wait on it now.
         _spawn_daemon()
 
+    # All observed Codex events accept an empty JSON object on successful exit,
+    # including Stop and SubagentStop, which require JSON rather than text.
     sys.stdout.write("{}")
     sys.stdout.flush()
     return 0

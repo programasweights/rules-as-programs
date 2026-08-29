@@ -20,7 +20,7 @@ Output: OK"""
 @rule(
     id="fdg0z9837mz4v0ka",
     name="Do not claim success without evidence",
-    trigger="afterAgentResponse",
+    trigger="Stop",
     spec=SPEC,
 )
 def do_not_claim_success_without_evidence(ctx):

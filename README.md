@@ -15,14 +15,14 @@ locally alongside the agent. Advanced rules can use ordinary Python instead.
 > **v1 is observability-only.** Rules report findings; they do not block, edit,
 > or correct the agent's work.
 
-The first integration uses
-[Cursor Agent Hooks](https://cursor.com/docs/hooks). The engine and event model
-are designed so other agent adapters can be added later.
+The integration uses
+[Codex lifecycle hooks](https://developers.openai.com/codex/hooks). The engine
+and event model remain agent-agnostic.
 
 ## Requirements and platform support
 
 - Python 3.10 or newer.
-- Cursor with Agent Hooks.
+- Codex with lifecycle hooks enabled.
 - Internet access when installing dependencies and creating or refreshing PAW
   artifacts. Inference runs locally after the required assets are downloaded.
 - macOS provides the full native menu-bar inbox, Inspector, Rule Editor, and
@@ -35,7 +35,7 @@ Install into an environment you intend to keep.
 
 ## Install from GitHub
 
-From the root of an existing Cursor project:
+From the root of an existing Codex project:
 
 ```bash
 python -m pip install "git+https://github.com/programasweights/rules-as-programs.git" \
@@ -49,34 +49,37 @@ avoiding a local llama.cpp build; it does not host Rules as Programs.
 
 `rap init --scan`:
 
-1. merges the RAP hook into `.cursor/hooks.json` and writes its wrapper script;
+1. migrates missing legacy RAP state from `.cursor/`, then merges the RAP hook
+   into `.codex/hooks.json` and writes its wrapper script;
 2. installs the built-in rules;
 3. creates disabled drafts from existing prose-rule documents;
 4. starts the daemon and tray, and configures supported login autostart.
 
-The scanner is intentionally rough. It reads top-level `.cursor/rules/*.mdc`,
-`.cursor/rules/*.md`, `AGENTS.md`, and `.cursorrules`, then creates one disabled
-draft per document from a short excerpt. It does not split a document into
-individual rules, and rerunning it can create duplicate drafts. Run it once,
-then review each draft before making it active.
+The scanner is intentionally rough. It reads top-level `AGENTS.md` and
+`AGENTS.override.md`, plus legacy `.cursor/rules/*.mdc`, `.cursor/rules/*.md`,
+and `.cursorrules` files when present. It creates one disabled draft per
+document from a short excerpt. It does not split a document into individual
+rules, and rerunning it can create duplicate drafts. Run it once, then review
+each draft before making it active.
 
-If `.cursor/hooks.json` contains custom configuration, keep a backup. RAP merges
+If `.codex/hooks.json` contains custom configuration, keep a backup. RAP merges
 valid JSON, but malformed hook JSON may be replaced.
 
-Reload Cursor so it reads the new hook configuration, then verify:
+Restart Codex, run `/hooks`, review and trust the RAP hook definitions, then
+verify:
 
 ```bash
 rap doctor
 rap rules list
 ```
 
-`rap doctor` verifies the installation and hook file; it cannot prove that the
-currently running Cursor process has reloaded the hook. Run one agent turn after
-reloading, then inspect the tray's project activity or
-`.cursor/rules-as-programs/log/evaluations.jsonl`. `rap status` reports
-findings, so a healthy turn may legitimately show none.
+`rap doctor` verifies the installation and hook file; it cannot prove that
+Codex has trusted the current hook hash. Run one agent turn after trusting the
+hooks, then inspect the tray's project activity or
+`.codex/rules-as-programs/log/evaluations.jsonl`. `rap status` reports findings,
+so a healthy turn may legitimately show none.
 
-### Let a Cursor agent finish setup
+### Let Codex finish setup
 
 Paste this into the agent chat in the project:
 
@@ -89,7 +92,7 @@ See [`AGENTS.md`](AGENTS.md) for the complete agent-facing setup guide.
 ## How it works
 
 ```text
-Cursor hook ──stdin JSON──▶ rap-hook ──local socket──▶ long-lived daemon
+Codex hook ──stdin JSON──▶ rap-hook ──local socket──▶ long-lived daemon
                                                           │
                                     exact trigger field ──┤
                                                           ▼
@@ -98,7 +101,7 @@ Cursor hook ──stdin JSON──▶ rap-hook ──local socket──▶ long-
                                   evaluation log + finding store + tray
 ```
 
-- Each managed rule has one Cursor trigger and one predefined input field.
+- Each managed rule has one Codex trigger and one predefined input field.
   The Inspector shows the same mapped string that PAW evaluates.
 - Surrounding Session Activity is retained for inspection but is not silently
   included in a Basic rule's input.
@@ -114,7 +117,7 @@ Cursor hook ──stdin JSON──▶ rap-hook ──local socket──▶ long-
 On macOS, open **+ Rule** from the tray. A managed fuzzy rule has:
 
 - a mutable display name;
-- one Cursor trigger;
+- one Codex trigger;
 - a derived input field, optionally overridden with an advanced JSON Pointer;
 - the exact PAW specification;
 - All Projects or Selected Projects coverage.
@@ -153,7 +156,10 @@ are retained so switching back does not require rebuilding them.
 Validation Cases are stored in `tests.json` beside the rule. Only **Run Tests**
 executes them. They never run implicitly and never gate deployment or automatic
 compiler promotion. Results persist locally by exact spec, compiler snapshot,
-and case content.
+and case content. If the selected explicit compiler is not built for the draft,
+the editor shows **Build & Run Tests** and persists that exact test intent while
+the shared compiler build finishes; closing the editor or restarting the daemon
+does not turn it into a deployment or lose the queued run.
 
 The CLI has a separate test mechanism: `rap rules test <id>` parses
 `Input:`/`Output:` examples embedded in the specification. It does not run the
@@ -169,16 +175,16 @@ from rules_as_programs import rule
 SPEC = """Decide whether this shell command uses rsync to synchronize source.
 Return ONLY one of: OK, WARNING
 
-Input: rsync -av src/ host:/srv/app/src/
+Input: {"command": "rsync -av src/ host:/srv/app/src/"}
 Output: WARNING
 
-Input: cp public/logo.png dist/assets/
+Input: {"command": "cp public/logo.png dist/assets/"}
 Output: OK"""
 
 @rule(
     id="7km3v9c2xq4t8n1p",
     name="Do not use rsync",
-    trigger="afterShellExecution",
+    trigger="PreToolUse",
     spec=SPEC,
 )
 def do_not_use_rsync(ctx):
@@ -202,16 +208,16 @@ manually.
 Rules can be project-owned:
 
 ```text
-<project>/.cursor/rules-as-programs/rules/<id>/rule.py
+<project>/.codex/rules-as-programs/rules/<id>/rule.py
 ```
 
 or shared through My Rule Library:
 
 ```text
-~/.cursor/rules-as-programs/rules/<id>/rule.py
+~/.codex/rules-as-programs/rules/<id>/rule.py
 ```
 
-Per-project assignment is stored in `.cursor/rules-as-programs/config.json`.
+Per-project assignment is stored in `.codex/rules-as-programs/config.json`.
 Deploying a standalone project-owned rule moves it into My Rule Library. A
 project override that shares an ID with an existing library rule cannot
 currently Deploy until the conflicting sources are resolved.
@@ -237,10 +243,10 @@ revision · Needs recheck**, but do not contribute to the current severity
 badge. Editing a finding's rule can copy its exact observed input into a
 Validation Case without deploying anything.
 
-The purple needs-reply indicator comes from either an explicit Cursor
-Ask Question event or the bundled local fuzzy rule; it is not a violation or a
-universal native approval state. It clears after the next submitted prompt in
-that conversation or through **Mark no reply needed**.
+The purple needs-reply indicator comes from either an explicit Codex
+`request_user_input` tool call or the bundled local fuzzy rule; it is not a
+violation or a universal native approval state. It clears after the next
+submitted prompt in that conversation or through **Mark no reply needed**.
 
 ## Built-in rules
 
@@ -266,16 +272,16 @@ Advanced Python rules are unsandboxed and can access files, use the network, or
 transmit their inputs. Only install rules you trust.
 
 RAP stores local operational data in plaintext. Depending on the event and
-outcome, this can include normalized events, raw Cursor hook payloads, mapped
+outcome, this can include normalized events, raw Codex hook payloads, mapped
 inputs, outputs, findings, and diagnostics:
 
 - `~/.cache/rules-as-programs/` — ledgers, databases, active revisions, compiler
   state, validation results, daemon logs, and personal UI state;
-- `<project>/.cursor/rules-as-programs/log/audit.jsonl` — non-deduplicated
+- `<project>/.codex/rules-as-programs/log/audit.jsonl` — non-deduplicated
   finding occurrences;
-- `<project>/.cursor/rules-as-programs/log/evaluations.jsonl` — every rule
+- `<project>/.codex/rules-as-programs/log/evaluations.jsonl` — every rule
   invocation, including `OK`, input failures, and runtime errors;
-- `<project>/.cursor/rules-as-programs/config.json` — shareable project rule
+- `<project>/.codex/rules-as-programs/config.json` — shareable project rule
   assignments.
 
 Pause stops rule evaluation; it does not stop event collection. Evaluation logs
@@ -295,7 +301,7 @@ sources, project configuration, logs, and cached state for manual review or
 deletion.
 
 Set `RAP_STATE_DIR` to move the user-level cache and databases. The same value
-must reach Cursor, the hook, daemon, and tray; generated login-autostart entries
+must reach Codex, the hook, daemon, and tray; generated login-autostart entries
 do not persist that environment variable for you.
 
 ## CLI reference
@@ -321,7 +327,7 @@ disabled-draft conversion as `rap init --scan`.
 
 ## Adding another agent integration
 
-Only the Cursor adapter is Cursor-specific. To support another agent, implement
+Only the Codex adapter is Codex-specific. To support another agent, implement
 an [`Adapter`](rules_as_programs/adapters/base.py) that maps raw payloads into
 the shared [`Event`](rules_as_programs/core/events.py) schema and installs the
 agent's hooks. The daemon, engine, PAW runtime, stores, and UI model can be

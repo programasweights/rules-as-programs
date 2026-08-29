@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 
 from rules_as_programs import config, rules_api
-from rules_as_programs.adapters.cursor.adapter import normalize
+from rules_as_programs.adapters.codex.adapter import normalize
 from rules_as_programs.core.attention import AttentionStore
 from rules_as_programs.core import attention as attention_module
 from rules_as_programs.core.events import (
@@ -89,7 +89,7 @@ def test_paw_draft_uses_visible_exact_starter_spec(
     assert rules_api.DEFAULT_FUZZY_SPEC in source
     assert "EXAMPLES =" not in source
     projection = rules_api.source_projection(source)
-    assert projection["trigger"] == "afterShellExecution"
+    assert projection["trigger"] == "PreToolUse"
     assert projection["inputs"] == []
     assert rules_api.spec_examples(projection["spec"]) == []
     assert projection["spec"] == rules_api.DEFAULT_FUZZY_SPEC
@@ -109,18 +109,18 @@ def test_source_projection_round_trips_and_custom_metadata_falls_back():
     projection = rules_api.source_projection(source)
     ok, patched, error = rules_api.patch_source_projection(
         source,
-        trigger="afterAgentThought",
+        trigger="Stop",
         function_source=projection["function_source"].replace(
             "ctx.result(decision)", "ctx.result(decision)", 1),
         spec=projection["spec"],
     )
     assert ok, error
     updated = rules_api.source_projection(patched)
-    assert updated["trigger"] == "afterAgentThought"
+    assert updated["trigger"] == "Stop"
     assert updated["inputs"] == []
 
     custom = source.replace(
-        "trigger='afterShellExecution'", "trigger=DEFAULT_TRIGGER")
+        "trigger='PreToolUse'", "trigger=DEFAULT_TRIGGER")
     assert rules_api.source_projection(custom)["custom"]
     structurally_custom = source.replace(
         "    decision = ctx.paw(SPEC)(ctx.input)",
@@ -162,7 +162,7 @@ def test_obsolete_managed_rules_are_pruned(monkeypatch, tmp_path):
     global_rules = tmp_path / "global"
     project = tmp_path / "project"
     old = global_rules / "old" / "rule.py"
-    current = project / ".cursor/rules-as-programs/rules/current/rule.py"
+    current = project / ".codex/rules-as-programs/rules/current/rule.py"
     old.parent.mkdir(parents=True)
     current.parent.mkdir(parents=True)
     old.write_text("# RAP_MANAGED_FUZZY_V3\n")
@@ -186,7 +186,7 @@ def test_compact_identity_uses_stable_folder_and_safe_name_updates(
     source = rules_api.draft_rule_source(rule_id, "Original Name")
     saved = rules_api.save_rule(rule_id, source, "project", str(project))
     assert saved["ok"]
-    path = project / ".cursor" / "rules-as-programs" / "rules" / rule_id / "rule.py"
+    path = project / ".codex" / "rules-as-programs" / "rules" / rule_id / "rule.py"
     assert Path(saved["path"]) == path
     assert path.exists()
 
@@ -209,7 +209,7 @@ def test_compact_identity_uses_stable_folder_and_safe_name_updates(
     malicious = source.replace(rule_id, "../escaped")
     escaped = rules_api.save_rule("../escaped", malicious, "project", str(project))
     assert not escaped["ok"]
-    assert not (project / ".cursor" / "rules-as-programs" / "escaped").exists()
+    assert not (project / ".codex" / "rules-as-programs" / "escaped").exists()
 
 
 def test_compact_rule_ids_are_80_bit_filesystem_safe_tokens():
@@ -246,7 +246,7 @@ def test_ledger_window_centers_trigger(monkeypatch, tmp_path):
     assert [row["seq"] for row in frozen["events"]] == [1, 2, 3, 4]
 
 
-def test_attention_lifecycle_and_cursor_prompt_events(monkeypatch, tmp_path):
+def test_attention_lifecycle_and_codex_prompt_events(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     store = AttentionStore()
     attention_id = store.set(
@@ -271,21 +271,21 @@ def test_attention_lifecycle_and_cursor_prompt_events(monkeypatch, tmp_path):
     assert store.active() == []
 
     prompt = normalize({
-        "hook_event_name": "beforeSubmitPrompt",
-        "conversation_id": "conversation",
-        "generation_id": "generation-2",
-        "workspace_roots": ["/project"],
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "conversation",
+        "turn_id": "generation-2",
+        "cwd": "/project",
         "prompt": "Use staging.",
     })[0]
     assert prompt.kind == USER_PROMPT
     assert prompt.generation_id == "generation-2"
 
     question_events = normalize({
-        "hook_event_name": "preToolUse",
-        "conversation_id": "conversation",
-        "generation_id": "generation-1",
-        "workspace_roots": ["/project"],
-        "tool_name": "AskQuestion",
+        "hook_event_name": "PreToolUse",
+        "session_id": "conversation",
+        "turn_id": "generation-1",
+        "cwd": "/project",
+        "tool_name": "request_user_input",
         "tool_input": {"question": "Which database?"},
     })
     question = next(
@@ -387,14 +387,14 @@ def test_promote_customize_and_revert_shared_rule(monkeypatch, tmp_path):
     promoted = rules_api.promote_to_shared(rule_id, str(project))
     assert promoted["ok"]
     assert (global_rules / rule_id / "rule.py").exists()
-    assert not (project / ".cursor" / "rules-as-programs" / "rules"
+    assert not (project / ".codex" / "rules-as-programs" / "rules"
                 / rule_id / "rule.py").exists()
     assert rules_api.is_enabled(rule_id, str(project))
     assert not rules_api.is_enabled(rule_id, None)
 
     customized = rules_api.customize_for_project(rule_id, str(project))
     assert customized["ok"]
-    assert (project / ".cursor" / "rules-as-programs" / "rules"
+    assert (project / ".codex" / "rules-as-programs" / "rules"
             / rule_id / "rule.py").exists()
     project_info = rules_api.get_rule(rule_id, str(project))
     reverted = rules_api.revert_to_shared(
@@ -406,7 +406,7 @@ def test_promote_customize_and_revert_shared_rule(monkeypatch, tmp_path):
     assert reverted["ok"]
     assert reverted["assignment_preserved"]
     assert rules_api.is_enabled(rule_id, str(project))
-    assert not (project / ".cursor" / "rules-as-programs" / "rules"
+    assert not (project / ".codex" / "rules-as-programs" / "rules"
                 / rule_id / "rule.py").exists()
     shared_info = rules_api.get_rule(rule_id, None)
     deleted = rules_api.delete_rule_definition(

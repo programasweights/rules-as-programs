@@ -77,6 +77,13 @@ def _serialized_rule_mutation(function):
     return serialized
 
 
+@contextmanager
+def rule_mutation_transaction():
+    """Group related rule reads and writes into one cross-process mutation."""
+    with _rule_mutation_lock():
+        yield
+
+
 # --- listing / reading -----------------------------------------------------
 
 def _source_digest(source: str | bytes) -> str:
@@ -526,6 +533,7 @@ def validation_cases(
     return validation_cases_for_path(source_path)
 
 
+@_serialized_rule_mutation
 def save_validation_cases(
     source_path: str,
     cases: list[dict[str, Any]] | None,
@@ -547,6 +555,7 @@ def save_validation_cases(
     return {"ok": True, "path": str(path), "cases": normalized}
 
 
+@_serialized_rule_mutation
 def add_validation_case(
     rule_id: str,
     project_root: str | None,
@@ -1289,14 +1298,14 @@ def draft_rule_source(rule_id: str, title: str | None = None) -> str:
         rule_id,
         title,
         DEFAULT_FUZZY_SPEC,
-        trigger="afterShellExecution",
+        trigger="PreToolUse",
     )
 
 
 PLAIN_RULE_TEMPLATE = '''from rules_as_programs import rule
 
 
-@rule(id="{rule_id}", name="{title}", trigger="afterAgentResponse")
+@rule(id="{rule_id}", name="{title}", trigger="Stop")
 def {func}(ctx):
     """{title}"""
     if "unsafe phrase" in ctx.input.lower():

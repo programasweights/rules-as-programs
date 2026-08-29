@@ -3,13 +3,13 @@
 A rule file defines one (or more) functions decorated with
 :func:`rules_as_programs.rule`. We import each file and collect any function
 carrying the decorator's metadata. Rules resolve from two scopes -- global
-(``~/.cursor/rules-as-programs/rules``) then project
-(``<repo>/.cursor/rules-as-programs/rules``) -- with project overriding global
+(``~/.codex/rules-as-programs/rules``) then project
+(``<repo>/.codex/rules-as-programs/rules``) -- with project overriding global
 by immutable 16-character ``id``. New files live at ``rules/<id>/rule.py``; legacy
 flat files remain loadable until their first structured save migrates them.
 
 Importing rule files executes them. That is the same trust model as
-``.cursor/hooks`` scripts: they are the user's own code, in their own repo.
+``.codex/hooks`` scripts: they are the user's own code, in their own repo.
 """
 
 from __future__ import annotations

@@ -83,8 +83,8 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
         kind=MESSAGE,
         conversation_id="long-input",
         project_root=str(project),
-        hook_name="afterAgentResponse",
-        raw_payload={"text": text},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": text},
         payload={"text": text},
     )
     ledger.append(event)
@@ -95,7 +95,7 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
         title="Long input",
         severity="warn",
         on=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         inputs=[MESSAGE],
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
@@ -116,11 +116,11 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
     assert evaluated["text"].endswith(text)
     assert entry["evaluation"]["schema_version"] == 4
     assert evaluated["event_ids"] == [event.id]
-    assert evaluated["json_pointer"] == "/text"
+    assert evaluated["json_pointer"] == "/last_assistant_message"
     assert evaluated["pointer_source"] == "default"
     assert entry["evaluation"]["trigger"]["included_in_input"] is True
     assert entry["evaluation"]["trigger"]["event"]["raw_payload"] == {
-        "text": text}
+        "last_assistant_message": text}
     assert "raw_payload" not in entry["evaluation"]["trigger"]
     assert evaluated["sha256"] == hashlib.sha256(
         evaluated["text"].encode()).hexdigest()
@@ -148,8 +148,8 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
         kind=MESSAGE,
         conversation_id="frozen",
         project_root=str(project),
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "trigger input"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "trigger input"},
         payload={"text": "trigger input"},
     )
     ledger.append(trigger)
@@ -176,7 +176,7 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
     rule = LoadedRule(
         id=new_rule_id(), title="Frozen", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
-        trigger="afterAgentResponse",
+        trigger="Stop",
         scope="project", source_path=str(rule_path))
     engine = Engine(
         FakeRuntime(output="WARNING"),
@@ -204,8 +204,8 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
         kind=MESSAGE,
         conversation_id="input-kinds",
         project_root=str(project),
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "ledger text"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "ledger text"},
         payload={"text": "ledger text"},
     )
     ledger.append(event)
@@ -215,7 +215,7 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
     custom = LoadedRule(
         id=new_rule_id(), title="Custom", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec", scope="project", source_path=str(rule_path))
     engine = Engine(
@@ -233,7 +233,7 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
     deterministic = LoadedRule(
         id=new_rule_id(), title="Deterministic", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         fn=deterministic_result,
         scope="project", source_path=str(rule_path))
     deterministic_verdict = engine.evaluate(deterministic, ledger, event)
@@ -244,7 +244,7 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
 
     ok_rule = LoadedRule(
         id=new_rule_id(), title="OK rule", severity="warn",
-        on=[MESSAGE], trigger="afterAgentResponse",
+        on=[MESSAGE], trigger="Stop",
         fn=lambda ctx: ctx.result("OK"),
         scope="project", source_path=str(rule_path))
     assert engine.evaluate(ok_rule, ledger, event) is None
@@ -267,8 +267,8 @@ def test_finding_result_links_to_its_specific_paw_call(
     ledger = Ledger("multi-paw", str(project))
     event = Event(
         kind=MESSAGE, conversation_id="multi-paw",
-        project_root=str(project), hook_name="afterAgentResponse",
-        raw_payload={"text": "message"}, payload={"text": "message"})
+        project_root=str(project), hook_name="Stop",
+        raw_payload={"last_assistant_message": "message"}, payload={"text": "message"})
     ledger.append(event)
     path = project / "rule.py"
     path.write_text("# multi\n")
@@ -281,7 +281,7 @@ def test_finding_result_links_to_its_specific_paw_call(
     rule = LoadedRule(
         id=new_rule_id(), title="Multi", severity="warn",
         on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
-        trigger="afterAgentResponse",
+        trigger="Stop",
         scope="project", source_path=str(path))
     engine = Engine(
         FakeRuntime(output="WARNING"),
@@ -294,15 +294,18 @@ def test_finding_result_links_to_its_specific_paw_call(
     assert evaluation["severity"] == "warn"
 
 
-def test_oversized_trigger_input_is_rejected_without_paw_call(tmp_path):
+def test_oversized_trigger_input_is_rejected_without_paw_call(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = str(tmp_path)
     ledger = Ledger("oversized", project)
     event = Event(
         kind=MESSAGE,
         conversation_id="oversized",
         project_root=project,
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "too long"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "too long"},
         payload={"text": "too long"},
     )
     ledger.append(event)
@@ -313,7 +316,7 @@ def test_oversized_trigger_input_is_rejected_without_paw_call(tmp_path):
         title="Small input",
         severity="warn",
         on=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         max_input_bytes=4,
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
@@ -388,7 +391,7 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         title="Rule",
         severity="warn",
         on=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         fn=lambda ctx: ctx.result("WARNING"),
         scope="project",
         source_path=str(rule_path),
@@ -405,8 +408,8 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=str(project),
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "agent claim"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "agent claim"},
         payload={"text": "agent claim"},
     )
     ledger.append(event)
@@ -427,8 +430,8 @@ def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=str(project),
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "another claim"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "another claim"},
         payload={"text": "another claim"},
     )
     ledger.append(event2)
@@ -502,8 +505,8 @@ def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path
         conversation_id="conversation",
         project_root=str(project),
         generation_id="generation",
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "Which database should I use?"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "Which database should I use?"},
         payload={"text": "Which database should I use?"},
     )
     ledger.append(response)
@@ -512,7 +515,7 @@ def test_attention_rule_creates_separate_needs_reply_state(monkeypatch, tmp_path
         title="Needs reply",
         severity="info",
         on=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         channel="attention",
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
@@ -552,7 +555,7 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
         title="Rule",
         severity="warn",
         on=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         fn=lambda ctx: ctx.result("HIGH"),
     )
     engine = Engine(
@@ -562,14 +565,17 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
     )
     event = Event(
         kind=MESSAGE, conversation_id="conversation",
-        project_root=str(project), hook_name="afterAgentResponse",
-        raw_payload={"text": "claim"}, payload={"text": "claim"})
+        project_root=str(project), hook_name="Stop",
+        raw_payload={"last_assistant_message": "claim"}, payload={"text": "claim"})
     ledger.append(event)
     assert engine.on_event(event, ledger) == []
     assert "expected OK, INFO, WARNING, or CRITICAL" in errors[0]
 
 
-def test_active_rule_program_id_is_used_by_default_paw_calls(tmp_path):
+def test_active_rule_program_id_is_used_by_default_paw_calls(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     class TrackingRuntime(FakeRuntime):
         def __init__(self):
             super().__init__(output="WARNING")
@@ -591,8 +597,8 @@ def test_active_rule_program_id_is_used_by_default_paw_calls(tmp_path):
         kind=MESSAGE,
         conversation_id="conversation",
         project_root=project,
-        hook_name="afterAgentResponse",
-        raw_payload={"text": "claim"},
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "claim"},
         payload={"text": "claim"},
     )
     ledger.append(event)
@@ -602,7 +608,7 @@ def test_active_rule_program_id_is_used_by_default_paw_calls(tmp_path):
         severity="warn",
         on=[MESSAGE],
         inputs=[MESSAGE],
-        trigger="afterAgentResponse",
+        trigger="Stop",
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
         spec="spec",
         compiler="paw-ft-bs48",

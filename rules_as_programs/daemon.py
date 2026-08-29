@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - Windows
     fcntl = None
 
 from . import __version__, config, paw_runtime, rules_api, scaffold
-from .adapters.cursor import projects as cursor_projects
+from .adapters.codex import projects as codex_projects
 from .core import audit, evaluation_log
 from .core.attention import AttentionStore
 from .core.engine import Engine, RuleContext
@@ -132,7 +132,7 @@ class Daemon:
         self.runtime = paw_runtime.shared()
         scaffold.prune_obsolete_managed_rules([
             str(item.get("path", ""))
-            for item in cursor_projects.discover_projects(limit=100)
+            for item in codex_projects.discover_projects(limit=100)
             if item.get("path")
         ])
         reset_development_finding_history()
@@ -163,18 +163,25 @@ class Daemon:
         self._deployment_lock = threading.Lock()
         self._finetune_jobs: dict[str, dict[str, Any]] = {}
         self._finetune_lock = threading.Lock()
+        self._workflow_admission_lock = threading.Lock()
         self._queued_deployment_lock = threading.Lock()
         self._queued_deployments_running: set[str] = set()
+        self._queued_validation_lock = threading.Lock()
+        self._queued_validations_running: set[str] = set()
         self._last_successful_audit = 0.0
         self._stop = threading.Event()
         for queued in self.deployment_queue.pending():
-            is_optimization = (
-                str(queued.get("kind", ""))
-                == deployment_queue.OPTIMIZATION_KIND)
-            runner = (
-                self._run_optimization
-                if is_optimization else self._run_queued_deployment)
-            executor = self.optimization_work if is_optimization else self.work
+            kind = str(
+                queued.get("kind") or deployment_queue.DEPLOYMENT_KIND)
+            if kind == deployment_queue.OPTIMIZATION_KIND:
+                runner = self._run_optimization
+                executor = self.optimization_work
+            elif kind == deployment_queue.VALIDATION_KIND:
+                runner = self._run_queued_validation
+                executor = self.work
+            else:
+                runner = self._run_queued_deployment
+                executor = self.work
             executor.submit(runner, str(queued.get("id", "")))
 
     # --- event handling --------------------------------------------------
@@ -217,7 +224,7 @@ class Daemon:
                 source="ask_question_tool",
             )
         self.work.submit(self._evaluate, event, ledger)
-        if event.hook_name == "afterAgentResponse":
+        if event.hook_name == "Stop":
             self.work.submit(self._evaluate_attention, event, ledger)
         should_warm = False
         if event.kind == SESSION_START:
@@ -545,10 +552,10 @@ class Daemon:
     # --- status snapshot -------------------------------------------------
     @staticmethod
     def _hooks_installed(project_root: str) -> bool:
-        """Check for our hook in either project or global Cursor config."""
+        """Check for our hook in either project or global Codex config."""
         for path in (
-            config.cursor_hooks_path("project", project_root),
-            config.cursor_hooks_path("global"),
+            config.codex_hooks_path("project", project_root),
+            config.codex_hooks_path("global"),
         ):
             if not path.exists():
                 continue
@@ -564,7 +571,7 @@ class Daemon:
         active_findings: dict[str, list[dict[str, Any]]],
         attention: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        discovered = cursor_projects.discover_projects(limit=100)
+        discovered = codex_projects.discover_projects(limit=100)
         discovered_by_path = {item["path"]: item for item in discovered}
         paths = list(discovered_by_path)
 
@@ -765,7 +772,7 @@ class Daemon:
                     "rule_id": "",
                     "rule_name": "",
                     "summary": f"Auditing is not connected to {project['name']}",
-                    "detail": "Cursor hooks are missing or invalid.",
+                    "detail": "Codex hooks are missing, invalid, or not trusted.",
                     "impact": "agent activity is not being audited",
                     "count": 1,
                     "threshold": 1,
@@ -849,6 +856,7 @@ class Daemon:
         finalize: bool = False,
         source: str | None = None,
         compiler: str | None = None,
+        expected_snapshot: str = "",
     ) -> dict[str, Any]:
         if not self.runtime.available:
             return {"ok": False, "error": "PAW SDK not available"}
@@ -866,14 +874,23 @@ class Daemon:
                 }
         compiler_kind = str(compiler_info.get("compiler_kind", ""))
         self._set_warm_state(project_root, rule.id, "warming")
-        pid = self.runtime.program_id_for_spec(
+        compiled = self._compile_program_for_snapshot(
             rule.spec,
-            compiler,
+            compiler or "",
+            expected_snapshot,
             timeout=360 if compiler_kind == "finetune_lora" else None)
+        pid = str(compiled.get("program_id", ""))
         if not pid:
             self._set_warm_state(
-                project_root, rule.id, "failed", "Compilation failed or timed out")
-            return {"ok": False, "error": "compile failed or timed out"}
+                project_root,
+                rule.id,
+                "failed",
+                str(compiled.get(
+                    "error", "Compilation failed or timed out")),
+            )
+            return compiled
+        compiler_info = dict(
+            compiled.get("compiler_info") or compiler_info)
         warmed = self.runtime.warm(pid)
         self._set_warm_state(
             project_root, rule.id, "ready" if warmed else "failed",
@@ -886,6 +903,8 @@ class Daemon:
             "finalized": compiler_kind == "finetune_lora",
             "compiler": compiler or str(compiler_info.get("name", "")),
             "compiler_info": compiler_info,
+            "compiler_snapshot": str(
+                compiled.get("compiler_snapshot", "")),
         }
 
     def _automatic_base_compiler(self) -> dict[str, Any]:
@@ -893,6 +912,68 @@ class Daemon:
         if callable(resolver):
             return dict(resolver() or {})
         return dict(self.runtime.compiler_info("") or {})
+
+    def _compile_program_for_snapshot(
+        self,
+        spec: str,
+        compiler: str,
+        expected_snapshot: str,
+        *,
+        timeout: float | None,
+    ) -> dict[str, Any]:
+        """Compile only while the selected compiler revision remains exact."""
+        def current_info() -> dict[str, Any]:
+            list_compilers = getattr(self.runtime, "list_compilers", None)
+            if callable(list_compilers):
+                try:
+                    list_compilers(refresh=True, max_age=0)
+                except TypeError:
+                    try:
+                        list_compilers(refresh=True)
+                    except TypeError:
+                        pass
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            return dict(self.runtime.compiler_info(compiler) or {})
+
+        before = current_info()
+        before_snapshot = str(before.get("latest_snapshot", ""))
+        if expected_snapshot and before_snapshot != expected_snapshot:
+            return {
+                "ok": False,
+                "compiler_catalog_stale": True,
+                "error": "The selected compiler revision is no longer available.",
+            }
+        pinned_snapshot = expected_snapshot or before_snapshot
+        program_id = str(self.runtime.program_id_for_spec(
+            spec,
+            compiler or None,
+            timeout=timeout,
+        ) or "")
+        if not program_id:
+            return {
+                "ok": False,
+                "error": "The compiler build failed or timed out.",
+            }
+        after = current_info()
+        after_snapshot = str(after.get("latest_snapshot", ""))
+        if pinned_snapshot and after_snapshot != pinned_snapshot:
+            return {
+                "ok": False,
+                "compiler_catalog_stale": True,
+                "error": (
+                    "The compiler changed while this build was running. "
+                    "Queue the action again against the new revision."
+                ),
+            }
+        return {
+            "ok": True,
+            "program_id": program_id,
+            "compiler_snapshot": after_snapshot or pinned_snapshot,
+            "compiler_info": after or before,
+        }
 
     def start_finetune(
         self,
@@ -953,6 +1034,8 @@ class Daemon:
                     str(existing.get("behavior_hash", ""))
                     == source_behavior_hash
                     and str(existing.get("compiler", "")) == compiler_name
+                    and str(existing.get("compiler_snapshot", ""))
+                    == str(compiler_info.get("latest_snapshot", ""))
                 ):
                     return {"ok": True, "job": dict(existing)}
                 existing["status"] = "cancelled"
@@ -988,9 +1071,10 @@ class Daemon:
             job = dict(self._finetune_jobs.get(rule_id) or {})
         if job.get("id") != job_id or job.get("status") != "building":
             return
-        program_id = self.runtime.program_id_for_spec(
+        compiled = self._compile_program_for_snapshot(
             str(job.get("spec", "")),
             str(job.get("compiler", "")),
+            str(job.get("compiler_snapshot", "")),
             timeout=(
                 360
                 if (job.get("compiler_info") or {}).get(
@@ -998,6 +1082,7 @@ class Daemon:
                 else None
             ),
         )
+        program_id = str(compiled.get("program_id", ""))
         with self._finetune_lock:
             current = self._finetune_jobs.get(rule_id)
             if not current or current.get("id") != job_id:
@@ -1008,6 +1093,8 @@ class Daemon:
             if program_id:
                 current["status"] = "ready"
                 current["program_id"] = program_id
+                current["compiler_snapshot"] = str(
+                    compiled.get("compiler_snapshot", ""))
                 current["validation"] = {
                     "ok": True,
                     "passed": 0,
@@ -1017,7 +1104,8 @@ class Daemon:
                 }
             else:
                 current["status"] = "failed"
-                current["error"] = "Finetuned compilation failed or timed out."
+                current["error"] = str(compiled.get(
+                    "error", "Finetuned compilation failed or timed out."))
             queued_job = dict(current)
         self._resume_queued_deployment_for_job(rule_id, queued_job)
 
@@ -1032,13 +1120,91 @@ class Daemon:
             "compiler_mode",
             "behavior_hash",
             "compiler_snapshot", "program_id", "status", "phase", "error",
+            "requested_compiler", "requested_compiler_snapshot",
+            "requested_program_id",
+            "validation_hash", "spec_hash", "case_count",
+            "intent_hash", "coverage",
             "created_at", "updated_at", "finished_at", "result",
         }
         return {
             key: item for key, item in value.items() if key in allowed
         }
 
+    @staticmethod
+    def _coverage_identity(value: dict[str, Any] | None) -> dict[str, Any]:
+        coverage = dict(value or {})
+        mode = str(coverage.get("mode", "selected"))
+        return {
+            "mode": mode,
+            "selected_projects": (
+                []
+                if mode == "all"
+                else sorted({
+                    str(root)
+                    for root in coverage.get("selected_projects") or []
+                    if root
+                })
+            ),
+        }
+
+    def _complete_deployment_if_active(
+        self, queue_id: str, queued: dict[str, Any]
+    ) -> bool:
+        """Recognize a post-commit restart without racing rule mutations."""
+        rule_id = str(queued.get("rule_id", ""))
+        project_root = str(queued.get("project_root", ""))
+        with rules_api.rule_mutation_transaction():
+            current = rules_api.get_rule(
+                rule_id, project_root or None) or {}
+            active = current.get("active") or {}
+            roots = [item["path"] for item in self._project_catalog()]
+            coverage = rules_api.rule_coverage(rule_id, roots)
+            if not (
+                str(active.get("behavior_hash", ""))
+                == str(queued.get("behavior_hash", ""))
+                and str(active.get("compiler", ""))
+                == str(queued.get("compiler", ""))
+                and (
+                    not queued.get("compiler_snapshot")
+                    or str(active.get("compiler_snapshot", ""))
+                    == str(queued.get("compiler_snapshot", ""))
+                )
+                and str(
+                    active.get("compiler_mode")
+                    or revisions.AUTOMATIC_COMPILER_MODE
+                )
+                == str(
+                    queued.get("compiler_mode")
+                    or revisions.AUTOMATIC_COMPILER_MODE
+                )
+                and str(current.get("working_hash", ""))
+                == str(queued.get("source_hash", ""))
+                and self._coverage_identity(coverage)
+                == self._coverage_identity(queued.get("coverage"))
+            ):
+                return False
+            result = {
+                "ok": True,
+                "active": active,
+                "rule": current,
+                "coverage": coverage,
+            }
+            self.deployment_queue.compare_and_update(
+                queue_id,
+                deployment_queue.PENDING_STATUSES,
+                status="succeeded",
+                phase="Deployed",
+                error="",
+                result=result,
+                finished_at=time.time(),
+            )
+            return True
+
     def queue_deployment(self, req: dict[str, Any]) -> dict[str, Any]:
+        with self._workflow_admission_lock:
+            return self._queue_deployment(req)
+
+    def _queue_deployment(self, req: dict[str, Any]) -> dict[str, Any]:
         rule_id = str(req.get("rule_id", ""))
         project_root = str(req.get("project_root", ""))
         source = str(req.get("source", ""))
@@ -1074,16 +1240,42 @@ class Daemon:
             else:
                 automatic = self._automatic_base_compiler()
                 compiler = str(automatic.get("name", "")) or compiler
+        intent_coverage = self._coverage_identity(req.get("coverage"))
+        deployment_intent_hash = hashlib.sha256(json.dumps({
+            "rule_id": rule_id,
+            "project_root": project_root,
+            "source_hash": source_hash,
+            "compiler": requested_compiler,
+            "compiler_mode": compiler_mode,
+            "compiler_snapshot": str(
+                req.get("compiler_snapshot", "")),
+            "program_id": str(req.get("program_id", "")),
+            "coverage": intent_coverage,
+            "warnings": list(req.get("warnings") or []),
+            "expected_active_hash": str(
+                req.get("expected_active_hash", "")),
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         queue_id = str(
             req.get("deployment_id") or secrets.token_urlsafe(18))
         existing_id = self.deployment_queue.get(queue_id)
         if existing_id:
             if (
-                str(existing_id.get("rule_id", "")) != rule_id
-                or str(existing_id.get("source_hash", "")) != source_hash
-                or str(existing_id.get("compiler", "")) != compiler
-                or str(existing_id.get("compiler_mode", ""))
-                != compiler_mode
+                (
+                    existing_id.get("intent_hash")
+                    and str(existing_id.get("intent_hash", ""))
+                    != deployment_intent_hash
+                )
+                or (
+                    not existing_id.get("intent_hash")
+                    and (
+                        str(existing_id.get("rule_id", "")) != rule_id
+                        or str(existing_id.get("source_hash", ""))
+                        != source_hash
+                        or str(existing_id.get("compiler", "")) != compiler
+                        or str(existing_id.get("compiler_mode", ""))
+                        != compiler_mode
+                    )
+                )
             ):
                 return {
                     "ok": False,
@@ -1100,6 +1292,11 @@ class Daemon:
         job_matches = bool(
             str(job.get("behavior_hash", "")) == source_behavior_hash
             and str(job.get("compiler", "")) == compiler
+            and (
+                not req.get("compiler_snapshot")
+                or str(job.get("compiler_snapshot", ""))
+                == str(req.get("compiler_snapshot", ""))
+            )
             and job.get("status") in ("building", "ready")
         )
         if not current:
@@ -1136,14 +1333,22 @@ class Daemon:
         if rule is None:
             return {"ok": False, "error": "Queued rule could not be loaded."}
         compiler_info = self.runtime.compiler_info(compiler)
-        requires_build = (
-            compiler_info.get("compiler_kind") == "finetune_lora")
+        requested_snapshot = str(req.get("compiler_snapshot", ""))
+        current_snapshot = str(
+            compiler_info.get("latest_snapshot", ""))
         requested_program = str(req.get("program_id", ""))
         cached_program = getattr(
             self.runtime, "cached_program_id_for_spec", None)
         cached_program_id = (
             str(cached_program(rule.spec, compiler or None) or "")
-            if callable(cached_program) else ""
+            if (
+                callable(cached_program)
+                and (
+                    not requested_snapshot
+                    or requested_snapshot == current_snapshot
+                )
+            )
+            else ""
         )
         active_program = ""
         active_compiler = str(
@@ -1153,6 +1358,11 @@ class Daemon:
             str(current_active.get("behavior_hash", ""))
             == source_behavior_hash
             and active_compiler == compiler
+            and (
+                not requested_snapshot
+                or str(current_active.get("compiler_snapshot", ""))
+                == requested_snapshot
+            )
         ):
             active_program = str(current_active.get("program_id", ""))
         artifacts = [
@@ -1162,7 +1372,14 @@ class Daemon:
             else []
             )
             if isinstance(artifact, dict)
+            and str(artifact.get("behavior_hash", ""))
+            == source_behavior_hash
             and str(artifact.get("compiler", "")) == compiler
+            and (
+                not requested_snapshot
+                or str(artifact.get("compiler_snapshot", ""))
+                == requested_snapshot
+            )
             and artifact.get("program_id")
         ]
         artifact = max(
@@ -1192,20 +1409,35 @@ class Daemon:
             program_id = active_program
         elif artifact_program:
             program_id = artifact_program
-        if requires_build and not program_id and not (
-            job_matches and job.get("status") == "building"
+        if (
+            not program_id
+            and requested_snapshot
+            and requested_snapshot != current_snapshot
         ):
             return {
                 "ok": False,
-                "error": "No matching compiler build exists for this draft.",
-                "compiler_build_required": True,
+                "error": (
+                    "The selected compiler changed. Choose it again before "
+                    "deploying this draft."
+                ),
+                "compiler_catalog_stale": True,
             }
         existing = self.deployment_queue.active_for_rule(rule_id)
         if existing:
-            self.deployment_queue.cancel(
+            cancelled = self.deployment_queue.cancel(
                 str(existing.get("id", "")),
                 "Superseded by a newer deployment request.",
+                expected_statuses=(
+                    deployment_queue.CANCELLABLE_DEPLOYMENT_STATUSES),
             )
+            if cancelled is None:
+                return {
+                    "ok": False,
+                    "error": (
+                        "The previous deployment is already committing. "
+                        "Wait for it to finish, then deploy this draft."
+                    ),
+                }
         waiting_for_build = bool(
             job_matches and job.get("status") == "building")
         initial_status = (
@@ -1222,8 +1454,13 @@ class Daemon:
             "source": source,
             "source_hash": source_hash,
             "behavior_hash": source_behavior_hash,
+            "intent_hash": deployment_intent_hash,
             "compiler": compiler,
             "compiler_mode": compiler_mode,
+            "requested_compiler": requested_compiler,
+            "requested_compiler_snapshot": str(
+                req.get("compiler_snapshot", "")),
+            "requested_program_id": requested_program,
             "compiler_snapshot": str(
                 (
                     current_active.get("compiler_snapshot", "")
@@ -1246,7 +1483,7 @@ class Daemon:
             "program_id": program_id,
             "validation_cases": rules_api.normalize_validation_cases(
                 list(req.get("validation_cases") or [])),
-            "coverage": dict(req.get("coverage") or {}),
+            "coverage": intent_coverage,
             "warnings": list(req.get("warnings") or []),
             "expected_active_hash": expected_active_hash,
             "expected_definition_hash": str(
@@ -1279,23 +1516,365 @@ class Daemon:
                 or self.deployment_queue.latest_for_rule(rule_id)
             )
         )
+        if value and (
+            str(value.get("rule_id", "")) != rule_id
+            or str(value.get("kind") or deployment_queue.DEPLOYMENT_KIND)
+            != deployment_queue.DEPLOYMENT_KIND
+        ):
+            value = None
         return {
             "ok": True,
             "queue": self._public_deployment_queue(value),
         }
 
     def cancel_queued_deployment(
-        self, rule_id: str, reason: str = "Cancelled by user."
+        self,
+        rule_id: str,
+        reason: str = "Cancelled by user.",
+        queue_id: str = "",
     ) -> dict[str, Any]:
-        value = self.deployment_queue.active_for_rule(rule_id)
+        value = (
+            self.deployment_queue.get(queue_id)
+            if queue_id
+            else self.deployment_queue.active_for_rule(rule_id)
+        )
+        if value and (
+            str(value.get("rule_id", "")) != rule_id
+            or str(value.get("kind") or deployment_queue.DEPLOYMENT_KIND)
+            != deployment_queue.DEPLOYMENT_KIND
+        ):
+            value = None
         if not value:
             return {"ok": False, "error": "No deployment is queued."}
         cancelled = self.deployment_queue.cancel(
-            str(value.get("id", "")), reason)
+            str(value.get("id", "")),
+            reason,
+            expected_statuses=(
+                deployment_queue.CANCELLABLE_DEPLOYMENT_STATUSES),
+        )
+        if cancelled is None:
+            return {
+                "ok": False,
+                "error": "This deployment can no longer be cancelled.",
+                "queue": self._public_deployment_queue(
+                    self.deployment_queue.get(str(value.get("id", "")))),
+            }
         return {
             "ok": True,
             "queue": self._public_deployment_queue(cancelled),
         }
+
+    def queue_validation(self, req: dict[str, Any]) -> dict[str, Any]:
+        with self._workflow_admission_lock:
+            return self._queue_validation(req)
+
+    def _queue_validation(self, req: dict[str, Any]) -> dict[str, Any]:
+        rule_id = str(req.get("rule_id", ""))
+        project_root = str(req.get("project_root", ""))
+        source = str(req.get("source", ""))
+        valid, error = rules_api.validate_editor_source(source)
+        if not valid:
+            return {"ok": False, "error": error}
+        projection = rules_api.source_projection(source)
+        if projection.get("id") != rule_id:
+            return {"ok": False, "error": "source ID does not match the rule"}
+        rule = self._rule_from(rule_id, project_root, source)
+        if rule is None or not rule.spec:
+            return {"ok": False, "error": "Rule has no PAW specification."}
+        cases = rules_api.normalize_validation_cases(
+            list(req.get("validation_cases") or []))
+        if not cases:
+            return {"ok": False, "error": "Add at least one validation case."}
+        compiler_info = self.runtime.compiler_info(
+            str(req.get("compiler", "")))
+        compiler = str(
+            req.get("compiler") or compiler_info.get("name", ""))
+        compiler_snapshot = str(
+            req.get("compiler_snapshot")
+            or compiler_info.get("latest_snapshot", ""))
+        source_hash = revisions.hash_source(source)
+        spec_hash = validation_store.spec_fingerprint(rule.spec)
+        validation_hash = hashlib.sha256(json.dumps({
+            "rule_id": rule_id,
+            "project_root": project_root,
+            "spec_hash": spec_hash,
+            "compiler": compiler,
+            "compiler_snapshot": compiler_snapshot,
+            "cases": sorted(
+                (
+                    str(case.get("input", "")),
+                    str(case.get("expected", "")),
+                )
+                for case in cases
+            ),
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        queue_id = str(
+            req.get("validation_id") or secrets.token_urlsafe(18))
+        existing_id = self.deployment_queue.get(queue_id)
+        if existing_id:
+            if (
+                str(existing_id.get("kind", ""))
+                != deployment_queue.VALIDATION_KIND
+                or str(existing_id.get("validation_hash", ""))
+                != validation_hash
+            ):
+                return {
+                    "ok": False,
+                    "error": "Validation ID already belongs to another run.",
+                    "conflict": True,
+                }
+            return {
+                "ok": True,
+                "queue": self._public_deployment_queue(existing_id),
+                "idempotent": True,
+            }
+        target = self._validation_target(
+            rule_id,
+            project_root,
+            rule,
+            compiler,
+            str(req.get("program_id", "")),
+            compiler_snapshot,
+        )
+        program_id = str(target.get("program_id", ""))
+        compiler = str(target.get("compiler") or compiler)
+        compiler_snapshot = str(
+            target.get("compiler_snapshot") or compiler_snapshot)
+        requested_snapshot = str(req.get("compiler_snapshot", ""))
+        current_snapshot = str(
+            compiler_info.get("latest_snapshot", ""))
+        if (
+            not program_id
+            and requested_snapshot
+            and requested_snapshot != current_snapshot
+        ):
+            return {
+                "ok": False,
+                "error": (
+                    "The selected compiler changed. Choose it again before "
+                    "running these tests."
+                ),
+                "compiler_catalog_stale": True,
+            }
+        existing = self.deployment_queue.active_for_rule(
+            rule_id, kind=deployment_queue.VALIDATION_KIND)
+        if existing:
+            self.deployment_queue.cancel(
+                str(existing.get("id", "")),
+                "Superseded by a newer validation request.",
+            )
+        queue_value = self.deployment_queue.put({
+            "id": queue_id,
+            "kind": deployment_queue.VALIDATION_KIND,
+            "rule_id": rule_id,
+            "project_root": project_root,
+            "source": source,
+            "source_hash": source_hash,
+            "behavior_hash": revisions.behavior_hash(source),
+            "validation_hash": validation_hash,
+            "spec_hash": spec_hash,
+            "case_count": len(cases),
+            "validation_cases": cases,
+            "compiler": compiler,
+            "compiler_snapshot": compiler_snapshot,
+            "program_id": program_id,
+            "status": "validating" if program_id else "building",
+            "phase": "Running tests" if program_id else "Building compiler",
+            "error": "",
+        })
+        self.work.submit(self._run_queued_validation, queue_id)
+        return {
+            "ok": True,
+            "queue": self._public_deployment_queue(queue_value),
+        }
+
+    def validation_queue_status(
+        self, rule_id: str, queue_id: str = ""
+    ) -> dict[str, Any]:
+        value = (
+            self.deployment_queue.get(queue_id)
+            if queue_id else (
+                self.deployment_queue.active_for_rule(
+                    rule_id, kind=deployment_queue.VALIDATION_KIND)
+                or self.deployment_queue.latest_for_rule(
+                    rule_id, kind=deployment_queue.VALIDATION_KIND)
+            )
+        )
+        if value and (
+            str(value.get("rule_id", "")) != rule_id
+            or str(value.get("kind", ""))
+            != deployment_queue.VALIDATION_KIND
+        ):
+            value = None
+        return {
+            "ok": True,
+            "queue": self._public_deployment_queue(value),
+        }
+
+    def cancel_queued_validation(
+        self,
+        rule_id: str,
+        reason: str = "Cancelled by user.",
+        queue_id: str = "",
+    ) -> dict[str, Any]:
+        value = (
+            self.deployment_queue.get(queue_id)
+            if queue_id
+            else self.deployment_queue.active_for_rule(
+                rule_id, kind=deployment_queue.VALIDATION_KIND)
+        )
+        if value and (
+            str(value.get("rule_id", "")) != rule_id
+            or str(value.get("kind", ""))
+            != deployment_queue.VALIDATION_KIND
+        ):
+            value = None
+        if not value:
+            return {"ok": False, "error": "No validation run is queued."}
+        cancelled = self.deployment_queue.cancel(
+            str(value.get("id", "")), reason)
+        if cancelled is None:
+            return {
+                "ok": False,
+                "error": "This validation run is no longer cancellable.",
+                "queue": self._public_deployment_queue(
+                    self.deployment_queue.get(str(value.get("id", "")))),
+            }
+        return {
+            "ok": True,
+            "queue": self._public_deployment_queue(cancelled),
+        }
+
+    def _run_queued_validation(self, queue_id: str) -> None:
+        if not queue_id:
+            return
+        with self._queued_validation_lock:
+            if queue_id in self._queued_validations_running:
+                return
+            self._queued_validations_running.add(queue_id)
+        try:
+            queued = self.deployment_queue.get(queue_id)
+            if (
+                not queued
+                or str(queued.get("kind", ""))
+                != deployment_queue.VALIDATION_KIND
+                or queued.get("status")
+                not in deployment_queue.PENDING_STATUSES
+            ):
+                return
+            rule_id = str(queued.get("rule_id", ""))
+            project_root = str(queued.get("project_root", ""))
+            source = str(queued.get("source", ""))
+            rule = self._rule_from(rule_id, project_root, source)
+            if rule is None or not rule.spec:
+                self.deployment_queue.compare_and_update(
+                    queue_id,
+                    deployment_queue.PENDING_STATUSES,
+                    status="failed",
+                    phase="Invalid draft",
+                    error="The queued rule could not be loaded.",
+                    finished_at=time.time(),
+                )
+                return
+            compiler = str(queued.get("compiler", ""))
+            compiler_info = self.runtime.compiler_info(compiler)
+            program_id = str(queued.get("program_id", ""))
+            requested_snapshot = str(
+                queued.get("compiler_snapshot", ""))
+            current_snapshot = str(
+                compiler_info.get("latest_snapshot", ""))
+            resolved_snapshot = requested_snapshot or current_snapshot
+            if not program_id:
+                claimed = self.deployment_queue.compare_and_update(
+                    queue_id,
+                    deployment_queue.PENDING_STATUSES,
+                    status="building",
+                    phase="Building compiler",
+                )
+                if claimed is None:
+                    return
+                compiled = self._compile_program_for_snapshot(
+                    rule.spec,
+                    compiler,
+                    requested_snapshot,
+                    timeout=(
+                        360
+                        if compiler_info.get("compiler_kind")
+                        == "finetune_lora"
+                        else None
+                    ),
+                )
+                if not compiled.get("ok"):
+                    self.deployment_queue.compare_and_update(
+                        queue_id,
+                        {"building"},
+                        status="failed",
+                        phase=(
+                            "Compiler changed"
+                            if compiled.get("compiler_catalog_stale")
+                            else "Compiler failed"
+                        ),
+                        error=str(compiled.get(
+                            "error",
+                            "The compiler build failed or timed out.",
+                        )),
+                        finished_at=time.time(),
+                    )
+                    return
+                program_id = str(compiled.get("program_id", ""))
+                resolved_snapshot = str(
+                    compiled.get("compiler_snapshot", ""))
+                running = self.deployment_queue.compare_and_update(
+                    queue_id,
+                    {"building"},
+                    program_id=program_id,
+                    compiler_snapshot=resolved_snapshot,
+                    status="validating",
+                    phase="Running tests",
+                )
+                if running is None:
+                    return
+            else:
+                running = self.deployment_queue.compare_and_update(
+                    queue_id,
+                    deployment_queue.PENDING_STATUSES,
+                    status="validating",
+                    phase="Running tests",
+                )
+                if running is None:
+                    return
+            result = self.validate_rule_cases(
+                rule_id,
+                project_root,
+                source,
+                list(queued.get("validation_cases") or []),
+                compiler,
+                resolved_snapshot,
+                program_id,
+            )
+            self.deployment_queue.compare_and_update(
+                queue_id,
+                {"validating"},
+                status="succeeded" if result.get("ok") else "failed",
+                phase="Tests complete" if result.get("ok") else "Tests failed",
+                error="" if result.get("ok") else str(
+                    result.get("error", "Validation failed.")),
+                result=result if result.get("ok") else {},
+                finished_at=time.time(),
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            self.deployment_queue.compare_and_update(
+                queue_id,
+                deployment_queue.PENDING_STATUSES,
+                status="failed",
+                phase="Internal error",
+                error=f"{type(exc).__name__}: {exc}",
+                finished_at=time.time(),
+            )
+        finally:
+            with self._queued_validation_lock:
+                self._queued_validations_running.discard(queue_id)
 
     def _resume_queued_deployment_for_job(
         self, rule_id: str, job: dict[str, Any]
@@ -1308,21 +1887,29 @@ class Daemon:
             != str(job.get("behavior_hash", ""))
             or str(queued.get("compiler", ""))
             != str(job.get("compiler", ""))
+            or (
+                queued.get("compiler_snapshot")
+                and str(queued.get("compiler_snapshot", ""))
+                != str(job.get("compiler_snapshot", ""))
+            )
         ):
             return
         if job.get("status") == "ready":
-            self.deployment_queue.update(
+            resumed = self.deployment_queue.compare_and_update(
                 str(queued["id"]),
+                {"waiting_for_build", "building"},
                 status="checking",
                 phase="Checking draft",
                 program_id=str(job.get("program_id", "")),
                 compiler_snapshot=str(
                     job.get("compiler_snapshot", "")),
             )
-            self._schedule_queued_deployment(str(queued["id"]))
+            if resumed is not None:
+                self._schedule_queued_deployment(str(queued["id"]))
         elif job.get("status") == "failed":
-            self.deployment_queue.update(
+            self.deployment_queue.compare_and_update(
                 str(queued["id"]),
+                {"waiting_for_build", "building"},
                 status="failed",
                 phase="Compiler failed",
                 error=str(job.get("error", "Compiler build failed.")),
@@ -1360,47 +1947,13 @@ class Daemon:
             _log(
                 f"deployment {queue_id} started rule={rule_id} "
                 f"status={queued.get('status', '')}")
-            current = rules_api.get_rule(
-                rule_id, project_root or None) or {}
-            already_active = current.get("active") or {}
-            if (
-                str(already_active.get("behavior_hash", ""))
-                == str(queued.get("behavior_hash", ""))
-                and str(already_active.get("compiler", ""))
-                == str(queued.get("compiler", ""))
-                and str(
-                    already_active.get("compiler_mode")
-                    or revisions.AUTOMATIC_COMPILER_MODE
-                )
-                == str(
-                    queued.get("compiler_mode")
-                    or revisions.AUTOMATIC_COMPILER_MODE
-                )
-                and str(current.get("working_hash", ""))
-                == str(queued.get("source_hash", ""))
-            ):
-                self.deployment_queue.update(
-                    queue_id,
-                    status="succeeded",
-                    phase="Deployed",
-                    error="",
-                    result={
-                        "ok": True,
-                        "active": already_active,
-                        "rule": current,
-                        "coverage": rules_api.rule_coverage(
-                            rule_id, [
-                                item["path"]
-                                for item in self._project_catalog()
-                            ]),
-                    },
-                    finished_at=time.time(),
-                )
+            if self._complete_deployment_if_active(queue_id, queued):
                 return
             rule = self._rule_from(rule_id, project_root, source)
             if rule is None or not rule.spec:
-                self.deployment_queue.update(
+                self.deployment_queue.compare_and_update(
                     queue_id,
+                    deployment_queue.PENDING_STATUSES,
                     status="failed",
                     phase="Invalid draft",
                     error="The queued rule could not be loaded.",
@@ -1409,38 +1962,89 @@ class Daemon:
                 return
             program_id = str(queued.get("program_id", ""))
             if not program_id:
-                self.deployment_queue.update(
-                    queue_id, status="building", phase="Building compiler")
+                claimed = self.deployment_queue.compare_and_update(
+                    queue_id,
+                    deployment_queue.PENDING_STATUSES,
+                    status="building",
+                    phase="Building compiler",
+                )
+                if claimed is None:
+                    return
                 compiler_info = self.runtime.compiler_info(
                     str(queued.get("compiler", "")))
-                program_id = str(self.runtime.program_id_for_spec(
+                requested_snapshot = str(
+                    queued.get("compiler_snapshot", ""))
+                compiled = self._compile_program_for_snapshot(
                     rule.spec,
-                    str(queued.get("compiler", "")) or None,
+                    str(queued.get("compiler", "")),
+                    requested_snapshot,
                     timeout=(
                         360
                         if compiler_info.get("compiler_kind")
                         == "finetune_lora"
                         else None
                     ),
-                ) or "")
-                if not program_id:
-                    self.deployment_queue.update(
+                )
+                if not compiled.get("ok"):
+                    self.deployment_queue.compare_and_update(
                         queue_id,
+                        {"building"},
                         status="failed",
-                        phase="Compiler failed",
-                        error="The compiler build failed or timed out.",
+                        phase=(
+                            "Compiler changed"
+                            if compiled.get("compiler_catalog_stale")
+                            else "Compiler failed"
+                        ),
+                        error=str(compiled.get(
+                            "error",
+                            "The compiler build failed or timed out.",
+                        )),
                         finished_at=time.time(),
                     )
                     return
-                self.deployment_queue.update(
+                program_id = str(compiled.get("program_id", ""))
+                queued = self.deployment_queue.compare_and_update(
                     queue_id,
+                    {"building"},
                     program_id=program_id,
                     compiler_snapshot=str(
-                        compiler_info.get("latest_snapshot", "")),
+                        compiled.get("compiler_snapshot", "")),
+                    status="checking",
+                    phase="Checking draft",
                 )
-            queued = self.deployment_queue.get(queue_id) or {}
-            if queued.get("status") == "cancelled":
+                if queued is None:
+                    return
+            else:
+                queued = self.deployment_queue.compare_and_update(
+                    queue_id,
+                    deployment_queue.PENDING_STATUSES,
+                    status="checking",
+                    phase="Checking draft",
+                )
+                if queued is None:
+                    return
+            warming = self.deployment_queue.compare_and_update(
+                queue_id,
+                {"checking"},
+                status="checking",
+                phase="Warming compiler",
+            )
+            if warming is None:
                 return
+            if not self.runtime.warm(program_id):
+                self.deployment_queue.compare_and_update(
+                    queue_id,
+                    {"checking"},
+                    status="failed",
+                    phase="Warmup failed",
+                    error=(
+                        "The compiled program could not be loaded locally. "
+                        "The previous deployment remains active."
+                    ),
+                    finished_at=time.time(),
+                )
+                return
+            queued = warming
             current = rules_api.get_rule(rule_id, project_root or None) or {}
             definition = current.get("definition") or {}
             active = current.get("active") or {}
@@ -1450,16 +2054,21 @@ class Daemon:
                 or str(active.get("source_hash", ""))
                 != str(queued.get("expected_active_hash", ""))
             ):
-                self.deployment_queue.update(
+                self.deployment_queue.compare_and_update(
                     queue_id,
+                    {"checking"},
                     status="cancelled",
                     phase="Draft changed",
                     error="The rule changed after deployment was queued.",
                     finished_at=time.time(),
                 )
                 return
-            self.deployment_queue.update(
-                queue_id, status="checking", phase="Checking draft")
+            definition_path = str(definition.get("source_path", ""))
+            deployment_cases = (
+                rules_api.validation_cases_for_path(definition_path)
+                if definition_path
+                else list(queued.get("validation_cases") or [])
+            )
             prepared = self.prepare_rule_deployment({
                 "rule_id": rule_id,
                 "project_root": project_root,
@@ -1479,12 +2088,14 @@ class Daemon:
                 "program_id": program_id,
                 "coverage": dict(queued.get("coverage") or {}),
                 "warnings": list(queued.get("warnings") or []),
-                "validation_cases": list(
-                    queued.get("validation_cases") or []),
+                "validation_cases": deployment_cases,
+                "validation_cases_from_working_copy": bool(
+                    definition_path),
             })
             if not prepared.get("ok"):
-                self.deployment_queue.update(
+                self.deployment_queue.compare_and_update(
                     queue_id,
+                    {"checking"},
                     status="failed",
                     phase="Deployment failed",
                     error=str(
@@ -1496,16 +2107,21 @@ class Daemon:
                     f"deployment {queue_id} failed phase=prepare "
                     f"error={prepared.get('error', '')}")
                 return
-            if (
-                (self.deployment_queue.get(queue_id) or {}).get("status")
-                == "cancelled"
-            ):
-                return
-            self.deployment_queue.update(
-                queue_id, status="deploying", phase="Deploying")
-            result = self.commit_rule_deployment(str(prepared["token"]))
-            self.deployment_queue.update(
+            deploying = self.deployment_queue.compare_and_update(
                 queue_id,
+                {"checking"},
+                status="deploying",
+                phase="Deploying",
+            )
+            if deploying is None:
+                with self._state_lock:
+                    self._prepared_deployments.pop(
+                        str(prepared.get("token", "")), None)
+                return
+            result = self.commit_rule_deployment(str(prepared["token"]))
+            self.deployment_queue.compare_and_update(
+                queue_id,
+                {"deploying"},
                 status="succeeded" if result.get("ok") else "failed",
                 phase="Deployed" if result.get("ok") else "Deployment failed",
                 error="" if result.get("ok") else str(
@@ -1519,8 +2135,9 @@ class Daemon:
                 f"phase=commit error={result.get('error', '')}")
         except Exception as exc:
             traceback.print_exc()
-            self.deployment_queue.update(
+            self.deployment_queue.compare_and_update(
                 queue_id,
+                deployment_queue.PENDING_STATUSES,
                 status="failed",
                 phase="Internal error",
                 error=f"{type(exc).__name__}: {exc}",
@@ -1552,6 +2169,8 @@ class Daemon:
                 self.deployment_queue.cancel(
                     str(existing.get("id", "")),
                     "Automatic optimization was disabled.",
+                    expected_statuses=(
+                        deployment_queue.CANCELLABLE_DEPLOYMENT_STATUSES),
                 )
             return {}
         active_compiler = str(active.get("compiler", ""))
@@ -1617,6 +2236,8 @@ class Daemon:
             self.deployment_queue.cancel(
                 str(existing.get("id", "")),
                 "Superseded by a newer deployed revision.",
+                expected_statuses=(
+                    deployment_queue.CANCELLABLE_DEPLOYMENT_STATUSES),
             )
         queued = self.deployment_queue.put({
             "id": queue_id,
@@ -1665,7 +2286,11 @@ class Daemon:
                 != revisions.AUTOMATIC_COMPILER_MODE
             ):
                 self.deployment_queue.cancel(
-                    queue_id, "The deployed rule or compiler mode changed.")
+                    queue_id,
+                    "The deployed rule or compiler mode changed.",
+                    expected_statuses=(
+                        deployment_queue.CANCELLABLE_DEPLOYMENT_STATUSES),
+                )
                 return
             target_compiler = str(queued.get("compiler", ""))
             target_info = self.runtime.compiler_info(target_compiler)
@@ -1676,46 +2301,72 @@ class Daemon:
                 != str(queued.get("compiler_snapshot", ""))
             ):
                 self.deployment_queue.cancel(
-                    queue_id, "The compatible finetune compiler changed.")
+                    queue_id,
+                    "The compatible finetune compiler changed.",
+                    expected_statuses=(
+                        deployment_queue.CANCELLABLE_DEPLOYMENT_STATUSES),
+                )
                 return
             if str(active.get("compiler", "")) == target_compiler:
-                self.deployment_queue.update(
+                self.deployment_queue.compare_and_update(
                     queue_id,
+                    deployment_queue.PENDING_STATUSES,
                     status="succeeded",
                     phase="Optimized",
                     result={"ok": True, "active": active},
                     finished_at=time.time(),
                 )
                 return
-            self.deployment_queue.update(
-                queue_id, status="building", phase="Optimizing in background")
-            program_id = str(self.runtime.program_id_for_spec(
+            claimed = self.deployment_queue.compare_and_update(
+                queue_id,
+                deployment_queue.PENDING_STATUSES,
+                status="building",
+                phase="Optimizing in background",
+            )
+            if claimed is None:
+                return
+            compiled = self._compile_program_for_snapshot(
                 str(queued.get("spec", "")),
                 target_compiler,
+                str(queued.get("compiler_snapshot", "")),
                 timeout=360,
-            ) or "")
-            if not program_id:
-                self.deployment_queue.update(
+            )
+            if not compiled.get("ok"):
+                self.deployment_queue.compare_and_update(
                     queue_id,
+                    {"building"},
                     status="failed",
-                    phase="Optimization failed",
-                    error="The finetuned compiler build failed or timed out.",
+                    phase=(
+                        "Compiler changed"
+                        if compiled.get("compiler_catalog_stale")
+                        else "Optimization failed"
+                    ),
+                    error=str(compiled.get(
+                        "error",
+                        "The finetuned compiler build failed or timed out.",
+                    )),
                     finished_at=time.time(),
                 )
                 return
+            program_id = str(compiled.get("program_id", ""))
             if not self.runtime.warm(program_id):
-                self.deployment_queue.update(
+                self.deployment_queue.compare_and_update(
                     queue_id,
+                    {"building"},
                     status="failed",
                     phase="Optimization failed",
                     error="The finetuned program could not be warmed locally.",
                     finished_at=time.time(),
                 )
                 return
-            if (
-                (self.deployment_queue.get(queue_id) or {}).get("status")
-                == "cancelled"
-            ):
+            promoting = self.deployment_queue.compare_and_update(
+                queue_id,
+                {"building"},
+                status="deploying",
+                phase="Promoting optimized compiler",
+                program_id=program_id,
+            )
+            if promoting is None:
                 return
             with self._deployment_lock:
                 promoted = revisions.activate_artifact(
@@ -1730,13 +2381,20 @@ class Daemon:
                     expected_compiler_mode=revisions.AUTOMATIC_COMPILER_MODE,
                 )
             if not promoted:
-                self.deployment_queue.cancel(
-                    queue_id, "The deployed rule changed before optimization.")
+                self.deployment_queue.compare_and_update(
+                    queue_id,
+                    {"deploying"},
+                    status="cancelled",
+                    error=(
+                        "The deployed rule changed before optimization."),
+                    finished_at=time.time(),
+                )
                 return
             self.rules_cache.invalidate()
             self._warm_rule_consumers(rule_id, source_path)
-            self.deployment_queue.update(
+            self.deployment_queue.compare_and_update(
                 queue_id,
+                {"deploying"},
                 program_id=program_id,
                 status="succeeded",
                 phase="Optimized",
@@ -1746,8 +2404,9 @@ class Daemon:
             )
         except Exception as exc:
             traceback.print_exc()
-            self.deployment_queue.update(
+            self.deployment_queue.compare_and_update(
                 queue_id,
+                deployment_queue.PENDING_STATUSES,
                 status="failed",
                 phase="Optimization failed",
                 error=f"{type(exc).__name__}: {exc}",
@@ -1941,7 +2600,14 @@ class Daemon:
         }
         cached_program = getattr(
             self.runtime, "cached_program_id_for_spec", None)
-        if callable(cached_program):
+        if (
+            callable(cached_program)
+            and (
+                not requested_snapshot
+                or requested_snapshot
+                == str(compiler_info.get("latest_snapshot", ""))
+            )
+        ):
             target["program_id"] = str(
                 cached_program(
                     rule.spec, compiler or None) or "")
@@ -1953,6 +2619,11 @@ class Daemon:
             job.get("status") == "ready"
             and str(job.get("compiler", "")) == compiler
             and str(job.get("spec", "")).strip() == rule.spec.strip()
+            and (
+                not requested_snapshot
+                or str(job.get("compiler_snapshot", ""))
+                == requested_snapshot
+            )
             and (
                 not requested_program_id
                 or str(job.get("program_id", "")) == requested_program_id
@@ -1978,16 +2649,57 @@ class Daemon:
         active_compiler = str(active.get("compiler", ""))
         if not active_compiler:
             active_compiler = str(default_info.get("name", ""))
-        if requested_compiler and active_compiler != compiler:
-            return target
-        return {
-            "compiler": active_compiler,
-            "compiler_snapshot": str(
-                active.get("compiler_snapshot", "")),
-            "program_id": active_program,
-            "spec_hash": validation_store.spec_fingerprint(rule.spec),
-            "uses_active_program": True,
-        }
+        active_matches = bool(
+            (not requested_compiler or active_compiler == compiler)
+            and (
+                not requested_snapshot
+                or str(active.get("compiler_snapshot", ""))
+                == requested_snapshot
+            )
+            and (
+                not requested_program_id
+                or active_program == requested_program_id
+            )
+        )
+        if active_matches:
+            return {
+                "compiler": active_compiler,
+                "compiler_snapshot": str(
+                    active.get("compiler_snapshot", "")),
+                "program_id": active_program,
+                "spec_hash": validation_store.spec_fingerprint(rule.spec),
+                "uses_active_program": True,
+            }
+        artifacts = [
+            dict(item) for item in (
+                (active.get("artifacts") or {}).values()
+                if isinstance(active.get("artifacts"), dict) else []
+            )
+            if isinstance(item, dict)
+            and str(item.get("compiler", "")) == compiler
+            and (
+                not requested_snapshot
+                or str(item.get("compiler_snapshot", ""))
+                == requested_snapshot
+            )
+            and (
+                not requested_program_id
+                or str(item.get("program_id", ""))
+                == requested_program_id
+            )
+            and item.get("program_id")
+        ]
+        artifact = max(
+            artifacts,
+            key=lambda item: float(item.get("created_at", 0) or 0),
+            default={},
+        )
+        if artifact:
+            target["program_id"] = str(
+                artifact.get("program_id", ""))
+            target["compiler_snapshot"] = str(
+                artifact.get("compiler_snapshot", compiler_snapshot))
+        return target
 
     def run_validation_cases(
         self,
@@ -2105,9 +2817,35 @@ class Daemon:
         compile_started = time.time()
         program_id = str(target.get("program_id", ""))
         if not program_id:
-            program_id = self.runtime.program_id_for_spec(
-                rule.spec, str(target.get("compiler", "")) or None)
+            compiler_name = str(target.get("compiler", ""))
+            compiler_info = self.runtime.compiler_info(compiler_name)
+            compiled = self._compile_program_for_snapshot(
+                rule.spec,
+                compiler_name,
+                str(target.get("compiler_snapshot", "")),
+                timeout=(
+                    360
+                    if compiler_info.get("compiler_kind")
+                    == "finetune_lora"
+                    else None
+                ),
+            )
+            if not compiled.get("ok"):
+                compile_ms = int((time.time() - compile_started) * 1000)
+                _log(
+                    f"validation compile failed rule={rule_id} "
+                    f"elapsed_ms={compile_ms}")
+                return {
+                    "ok": False,
+                    "error": str(compiled.get(
+                        "error", "Validation compilation failed.")),
+                    "compiler_catalog_stale": bool(
+                        compiled.get("compiler_catalog_stale")),
+                }
+            program_id = str(compiled.get("program_id", ""))
             target["program_id"] = program_id
+            target["compiler_snapshot"] = str(
+                compiled.get("compiler_snapshot", ""))
         compile_ms = int((time.time() - compile_started) * 1000)
         if not program_id:
             _log(
@@ -2138,7 +2876,7 @@ class Daemon:
         }
 
     def _project_catalog(self) -> list[dict[str, str]]:
-        discovered = cursor_projects.discover_projects(limit=100)
+        discovered = codex_projects.discover_projects(limit=100)
         by_path = {
             str(item["path"]): {
                 "path": str(item["path"]),
@@ -2280,7 +3018,16 @@ class Daemon:
             )
             or compiler_info.get("latest_snapshot", ""))
         compiler_changed = bool(
-            current_active and compiler != active_compiler)
+            current_active
+            and (
+                compiler != active_compiler
+                or (
+                    compiler_snapshot
+                    and str(current_active.get("compiler_snapshot", ""))
+                    != compiler_snapshot
+                )
+            )
+        )
         compiler_mode_changed = bool(
             current_active and compiler_mode != active_compiler_mode)
         validation_cases = rules_api.normalize_validation_cases(
@@ -2309,6 +3056,11 @@ class Daemon:
                 == source_behavior_hash
                 and str(job.get("compiler", "")) == compiler
                 and str(job.get("program_id", "")) == requested_program
+                and (
+                    not compiler_snapshot
+                    or str(job.get("compiler_snapshot", ""))
+                    == compiler_snapshot
+                )
             )
             active_valid = bool(
                 not behavior_changed
@@ -2320,6 +3072,11 @@ class Daemon:
                 self.runtime, "cached_program_id_for_spec", None)
             cached_valid = bool(
                 callable(cached_program)
+                and (
+                    not compiler_snapshot
+                    or str(compiler_info.get("latest_snapshot", ""))
+                    == compiler_snapshot
+                )
                 and str(cached_program(rule.spec, compiler or None))
                 == requested_program
             )
@@ -2331,8 +3088,15 @@ class Daemon:
                     else []
                     )
                     if isinstance(item, dict)
+                    and str(item.get("behavior_hash", ""))
+                    == source_behavior_hash
                     and str(item.get("compiler", "")) == compiler
                     and str(item.get("program_id", "")) == requested_program
+                    and (
+                        not compiler_snapshot
+                        or str(item.get("compiler_snapshot", ""))
+                        == compiler_snapshot
+                    )
                 ),
                 {},
             )
@@ -2373,13 +3137,15 @@ class Daemon:
                     project_root,
                     source=source,
                     compiler=compiler or None,
+                    expected_snapshot=compiler_snapshot,
                 )
                 if not compiled.get("ok"):
                     return compiled
                 program_id = str(compiled.get("program_id", ""))
                 compiler = str(compiled.get("compiler", compiler))
                 compiler_snapshot = str(
-                    (compiled.get("compiler_info") or {}).get(
+                    compiled.get("compiler_snapshot")
+                    or (compiled.get("compiler_info") or {}).get(
                         "latest_snapshot", ""))
         token = secrets.token_urlsafe(24)
         prepared = {
@@ -2407,6 +3173,8 @@ class Daemon:
             "created_at": time.time(),
             "test": tested,
             "validation_cases": validation_cases,
+            "validation_cases_from_working_copy": bool(
+                req.get("validation_cases_from_working_copy")),
             "validation": validation,
         }
         with self._state_lock:
@@ -2424,7 +3192,8 @@ class Daemon:
 
     def commit_rule_deployment(self, token: str) -> dict[str, Any]:
         with self._deployment_lock:
-            return self._commit_rule_deployment(token)
+            with rules_api.rule_mutation_transaction():
+                return self._commit_rule_deployment(token)
 
     def _commit_rule_deployment(self, token: str) -> dict[str, Any]:
         with self._state_lock:
@@ -2503,8 +3272,18 @@ class Daemon:
         if not saved.get("ok"):
             return saved
         path = saved["path"]
+        current_source_path = str(
+            current_definition.get("source_path", ""))
+        latest_validation_cases = (
+            rules_api.validation_cases_for_path(current_source_path)
+            if (
+                current_source_path
+                and prepared.get("validation_cases_from_working_copy")
+            )
+            else prepared.get("validation_cases") or []
+        )
         validation_saved = rules_api.save_validation_cases(
-            path, prepared.get("validation_cases") or [])
+            path, latest_validation_cases)
         if not validation_saved.get("ok"):
             return validation_saved
         previous_active = revisions.active_info(rule_id, path)
@@ -2865,14 +3644,15 @@ class Daemon:
                 str(req.get("expected", "")),
             )
         if rtype == "save_validation_cases":
-            info = rules_api.get_rule(
-                str(req.get("rule_id", "")),
-                str(req.get("project_root", "")) or None)
-            source_path = str(
-                ((info or {}).get("definition") or {}).get(
-                    "source_path", ""))
-            return rules_api.save_validation_cases(
-                source_path, list(req.get("validation_cases") or []))
+            with rules_api.rule_mutation_transaction():
+                info = rules_api.get_rule(
+                    str(req.get("rule_id", "")),
+                    str(req.get("project_root", "")) or None)
+                source_path = str(
+                    ((info or {}).get("definition") or {}).get(
+                        "source_path", ""))
+                return rules_api.save_validation_cases(
+                    source_path, list(req.get("validation_cases") or []))
         if rtype == "ledger_window":
             finding = self.store.get(int(req.get("id", 0)))
             if not finding:
@@ -2921,7 +3701,7 @@ class Daemon:
             return {"ok": True, "known_projects": known}
         if rtype == "rule_library":
             discovered = [
-                item["path"] for item in cursor_projects.discover_projects(limit=100)
+                item["path"] for item in codex_projects.discover_projects(limit=100)
             ]
             with self._state_lock:
                 known = list(self.known_projects)
@@ -2962,7 +3742,7 @@ class Daemon:
             errors = self.rules_cache.errors(project_root)
             rules = rules_api.list_rules(project_root or None)
             project_paths = [
-                item["path"] for item in cursor_projects.discover_projects(limit=100)
+                item["path"] for item in codex_projects.discover_projects(limit=100)
             ]
             with self._state_lock:
                 warm = {
@@ -3023,7 +3803,7 @@ class Daemon:
                 )
                 queue_overlay = bool(
                     queued.get("status") in (
-                        "waiting_for_build", "building", "validating",
+                        "waiting_for_build", "building", "checking", "validating",
                         "deploying", "failed",
                     )
                     and queued.get("source")
@@ -3075,6 +3855,20 @@ class Daemon:
             return self.cancel_queued_deployment(
                 str(req.get("rule_id", "")),
                 str(req.get("reason", "Cancelled by user.")),
+                str(req.get("deployment_id", "")),
+            )
+        if rtype == "queue_validation":
+            return self.queue_validation(req)
+        if rtype == "validation_queue_status":
+            return self.validation_queue_status(
+                str(req.get("rule_id", "")),
+                str(req.get("validation_id", "")),
+            )
+        if rtype == "cancel_queued_validation":
+            return self.cancel_queued_validation(
+                str(req.get("rule_id", "")),
+                str(req.get("reason", "Cancelled by user.")),
+                str(req.get("validation_id", "")),
             )
         if rtype == "finetune_status":
             return self.finetune_status(
@@ -3256,7 +4050,7 @@ class Daemon:
             with self._state_lock:
                 known = list(self.known_projects)
             discovered = [
-                item["path"] for item in cursor_projects.discover_projects(limit=100)
+                item["path"] for item in codex_projects.discover_projects(limit=100)
             ]
             result = rules_api.rename_rule(
                 req["rule_id"],
@@ -3318,7 +4112,7 @@ class Daemon:
             with self._state_lock:
                 known = list(self.known_projects)
             discovered = [
-                item["path"] for item in cursor_projects.discover_projects(limit=100)
+                item["path"] for item in codex_projects.discover_projects(limit=100)
             ]
             project_roots = list(dict.fromkeys([*known, *discovered]))
             definition = req.get("definition") or {}
@@ -3340,7 +4134,7 @@ class Daemon:
         if rtype == "stop_rule_everywhere":
             rule_id = req["rule_id"]
             result = rules_api.set_enabled(rule_id, False, None)
-            for item in cursor_projects.discover_projects(limit=100):
+            for item in codex_projects.discover_projects(limit=100):
                 rules_api.set_enabled(
                     rule_id, False, item["path"], name=req.get("name"))
             self.rules_cache.invalidate()
@@ -3445,23 +4239,24 @@ class Daemon:
             rule = self._rule_from(rule_id, project_root, source)
             if rule is None:
                 return {"ok": False, "error": "rule could not be loaded"}
+            compiled: dict[str, Any] = {}
             if rule.spec:
-                tested = self.test_rule(rule_id, project_root, source)
-                if not tested.get("ok"):
-                    return tested
-                if tested.get("total") and tested.get("passed") != tested.get("total"):
-                    return {
-                        "ok": False,
-                        "error": (
-                            f"{tested.get('passed', 0)}/{tested.get('total', 0)} "
-                            "PAW cases passed"
-                        ),
-                        "test": tested,
-                    }
                 compiled = self.compile_rule(rule_id, project_root, source=source)
                 if not compiled.get("ok"):
                     return compiled
-            active = revisions.activate(rule.id, info["path"], source)
+            compiler_info = dict(compiled.get("compiler_info") or {})
+            active = revisions.activate(
+                rule.id,
+                info["path"],
+                source,
+                compiler=str(compiled.get("compiler", "")) or None,
+                program_id=str(compiled.get("program_id", "")) or None,
+                compiler_snapshot=str(
+                    compiler_info.get("latest_snapshot", "")) or None,
+                compiler_mode=(
+                    revisions.EXPLICIT_COMPILER_MODE
+                    if rule.spec else None),
+            )
             self.rules_cache.invalidate()
             if req.get("enable", True):
                 rules_api.set_enabled(rule.id, True, project_root or None)

@@ -1,6 +1,6 @@
 """Per-project, violations-only audit log.
 
-Each violation is one JSON line in ``<project>/.cursor/rules-as-programs/log/
+Each violation is one JSON line in ``<project>/.codex/rules-as-programs/log/
 audit.jsonl`` recording its stable finding ID, timestamp, rule, severity,
 suppression state, exact mapped trigger input, raw trigger payload, and PAW
 decision trace. A ``.gitignore`` (``*``) is dropped in the log folder so

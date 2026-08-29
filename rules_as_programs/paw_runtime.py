@@ -199,7 +199,15 @@ class PawRuntime:
 
     def _save_cache(self) -> None:
         try:
-            config.paw_cache_path().write_text(json.dumps(self._id_by_hash, indent=2))
+            path = config.paw_cache_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(
+                json.dumps(self._id_by_hash, indent=2),
+                encoding="utf-8",
+            )
+            temporary.chmod(0o600)
+            temporary.replace(path)
         except OSError:
             pass
 
@@ -277,8 +285,13 @@ class PawRuntime:
 
     def _compile(self, spec: str, compiler: str | None):
         if compiler:
-            return paw.compile(spec, compiler=compiler)
-        return paw.compile(spec)
+            return paw.compile(
+                spec,
+                compiler=compiler,
+                public=True,
+                ephemeral=False,
+            )
+        return paw.compile(spec, public=True, ephemeral=False)
 
     # --- supervised warm + run -------------------------------------------
     def warm(self, program_id: str) -> bool:

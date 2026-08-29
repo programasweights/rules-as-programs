@@ -102,11 +102,14 @@ def active_info(
     normalized["compiler_mode"] = _compiler_mode(
         normalized.get("compiler_mode"))
     normalized["artifacts"] = _normalized_artifacts(
-        normalized.get("artifacts"))
+        normalized.get("artifacts"),
+        str(normalized.get("behavior_hash", "")),
+    )
     current = _artifact(
         str(normalized.get("compiler", "")),
         str(normalized.get("program_id", "")),
         str(normalized.get("compiler_snapshot", "")),
+        behavior_hash=str(normalized.get("behavior_hash", "")),
         created_at=float(normalized.get("activated_at", 0) or 0),
     )
     if current:
@@ -128,6 +131,7 @@ def _artifact(
     program_id: str,
     compiler_snapshot: str,
     *,
+    behavior_hash: str = "",
     created_at: float | None = None,
 ) -> dict[str, Any] | None:
     if not program_id:
@@ -137,18 +141,24 @@ def _artifact(
         "compiler": compiler,
         "compiler_snapshot": compiler_snapshot,
         "program_id": program_id,
+        "behavior_hash": behavior_hash,
         "created_at": float(created_at or time.time()),
     }
 
 
-def _normalized_artifacts(value: Any) -> dict[str, dict[str, Any]]:
+def _normalized_artifacts(
+    value: Any, behavior_hash: str = ""
+) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         return {}
-    return {
-        str(key): dict(item)
-        for key, item in value.items()
-        if isinstance(item, dict) and item.get("program_id")
-    }
+    normalized = {}
+    for key, item in value.items():
+        if not isinstance(item, dict) or not item.get("program_id"):
+            continue
+        artifact = dict(item)
+        artifact.setdefault("behavior_hash", behavior_hash)
+        normalized[str(key)] = artifact
+    return normalized
 
 
 def activate(
@@ -183,13 +193,15 @@ def activate(
             and str(previous.get("behavior_hash", "")) == source_behavior_hash
         )
         artifacts = (
-            _normalized_artifacts(previous.get("artifacts"))
+            _normalized_artifacts(
+                previous.get("artifacts"), source_behavior_hash)
             if preserve_artifacts else {}
         )
         current_artifact = _artifact(
             compiler or "",
             program_id or "",
             compiler_snapshot or "",
+            behavior_hash=source_behavior_hash,
         )
         if current_artifact:
             artifacts[current_artifact["key"]] = current_artifact
@@ -246,7 +258,10 @@ def activate_artifact(
         artifact = _artifact(compiler, program_id, compiler_snapshot)
         if artifact is None:
             return None
-        artifacts = _normalized_artifacts(current.get("artifacts"))
+        behavior = str(current.get("behavior_hash", ""))
+        artifact["behavior_hash"] = behavior
+        artifacts = _normalized_artifacts(
+            current.get("artifacts"), behavior)
         artifacts[artifact["key"]] = artifact
         updated = {
             **current,

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import threading
+import hashlib
 import json
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -241,6 +242,7 @@ class RAPRuleEditorDocument(NSObject):
         self._coverage_dirty = False
         self._busy = False
         self._shown = False
+        self._closed = False
         self._scope_confirmed = False
         self._close_after_save = False
         self._advanced_window = None
@@ -304,6 +306,11 @@ class RAPRuleEditorDocument(NSObject):
         self._notified_queue_terminal = ""
         self._pending_deployment_id = ""
         self._deployment_recovery_thread = None
+        self._validation_queue: dict[str, Any] = {}
+        self._validation_queue_poll_timer = None
+        self._validation_queue_poll_failures = 0
+        self._validation_queue_poll_recovery_thread = None
+        self._pending_validation_id = ""
         self._draft_generation = 0
         self._confirmed_spec_warning_hash = ""
         self._confirmed_build_discard_hash = ""
@@ -445,7 +452,7 @@ class RAPRuleEditorDocument(NSObject):
         self.channel = str(projection.get("channel", "finding"))
         self.severity = str(projection.get("severity", "warn"))
         self.inputs_inferred = bool(projection.get("inputs_inferred"))
-        self.trigger = str(projection.get("trigger", "afterAgentResponse"))
+        self.trigger = str(projection.get("trigger", "Stop"))
         if (
             self.rule.get("new_draft")
             and not self.rule.get("path")
@@ -888,15 +895,23 @@ class RAPRuleEditorDocument(NSObject):
             "Actions…", lambda sender: self.show_validation_actions(sender),
             role="flat")
         self.validation_status = self._label(
-            "", size=9.5, color=NSColor.secondaryLabelColor(), lines=1)
-        self.validation_status.setContentCompressionResistancePriority_forOrientation_(
-            1, NSUserInterfaceLayoutOrientationHorizontal)
+            "", size=9.5, color=NSColor.secondaryLabelColor(), lines=2)
+        self.validation_status.setContentHuggingPriority_forOrientation_(
+            1000, NSUserInterfaceLayoutOrientationVertical)
+        self.validation_overflow_label = self._label(
+            "",
+            size=9,
+            color=NSColor.secondaryLabelColor(),
+            lines=1,
+        )
         validation_title_row = self._stack([
             self._label("Validation cases · Optional", size=12, bold=True),
             self.validation_count_label,
-            self.validation_status,
             self._spacer(),
+        ], vertical=False, spacing=8)
+        self.validation_actions_row = self._stack([
             self.validation_undo_button,
+            self._spacer(),
             self.run_validation_button,
             self.add_validation_button,
             self.validation_actions_button,
@@ -927,8 +942,11 @@ class RAPRuleEditorDocument(NSObject):
         )
         self.validation_section = self._stack([
             validation_title_row,
+            self.validation_status,
+            self.validation_actions_row,
             column_header,
             validation_scroll,
+            self.validation_overflow_label,
         ], vertical=True, spacing=7)
         self.validation_column_header = column_header
         self.validation_section.setContentHuggingPriority_forOrientation_(
@@ -955,12 +973,12 @@ class RAPRuleEditorDocument(NSObject):
             "Compilation…", lambda _sender: self.compiler_action(),
             role="flat")
         self.compiler_row = self._stack([
-            self._label("Draft compiler", size=12, bold=True),
+            self._label("Compiler", size=12, bold=True),
             self.compiler_status_label,
             self._spacer(),
             self.compiler_action_button,
         ], vertical=False, spacing=8)
-        content.insertArrangedSubview_atIndex_(self.compiler_row, 9)
+        content.insertArrangedSubview_atIndex_(self.compiler_row, 7)
 
         self.applies_summary = self._label(
             "", size=10, color=NSColor.secondaryLabelColor(), lines=2)
@@ -1014,10 +1032,10 @@ class RAPRuleEditorDocument(NSObject):
             self.trigger_popup,
             self.input_mapping_button,
             self.scope_change_button,
+            self.compiler_action_button,
             self.run_validation_button,
             self.add_validation_button,
             self.observed_runs_button,
-            self.compiler_action_button,
             self.advanced_button,
             self.finding_show_button,
             self.finding_copy_button,
@@ -1047,6 +1065,7 @@ class RAPRuleEditorDocument(NSObject):
             self.finding_copy_button,
             self.trigger_popup,
             self.description_editor,
+            self.compiler_action_button,
             *[
                 control
                 for pair in getattr(self, "validation_controls", [])
@@ -1055,7 +1074,6 @@ class RAPRuleEditorDocument(NSObject):
             self.run_validation_button,
             self.add_validation_button,
             self.observed_runs_button,
-            self.compiler_action_button,
             self.scope_change_button,
             self.rule_actions_button,
             self.footer_advanced,
@@ -1299,42 +1317,46 @@ class RAPRuleEditorDocument(NSObject):
         job_status = str(job.get("status", ""))
         active_compiler_label = self.compiler_label(
             self.resolved_active_compiler())
-        draft_compiler = self.resolved_draft_compiler()
-        draft_compiler_label = self.compiler_label(draft_compiler)
-        draft_requires_build = self.compiler_requires_build(draft_compiler)
-        draft_program_id = self._draft_program_id()
-        draft_ready = bool(
-            not draft_requires_build or draft_program_id)
+        compiler_state = self._draft_compiler_state()
+        draft_compiler_label = str(compiler_state["label"])
+        draft_build_required = bool(compiler_state["build_required"])
         queue_status = str(self._deployment_queue.get("status", ""))
         queue_pending = queue_status in (
             "waiting_for_build", "building", "checking", "validating", "deploying",
             "cancelling")
-        can_queue = bool(
-            draft_requires_build
-            and not draft_program_id
-            and job_status == "building"
-        )
         if not self._active_hash:
             deployed_copy = "Not deployed"
-        elif self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
-            deployed_copy = f"Automatic · Active: {active_compiler_label}"
+        elif self.active_compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
+            deployed_copy = f"Deployed: Automatic — Active {active_compiler_label}"
             if automatic_optimizing:
                 deployed_copy += " · optimizing…"
         else:
             deployed_copy = f"Deployed: {active_compiler_label}"
         if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE:
             draft_copy = (
-                f"Deploys with {draft_compiler_label} · optimizes in background"
+                f"Draft: Automatic — deploys with {draft_compiler_label}, "
+                "then optimizes"
             )
             compiler_action = "Choose…"
+        elif (
+            str(self._validation_queue.get("status", "")) == "building"
+            and self._validation_queue_matches_current(
+                self._validation_queue)
+        ):
+            draft_copy = (
+                f"Draft: {draft_compiler_label} — building for tests…")
+            compiler_action = "Choose…"
         elif job_status == "building":
-            draft_copy = f"Draft: {draft_compiler_label} · building…"
+            draft_copy = f"Draft: {draft_compiler_label} — building…"
             compiler_action = "Building…"
-        elif draft_requires_build and not draft_ready:
-            draft_copy = f"Draft: {draft_compiler_label} · build required"
+        elif draft_build_required:
+            draft_copy = (
+                f"Draft: {draft_compiler_label} — new specification "
+                "requires a build"
+            )
             compiler_action = "Choose…"
         else:
-            draft_copy = f"Draft: {draft_compiler_label} · ready"
+            draft_copy = f"Draft: {draft_compiler_label} — ready"
             compiler_action = "Choose…"
         if queue_pending:
             phase = str(
@@ -1348,7 +1370,7 @@ class RAPRuleEditorDocument(NSObject):
                 f"· {elapsed // 60}:{elapsed % 60:02d} elapsed"
             )
             compiler_action = "Cancel Queue…"
-        compiler_copy = f"{draft_copy}   {deployed_copy}"
+        compiler_copy = f"{draft_copy}\n{deployed_copy}"
         self.compiler_status_label.setStringValue_(compiler_copy)
         self.compiler_action_button.setTitle_(compiler_action)
         self.compiler_action_button.setEnabled_(not self._busy)
@@ -1357,29 +1379,51 @@ class RAPRuleEditorDocument(NSObject):
         self.footer_status.setStringValue_(status_copy)
         self.deploy_button.setEnabled_(
             deploy_needed
-            and (draft_ready or can_queue)
             and not queue_pending
             and not self._busy)
         self.deploy_button.setTitle_(
             "Queued"
             if queue_pending else (
-                "Deploy When Ready" if can_queue else "Deploy"
+                "Deploy When Ready" if draft_build_required else "Deploy"
             )
         )
         test_count = len(self.validation_cases)
-        self.run_validation_button.setTitle_(
-            f"Run {test_count} Test{'s' if test_count != 1 else ''}")
+        validation_queue_status = str(
+            self._validation_queue.get("status", ""))
+        validation_pending = self._validation_queue_is_pending()
+        if validation_queue_status in ("waiting_for_build", "building"):
+            validation_action = "Building…"
+        elif validation_queue_status == "checking":
+            validation_action = "Queuing…"
+        elif validation_queue_status == "validating":
+            validation_action = (
+                f"Running {test_count} "
+                f"Test{'s' if test_count != 1 else ''}…"
+            )
+        elif draft_build_required:
+            validation_action = (
+                f"Build & Run {test_count} "
+                f"Test{'s' if test_count != 1 else ''}"
+            )
+        else:
+            validation_action = (
+                f"Run {test_count} Test{'s' if test_count != 1 else ''}"
+            )
+        self.run_validation_button.setTitle_(validation_action)
         self.run_validation_button.setEnabled_(
             bool(test_count)
-            and self.trigger in TRIGGERS
-            and draft_ready
+            and not validation_pending
             and not self._busy
         )
         self.run_validation_button.setToolTip_(
-            f"Run all {test_count} tests against the current draft with "
-            f"{draft_compiler_label}."
-            if draft_ready
-            else f"Build {draft_compiler_label} for this draft first."
+            (
+                f"Build {draft_compiler_label} for this exact specification, "
+                f"then run all {test_count} tests."
+            )
+            if draft_build_required else (
+                f"Run all {test_count} tests against the current draft with "
+                f"{draft_compiler_label}."
+            )
         )
         if self._busy:
             deploy_tooltip = "Wait for the current editor operation to finish."
@@ -1391,14 +1435,10 @@ class RAPRuleEditorDocument(NSObject):
             deploy_tooltip = "Complete the rule name, trigger, and specification."
         elif not deploy_needed:
             deploy_tooltip = "No undeployed draft changes."
-        elif can_queue:
+        elif draft_build_required:
             deploy_tooltip = (
-                f"Queue this exact draft to deploy after "
-                f"{draft_compiler_label} finishes building.")
-        elif not draft_ready:
-            deploy_tooltip = (
-                f"Build {draft_compiler_label} for the current draft before "
-                "deploying it.")
+                f"Build {draft_compiler_label} and deploy this exact draft "
+                "automatically when it is ready.")
         elif stale_build_running:
             deploy_tooltip = (
                 "Deploy these changes now. The compiler build for the "
@@ -1466,6 +1506,7 @@ class RAPRuleEditorDocument(NSObject):
     def editor_changed(self) -> None:
         if self._programmatic or self._busy:
             return
+        self._clear_diagnostics()
         self._capture()
         ok, source, _error = self._compose()
         self._current_source_hash = (
@@ -1476,6 +1517,8 @@ class RAPRuleEditorDocument(NSObject):
             not ok or self._current_source_hash != self._saved_source_hash)
         self._cancel_queue_for_draft_change(
             "Draft changed after deployment was queued.")
+        self._cancel_validation_for_draft_change(
+            "Draft changed after validation was queued.")
         self._sync_draft_compiler_for_source()
         self._capture_validation_cases()
         self._validation_dirty = (
@@ -1529,6 +1572,7 @@ class RAPRuleEditorDocument(NSObject):
     def coverage_changed(self) -> None:
         if self._programmatic or self._busy:
             return
+        self._clear_diagnostics()
         self._cancel_queue_for_draft_change(
             "Project scope changed after deployment was queued.")
         current = {
@@ -1554,7 +1598,7 @@ class RAPRuleEditorDocument(NSObject):
         if selected == "__more__":
             self.show_more_triggers()
             return
-        self.trigger = str(selected or "afterAgentResponse")
+        self.trigger = str(selected or "Stop")
         self.input_pointer = ""
         self.trigger_error_label.setHidden_(True)
         self.editor_changed()
@@ -1684,13 +1728,14 @@ class RAPRuleEditorDocument(NSObject):
                 str(case.get("id", ""))
             ] = result_label
         count = len(self.validation_cases)
-        draft_compiler = self.resolved_draft_compiler()
-        draft_ready = bool(
-            not self.compiler_requires_build(draft_compiler)
-            or self._draft_program_id()
+        compiler_state = self._draft_compiler_state()
+        validation_pending = self._validation_queue_is_pending()
+        action = (
+            f"Build & Run {count} Test{'s' if count != 1 else ''}"
+            if compiler_state["build_required"]
+            else f"Run {count} Test{'s' if count != 1 else ''}"
         )
-        self.run_validation_button.setTitle_(
-            f"Run {count} Test{'s' if count != 1 else ''}")
+        self.run_validation_button.setTitle_(action)
         self.run_validation_button.setHidden_(count == 0)
         self.validation_actions_button.setHidden_(count == 0)
         self.validation_count_label.setHidden_(count == 0)
@@ -1699,13 +1744,19 @@ class RAPRuleEditorDocument(NSObject):
         self.validation_scroll.setHidden_(count == 0)
         self.run_validation_button.setEnabled_(
             bool(count)
-            and self.trigger in TRIGGERS
-            and draft_ready
+            and not validation_pending
             and not self._busy)
         visible = min(count, 5)
         self.validation_count_label.setStringValue_(
-            f"({count})"
-            + (f" · showing {visible}" if count > visible else ""))
+            f"{count} case{'s' if count != 1 else ''}")
+        self.validation_overflow_label.setStringValue_(
+            (
+                f"Showing {visible} at a time · Scroll to view all "
+                f"{count} cases."
+            )
+            if count > visible else ""
+        )
+        self.validation_overflow_label.setHidden_(count <= visible)
         self.validation_height_constraint.setConstant_(
             0 if count == 0 else min(180, max(44, count * 34 + 8)))
         self.validation_document_height.setConstant_(
@@ -1854,6 +1905,7 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _invalidate_validation_results(self) -> None:
+        self._validation_load_generation += 1
         self._reconcile_validation_results()
         self._refresh_validation_result_labels()
 
@@ -1894,20 +1946,26 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def validation_changed(self) -> None:
-        self._cancel_queue_for_draft_change(
-            "Validation cases changed after deployment was queued.")
+        self._clear_diagnostics()
         self._capture_validation_cases()
+        self._cancel_validation_for_draft_change(
+            "Validation cases changed after validation was queued.")
         self._validation_dirty = (
             json.dumps(self.validation_cases, sort_keys=True)
             != self._saved_validation_cases)
         self._invalidate_validation_results()
         if self._can_autosave_validation():
-            self._dirty = self._source_dirty or self._coverage_dirty
+            self._dirty = (
+                self._source_dirty
+                or self._coverage_dirty
+                or self._compiler_dirty
+            )
             self._schedule_validation_save()
         else:
             self._dirty = (
                 self._source_dirty
                 or self._coverage_dirty
+                or self._compiler_dirty
                 or self._validation_dirty)
             self.window.setDocumentEdited_(True)
             self.validation_status.setStringValue_(
@@ -1917,8 +1975,7 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def add_validation_case(self) -> None:
-        self._cancel_queue_for_draft_change(
-            "Validation cases changed after deployment was queued.")
+        self._clear_diagnostics()
         self._capture_validation_cases()
         self.validation_cases.append({
             "id": secrets.token_hex(8),
@@ -1927,6 +1984,8 @@ class RAPRuleEditorDocument(NSObject):
             "note": "",
         })
         self._render_validation_cases()
+        self._cancel_validation_for_draft_change(
+            "Validation cases changed after validation was queued.")
         if self.validation_controls:
             self.window.makeFirstResponder_(
                 self.validation_controls[-1][0])
@@ -1946,8 +2005,7 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def remove_validation_case(self, index: int) -> None:
-        self._cancel_queue_for_draft_change(
-            "Validation cases changed after deployment was queued.")
+        self._clear_diagnostics()
         self._capture_validation_cases()
         if 0 <= index < len(self.validation_cases):
             removed = self.validation_cases.pop(index)
@@ -1956,6 +2014,8 @@ class RAPRuleEditorDocument(NSObject):
             self._validation_dirty = True
             self._invalidate_validation_results()
             self._render_validation_cases()
+            self._cancel_validation_for_draft_change(
+                "Validation cases changed after validation was queued.")
             if self._can_autosave_validation():
                 self._persist_validation_cases()
             else:
@@ -1963,8 +2023,7 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def undo_remove_validation_case(self) -> None:
-        self._cancel_queue_for_draft_change(
-            "Validation cases changed after deployment was queued.")
+        self._clear_diagnostics()
         if not self._last_removed_validation:
             return
         index, removed = self._last_removed_validation
@@ -1977,6 +2036,8 @@ class RAPRuleEditorDocument(NSObject):
         self.validation_undo_button.setHidden_(True)
         self._invalidate_validation_results()
         self._render_validation_cases()
+        self._cancel_validation_for_draft_change(
+            "Validation cases changed after validation was queued.")
         if self._can_autosave_validation():
             self._persist_validation_cases()
         else:
@@ -1995,8 +2056,7 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def remove_all_validation_cases(self) -> None:
-        self._cancel_queue_for_draft_change(
-            "Validation cases changed after deployment was queued.")
+        self._clear_diagnostics()
         self._capture_validation_cases()
         if not self.validation_cases:
             return
@@ -2005,6 +2065,8 @@ class RAPRuleEditorDocument(NSObject):
         self.validation_undo_button.setHidden_(False)
         self._invalidate_validation_results()
         self._render_validation_cases()
+        self._cancel_validation_for_draft_change(
+            "Validation cases changed after validation was queued.")
         if self._can_autosave_validation():
             self._persist_validation_cases()
         else:
@@ -2031,15 +2093,20 @@ class RAPRuleEditorDocument(NSObject):
     @objc.python_method
     def _persist_validation_cases(self) -> None:
         self._capture_validation_cases()
+        self._validation_save_generation += 1
+        generation = self._validation_save_generation
+        cases = [dict(case) for case in self.validation_cases]
         self.validation_status.setStringValue_("Saving…")
         self.validation_status.setTextColor_(
             NSColor.secondaryLabelColor())
 
         def completed(result):
             def apply():
+                if self._closed or generation != self._validation_save_generation:
+                    return
                 if result.get("ok"):
                     self.validation_cases = list(
-                        result.get("cases") or self.validation_cases)
+                        result.get("cases") or cases)
                     self._saved_validation_cases = json.dumps(
                         self.validation_cases, sort_keys=True)
                     self._validation_dirty = False
@@ -2066,7 +2133,7 @@ class RAPRuleEditorDocument(NSObject):
             "type": "save_validation_cases",
             "rule_id": self.rule_id,
             "project_root": self.project_root,
-            "validation_cases": self.validation_cases,
+            "validation_cases": cases,
         }, completed)
 
     @objc.python_method
@@ -2078,8 +2145,9 @@ class RAPRuleEditorDocument(NSObject):
         if not ok:
             self._deployment_failed(error)
             return
-        run_key = secrets.token_hex(8)
-        self._validation_run_key = run_key
+        self._clear_diagnostics()
+        validation_id = secrets.token_urlsafe(18)
+        self._pending_validation_id = validation_id
         spec_hash = validation_store.spec_fingerprint(self.spec)
         self._validation_results = {
             str(case.get("id", "")): {
@@ -2090,72 +2158,13 @@ class RAPRuleEditorDocument(NSObject):
             for case in self.validation_cases
         }
         self.validation_status.setStringValue_(
-            "Preparing the validation program and running tests…")
+            "Queuing this exact specification and its test cases…")
         self.validation_status.setTextColor_(
             NSColor.secondaryLabelColor())
         self._refresh_validation_result_labels()
-        self._set_busy(True, busy_label="Running validation")
-
-        def completed(result):
-            def apply():
-                self._set_busy(False)
-                if run_key != self._validation_run_key:
-                    return
-                if not result.get("ok"):
-                    self._validation_results = {}
-                    self._validation_run_key = ""
-                    self._reconcile_validation_results()
-                    self.validation_status.setStringValue_(
-                        result.get("error", "Validation failed to run."))
-                    self.validation_status.setTextColor_(
-                        NSColor.systemRedColor())
-                    self._refresh_validation_result_labels()
-                    return
-                validation = result.get("validation") or {}
-                self._validation_target = dict(
-                    result.get("target")
-                    or self._validation_target
-                    or {
-                        "compiler": self.active_compiler,
-                        "compiler_snapshot": self.active_compiler_snapshot,
-                    }
-                )
-                validation_results = []
-                for item in validation.get("results") or []:
-                    value = dict(item)
-                    value.setdefault("spec_hash", spec_hash)
-                    value.setdefault(
-                        "case_hash",
-                        validation_store.case_fingerprint(value),
-                    )
-                    value.setdefault(
-                        "compiler",
-                        str(self._validation_target.get("compiler", "")),
-                    )
-                    value.setdefault(
-                        "compiler_snapshot",
-                        str(self._validation_target.get(
-                            "compiler_snapshot", "")),
-                    )
-                    value.setdefault("ran_at", time.time())
-                    validation_results.append(value)
-                self._cache_validation_results(validation_results)
-                self._validation_results = {}
-                self._validation_run_key = ""
-                self._reconcile_validation_results()
-                timing = result.get("timing") or {}
-                if timing:
-                    summary = str(self.validation_status.stringValue())
-                    summary += (
-                        f" · compile {float(timing.get('compile_ms', 0)) / 1000:.1f}s"
-                        f" · run {float(timing.get('run_ms', 0)) / 1000:.1f}s"
-                    )
-                    self.validation_status.setStringValue_(summary)
-                self._refresh_validation_result_labels()
-            _on_main(apply)
-
-        self.model.perform({
-            "type": "validate_rule_cases",
+        request = {
+            "type": "queue_validation",
+            "validation_id": validation_id,
             "rule_id": self.rule_id,
             "project_root": self.project_root,
             "source": source,
@@ -2163,10 +2172,226 @@ class RAPRuleEditorDocument(NSObject):
             "compiler": self.resolved_draft_compiler(),
             "compiler_snapshot": self.draft_compiler_snapshot,
             "program_id": self._draft_program_id(),
-        }, completed, timeout=180)
+        }
+        validation_hash = self._validation_intent_hash()
+        intent_generation = self._validation_load_generation
+        self._validation_queue = {
+            "id": validation_id,
+            "kind": "validation",
+            "rule_id": self.rule_id,
+            "source_hash": revisions.hash_source(source),
+            "spec_hash": spec_hash,
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "validation_hash": validation_hash,
+            "status": "checking",
+            "phase": "Queuing tests",
+            "created_at": time.time(),
+        }
+        self._refresh_ui()
+
+        def apply_result(result):
+            if self._closed:
+                return
+            if result.get("stale"):
+                if validation_id == self._pending_validation_id:
+                    self._validation_queue = {}
+                    self._pending_validation_id = ""
+                    self._validation_results = {}
+                    self._reconcile_validation_results()
+                    self._refresh_validation_result_labels()
+                    self._refresh_ui()
+                return
+            if not result.get("ok"):
+                if validation_id != self._pending_validation_id:
+                    return
+                self._validation_queue = {}
+                self._pending_validation_id = ""
+                self._validation_results = {}
+                self._reconcile_validation_results()
+                self.validation_status.setStringValue_(
+                    result.get("error", "Validation could not be queued."))
+                self.validation_status.setTextColor_(
+                    NSColor.systemRedColor())
+                self._refresh_validation_result_labels()
+                self._refresh_ui()
+                if result.get("compiler_catalog_stale"):
+                    self.reload_compiler_catalog(refresh=True)
+                return
+            queue = dict(result.get("queue") or {})
+            if (
+                validation_id != self._pending_validation_id
+                or not self._validation_queue_matches_current(queue)
+            ):
+                self._validation_queue = queue
+                self.cancel_queued_validation(
+                    "Draft changed while validation was being queued.")
+                return
+            self._apply_validation_queue(queue)
+
+        def completed(result):
+            error = str(result.get("error", ""))
+            if not result.get("ok") and (
+                "did not respond" in error.lower()
+                or "timed out" in error.lower()
+            ):
+                self._recover_validation_after_disconnect(
+                    request,
+                    validation_id,
+                    intent_generation,
+                    apply_result,
+                )
+                return
+            _on_main(lambda: apply_result(result))
+
+        self.model.perform(request, completed, timeout=10)
+
+    @objc.python_method
+    def _recover_validation_after_disconnect(
+        self,
+        request: dict[str, Any],
+        validation_id: str,
+        intent_generation: int,
+        apply_result: Callable[[dict[str, Any]], None],
+    ) -> None:
+        self.validation_status.setStringValue_(
+            "Connection lost — checking test status…")
+        self.validation_status.setTextColor_(
+            NSColor.systemOrangeColor())
+
+        def recover():
+            if not ipc.ensure_daemon(wait=8.0):
+                result = {
+                    "ok": False,
+                    "error": (
+                        "Could not reconnect to the daemon. "
+                        "The test cases are unchanged; click Run Tests to retry."
+                    ),
+                }
+            else:
+                status = ipc.send_request({
+                    "type": "validation_queue_status",
+                    "rule_id": self.rule_id,
+                    "validation_id": validation_id,
+                }, timeout=10)
+                if status and status.get("ok") and status.get("queue"):
+                    result = status
+                elif self._validation_load_generation == intent_generation:
+                    result = ipc.send_request(
+                        request, timeout=15) or {
+                            "ok": False,
+                            "error": (
+                                "The daemon reconnected but the tests could "
+                                "not be queued. Click Run Tests to retry."
+                            ),
+                        }
+                else:
+                    result = {"ok": False, "stale": True}
+            _on_main(lambda: apply_result(result))
+
+        worker = threading.Thread(
+            target=recover,
+            name="rap-validation-recovery",
+            daemon=True,
+        )
+        self._validation_queue_poll_recovery_thread = worker
+        worker.start()
+
+    @objc.python_method
+    def _validation_intent_hash(self) -> str:
+        return hashlib.sha256(json.dumps({
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "spec_hash": validation_store.spec_fingerprint(self.spec),
+            "compiler": self.resolved_draft_compiler(),
+            "compiler_snapshot": self.draft_compiler_snapshot,
+            "cases": sorted(
+                (
+                    str(case.get("input", "")),
+                    str(case.get("expected", "")).upper(),
+                )
+                for case in rules_api.normalize_validation_cases(
+                    self.validation_cases)
+            ),
+        }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    @objc.python_method
+    def _validation_queue_matches_current(
+        self, value: dict[str, Any]
+    ) -> bool:
+        ok, _source, _error = self._compose()
+        if not ok:
+            return False
+        compiler = self.resolved_draft_compiler()
+        compiler_snapshot = self.draft_compiler_snapshot
+        spec_hash = validation_store.spec_fingerprint(self.spec)
+        payload_hash = self._validation_intent_hash()
+        return (
+            (
+                not value.get("spec_hash")
+                or str(value.get("spec_hash", "")) == spec_hash
+            )
+            and str(value.get("compiler", ""))
+            == compiler
+            and (
+                not value.get("compiler_snapshot")
+                or not compiler_snapshot
+                or str(value.get("compiler_snapshot", ""))
+                == compiler_snapshot
+            )
+            and (
+                not value.get("validation_hash")
+                or str(value.get("validation_hash", "")) == payload_hash
+            )
+        )
+
+    @objc.python_method
+    def _apply_completed_validation(self, result: dict[str, Any]) -> None:
+        spec_hash = validation_store.spec_fingerprint(self.spec)
+        validation = result.get("validation") or {}
+        self._validation_target = dict(
+            result.get("target")
+            or self._validation_target
+            or {
+                "compiler": self.active_compiler,
+                "compiler_snapshot": self.active_compiler_snapshot,
+            }
+        )
+        validation_results = []
+        for item in validation.get("results") or []:
+            value = dict(item)
+            value.setdefault("spec_hash", spec_hash)
+            value.setdefault(
+                "case_hash", validation_store.case_fingerprint(value))
+            value.setdefault(
+                "compiler",
+                str(self._validation_target.get("compiler", "")),
+            )
+            value.setdefault(
+                "compiler_snapshot",
+                str(self._validation_target.get("compiler_snapshot", "")),
+            )
+            value.setdefault("ran_at", time.time())
+            validation_results.append(value)
+        self._cache_validation_results(validation_results)
+        self._validation_results = {}
+        self._validation_run_key = ""
+        self._reconcile_validation_results()
+        timing = result.get("timing") or {}
+        if timing:
+            summary = str(self.validation_status.stringValue())
+            summary += (
+                f" · compile {float(timing.get('compile_ms', 0)) / 1000:.1f}s"
+                f" · run {float(timing.get('run_ms', 0)) / 1000:.1f}s"
+            )
+            self.validation_status.setStringValue_(summary)
+        self._refresh_validation_result_labels()
+        self._refresh_ui()
 
     @objc.python_method
     def reload_validation_results(self) -> None:
+        if self._closed:
+            return
         self._capture_validation_cases()
         if not self.validation_cases:
             return
@@ -2178,7 +2403,10 @@ class RAPRuleEditorDocument(NSObject):
 
         def completed(result):
             def apply():
-                if generation != self._validation_load_generation:
+                if (
+                    self._closed
+                    or generation != self._validation_load_generation
+                ):
                     return
                 self._validation_results_loaded = True
                 if not result.get("ok"):
@@ -2189,6 +2417,7 @@ class RAPRuleEditorDocument(NSObject):
                     list(validation.get("results") or []))
                 self._reconcile_validation_results()
                 self._refresh_validation_result_labels()
+                self._refresh_ui()
             _on_main(apply)
 
         request = {
@@ -2222,7 +2451,7 @@ class RAPRuleEditorDocument(NSObject):
         self._more_trigger_chooser = chooser
         self._populate_more_triggers("")
         details = self._label(
-            "Search by action, Cursor hook, or JSON Pointer.",
+            "Search by action, Codex hook, or JSON Pointer.",
             size=9.5, color=NSColor.secondaryLabelColor())
         details.setFrame_(NSMakeRect(2, 2, 516, 20))
         accessory.addSubview_(search)
@@ -2235,7 +2464,7 @@ class RAPRuleEditorDocument(NSObject):
         alert = NSAlert.alloc().init()
         alert.setMessageText_("Choose a trigger")
         alert.setInformativeText_(
-            "Each trigger reads exactly one documented Cursor field.")
+            "Each trigger reads exactly one documented Codex field.")
         alert.setAccessoryView_(accessory)
         alert.addButtonWithTitle_("Use Trigger")
         alert.addButtonWithTitle_("Cancel")
@@ -2473,9 +2702,210 @@ class RAPRuleEditorDocument(NSObject):
             self.rule_id, self.name, self.project_root)
 
     @objc.python_method
+    def reload_validation_queue(self) -> None:
+        if self._closed:
+            return
+
+        def completed(result):
+            def apply():
+                if self._closed:
+                    return
+                if not result.get("ok"):
+                    if self._validation_queue_is_pending():
+                        self._validation_queue_poll_failures += 1
+                        self._schedule_validation_queue_poll()
+                    return
+                self._validation_queue_poll_failures = 0
+                value = dict(result.get("queue") or {})
+                if not value:
+                    return
+                current_id = str(
+                    self._validation_queue.get("id")
+                    or self._pending_validation_id)
+                if (
+                    current_id
+                    and str(value.get("id", "")) != current_id
+                ):
+                    return
+                if validation_id and current_id != validation_id:
+                    return
+                if (
+                    self._validation_queue_matches_current(value)
+                    or str(value.get("id", ""))
+                    == self._pending_validation_id
+                ):
+                    self._apply_validation_queue(value)
+            _on_main(apply)
+
+        request = {
+            "type": "validation_queue_status",
+            "rule_id": self.rule_id,
+        }
+        validation_id = str(
+            self._validation_queue.get("id")
+            or self._pending_validation_id)
+        if validation_id:
+            request["validation_id"] = validation_id
+        if hasattr(self.model, "query"):
+            self.model.query(request, completed, timeout=10)
+        else:
+            self.model.perform(request, completed, timeout=10)
+
+    @objc.python_method
+    def _apply_validation_queue(self, value: dict[str, Any]) -> None:
+        if self._closed:
+            return
+        self._validation_queue = dict(value)
+        status = str(value.get("status", ""))
+        if status in ("waiting_for_build", "building", "checking", "validating"):
+            count = len(self.validation_cases)
+            spec_hash = validation_store.spec_fingerprint(self.spec)
+            self._validation_results = {
+                str(case.get("id", "")): {
+                    "running": True,
+                    "spec_hash": spec_hash,
+                    "case_hash": validation_store.case_fingerprint(case),
+                }
+                for case in self.validation_cases
+            }
+            if status in ("waiting_for_build", "building"):
+                self.validation_status.setStringValue_(
+                    f"Building {self.compiler_label(str(value.get('compiler', '')))} "
+                    f"for this specification; {count} "
+                    f"test{'s' if count != 1 else ''} will run automatically.")
+            else:
+                self.validation_status.setStringValue_(
+                    f"Running {count} test{'s' if count != 1 else ''}…")
+            self.validation_status.setTextColor_(
+                NSColor.secondaryLabelColor())
+            self._refresh_validation_result_labels()
+            self._schedule_validation_queue_poll()
+        elif status in ("succeeded", "failed", "cancelled"):
+            self._pending_validation_id = ""
+            if self._validation_queue_poll_timer:
+                self._validation_queue_poll_timer.cancel()
+                self._validation_queue_poll_timer = None
+            matches = self._validation_queue_matches_current(value)
+            if status == "succeeded" and matches:
+                self._apply_completed_validation(
+                    dict(value.get("result") or {}))
+            elif status == "failed" and matches:
+                self._validation_results = {}
+                self._reconcile_validation_results()
+                self.validation_status.setStringValue_(
+                    str(value.get("error") or "Validation failed to run."))
+                self.validation_status.setTextColor_(
+                    NSColor.systemRedColor())
+                self._refresh_validation_result_labels()
+            elif status == "cancelled" and matches:
+                self._validation_results = {}
+                self._reconcile_validation_results()
+        self._refresh_ui()
+
+    @objc.python_method
+    def _schedule_validation_queue_poll(self) -> None:
+        if self._closed:
+            return
+        if self._validation_queue_poll_timer:
+            self._validation_queue_poll_timer.cancel()
+
+        def poll():
+            self.reload_validation_queue()
+
+        delay = min(
+            30.0,
+            2.0 * (2 ** min(self._validation_queue_poll_failures, 4)),
+        )
+        self._validation_queue_poll_timer = _after_delay(delay, poll)
+
+    @objc.python_method
+    def cancel_queued_validation(self, reason: str) -> None:
+        if not self._validation_queue_is_pending():
+            return
+        self._validation_queue["status"] = "cancelling"
+        if self._validation_queue_poll_timer:
+            self._validation_queue_poll_timer.cancel()
+            self._validation_queue_poll_timer = None
+        self._refresh_ui()
+
+        def completed(result):
+            if result.get("ok"):
+                _on_main(lambda: self._apply_validation_queue(
+                    dict(result.get("queue") or {})))
+            else:
+                _on_main(self.reload_validation_queue)
+
+        self.model.perform({
+            "type": "cancel_queued_validation",
+            "rule_id": self.rule_id,
+            "validation_id": str(self._validation_queue.get("id", "")),
+            "reason": reason,
+        }, completed, timeout=10)
+
+    @objc.python_method
+    def _cancel_validation_for_draft_change(self, reason: str) -> None:
+        if (
+            self._validation_queue_is_pending()
+            and not self._validation_queue_matches_current(
+                self._validation_queue)
+        ):
+            self.cancel_queued_validation(reason)
+
+    @objc.python_method
     def _queue_is_pending(self) -> bool:
         return str(self._deployment_queue.get("status", "")) in (
-            "waiting_for_build", "building", "checking", "validating", "deploying")
+            "waiting_for_build", "building", "checking", "validating",
+            "deploying", "cancelling",
+        )
+
+    @objc.python_method
+    def _coverage_identity(
+        self, value: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        coverage = dict(value or {
+            "mode": self.coverage_mode,
+            "selected_projects": self.selected_projects,
+        })
+        mode = str(coverage.get("mode", "selected"))
+        return {
+            "mode": mode,
+            "selected_projects": (
+                []
+                if mode == "all"
+                else sorted({
+                    str(root)
+                    for root in coverage.get("selected_projects") or []
+                    if root
+                })
+            ),
+        }
+
+    @objc.python_method
+    def _deployment_queue_matches_current(
+        self, value: dict[str, Any]
+    ) -> bool:
+        return bool(
+            str(value.get("source_hash", ""))
+            == self._current_source_hash
+            and str(
+                value.get("requested_compiler")
+                if "requested_compiler" in value
+                else value.get("compiler", "")
+            )
+            == self.resolved_draft_compiler()
+            and str(
+                value.get("compiler_mode")
+                or revisions.AUTOMATIC_COMPILER_MODE
+            ) == self.compiler_mode
+            and str(
+                value.get("requested_compiler_snapshot")
+                if "requested_compiler_snapshot" in value
+                else value.get("compiler_snapshot", "")
+            )
+            == self.draft_compiler_snapshot
+            and self._coverage_identity(value.get("coverage"))
+            == self._coverage_identity()
+        )
 
     @objc.python_method
     def compiler_action(self) -> None:
@@ -2499,11 +2929,30 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def reload_deployment_queue(self) -> None:
+        if self._closed:
+            return
+
         def completed(result):
+            if self._closed:
+                return
             if result.get("ok"):
-                self._deployment_queue_poll_failures = 0
-                _on_main(lambda: self._apply_deployment_queue(
-                    dict(result.get("queue") or {})))
+                def apply():
+                    if self._closed:
+                        return
+                    value = dict(result.get("queue") or {})
+                    current_id = str(
+                        self._deployment_queue.get("id")
+                        or self._pending_deployment_id)
+                    if (
+                        current_id
+                        and str(value.get("id", "")) != current_id
+                    ):
+                        return
+                    if queue_id and current_id != queue_id:
+                        return
+                    self._deployment_queue_poll_failures = 0
+                    self._apply_deployment_queue(value)
+                _on_main(apply)
             elif self._queue_is_pending():
                 self._recover_deployment_queue_poll()
 
@@ -2511,6 +2960,11 @@ class RAPRuleEditorDocument(NSObject):
             "type": "deployment_queue_status",
             "rule_id": self.rule_id,
         }
+        queue_id = str(
+            self._deployment_queue.get("id")
+            or self._pending_deployment_id)
+        if queue_id:
+            request["deployment_id"] = queue_id
         if hasattr(self.model, "query"):
             self.model.query(request, completed, timeout=10)
         else:
@@ -2519,6 +2973,7 @@ class RAPRuleEditorDocument(NSObject):
     @objc.python_method
     def _recover_deployment_queue_poll(self) -> None:
         self._deployment_queue_poll_failures += 1
+        queue_id = str(self._deployment_queue.get("id", ""))
 
         def recover():
             result = None
@@ -2526,11 +2981,17 @@ class RAPRuleEditorDocument(NSObject):
                 result = ipc.send_request({
                     "type": "deployment_queue_status",
                     "rule_id": self.rule_id,
-                    "deployment_id": str(
-                        self._deployment_queue.get("id", "")),
+                    "deployment_id": queue_id,
                 }, timeout=10)
 
             def apply():
+                if self._closed:
+                    return
+                current_id = str(
+                    self._deployment_queue.get("id")
+                    or self._pending_deployment_id)
+                if queue_id and current_id != queue_id:
+                    return
                 if result and result.get("ok"):
                     self._deployment_queue_poll_failures = 0
                     self._apply_deployment_queue(
@@ -2550,6 +3011,8 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _apply_deployment_queue(self, value: dict[str, Any]) -> None:
+        if self._closed:
+            return
         was_pending = self._queue_is_pending()
         self._deployment_queue = dict(value)
         status = str(value.get("status", ""))
@@ -2592,6 +3055,71 @@ class RAPRuleEditorDocument(NSObject):
                 result = value.get("result") or {}
                 active = result.get("active") or {}
                 rule = result.get("rule") or {}
+                current_matches_queue = (
+                    self._deployment_queue_matches_current(value))
+                if not current_matches_queue:
+                    self.rule.update(rule)
+                    self.rule["new_draft"] = False
+                    self.source_scope = str(
+                        rule.get("scope") or self.source_scope)
+                    deployed_source_hash = str(
+                        rule.get("working_hash")
+                        or active.get("source_hash")
+                        or value.get("source_hash", ""))
+                    self._saved_source_hash = deployed_source_hash
+                    self._working_hash = deployed_source_hash
+                    self._definition_hash = str(
+                        (rule.get("definition") or {}).get(
+                            "source_hash", deployed_source_hash))
+                    self._active_hash = str(
+                        active.get("source_hash", self._active_hash))
+                    self._active_behavior_hash = str(
+                        active.get("behavior_hash")
+                        or value.get("behavior_hash")
+                        or self._active_behavior_hash)
+                    self.active_compiler = str(
+                        active.get("compiler", self.active_compiler))
+                    self.active_compiler_snapshot = str(
+                        active.get(
+                            "compiler_snapshot",
+                            self.active_compiler_snapshot,
+                        ))
+                    self.active_program_id = str(
+                        active.get("program_id", self.active_program_id))
+                    self.active_compiler_mode = str(
+                        active.get("compiler_mode")
+                        or self.active_compiler_mode)
+                    self.active_artifacts = dict(
+                        active.get("artifacts") or self.active_artifacts)
+                    coverage = result.get("coverage") or {}
+                    if coverage:
+                        self._active_coverage = self._coverage_identity(
+                            coverage)
+                    self._source_dirty = bool(
+                        not self._saved_source_hash
+                        or self._current_source_hash
+                        != self._saved_source_hash)
+                    self._coverage_dirty = (
+                        self._coverage_identity()
+                        != self._active_coverage)
+                    self._compiler_dirty = self._compiler_selection_dirty()
+                    self._dirty = bool(
+                        self._source_dirty
+                        or self._coverage_dirty
+                        or self._compiler_dirty
+                        or self._validation_dirty
+                    )
+                    self.window.setDocumentEdited_(self._dirty)
+                    self.diagnostics_label.setStringValue_(
+                        "A previous draft deployed; the current edits remain "
+                        "undeployed.")
+                    self.diagnostics_label.setTextColor_(
+                        NSColor.systemOrangeColor())
+                    self.diagnostics_label.setHidden_(False)
+                    if self.manager:
+                        self.manager.changed(result)
+                    self._refresh_ui()
+                    return
                 self.rule.update(rule)
                 self.rule["new_draft"] = False
                 self._active_hash = str(active.get("source_hash", ""))
@@ -2614,8 +3142,7 @@ class RAPRuleEditorDocument(NSObject):
                 self._compiler_dirty = False
                 self._source_dirty = False
                 self._coverage_dirty = False
-                self._validation_dirty = False
-                self._dirty = False
+                self._dirty = self._validation_dirty
                 self.full_source = str(
                     rule.get("source") or self.full_source)
                 self._working_hash = str(
@@ -2639,7 +3166,7 @@ class RAPRuleEditorDocument(NSObject):
                     "selected_projects": sorted(
                         coverage.get("selected_projects") or []),
                 }
-                self.window.setDocumentEdited_(False)
+                self.window.setDocumentEdited_(self._dirty)
                 self.diagnostics_label.setStringValue_(
                     "✓ Deployed in the background.")
                 self.diagnostics_label.setTextColor_(
@@ -2656,6 +3183,8 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _schedule_deployment_queue_poll(self) -> None:
+        if self._closed:
+            return
         if self._deployment_queue_poll_timer:
             self._deployment_queue_poll_timer.cancel()
 
@@ -2689,6 +3218,7 @@ class RAPRuleEditorDocument(NSObject):
         self.model.perform({
             "type": "cancel_queued_deployment",
             "rule_id": self.rule_id,
+            "deployment_id": str(self._deployment_queue.get("id", "")),
             "reason": reason,
         }, completed, timeout=10)
 
@@ -2702,10 +3232,14 @@ class RAPRuleEditorDocument(NSObject):
     def reload_compiler_catalog(
         self, *, refresh: bool = False, then: Callable[[], None] | None = None
     ) -> None:
+        if self._closed:
+            return
         request = {"type": "compiler_catalog", "refresh": refresh}
 
         def completed(result):
             def apply():
+                if self._closed:
+                    return
                 self._compiler_catalog_attempted = True
                 if result.get("ok"):
                     self.compiler_catalog = list(
@@ -2714,6 +3248,7 @@ class RAPRuleEditorDocument(NSObject):
                     self.compiler_catalog_offline = bool(result.get("offline"))
                     self.compiler_catalog_fetched_at = float(
                         result.get("fetched_at") or 0)
+                    self._validation_load_generation += 1
                     self._sync_draft_compiler_for_source()
                     self._validation_target = {
                         "compiler": self.resolved_draft_compiler(),
@@ -2862,7 +3397,44 @@ class RAPRuleEditorDocument(NSObject):
         job = self._draft_candidate_job()
         if str(job.get("status", "")) == "ready":
             return str(job.get("program_id", ""))
+        target = dict(self._validation_target or {})
+        if (
+            target.get("program_id")
+            and str(target.get("spec_hash", ""))
+            == validation_store.spec_fingerprint(self.spec)
+            and str(target.get("compiler", "")) == compiler
+            and (
+                not self.draft_compiler_snapshot
+                or not target.get("compiler_snapshot")
+                or str(target.get("compiler_snapshot", ""))
+                == self.draft_compiler_snapshot
+            )
+        ):
+            return str(target.get("program_id", ""))
         return ""
+
+    @objc.python_method
+    def _draft_compiler_state(self) -> dict[str, Any]:
+        compiler = self.resolved_draft_compiler()
+        info = self.compiler_info(compiler)
+        program_id = self._draft_program_id()
+        requires_build = self.compiler_requires_build(compiler)
+        return {
+            "compiler": compiler,
+            "label": self.compiler_label(compiler),
+            "info": info,
+            "program_id": program_id,
+            "requires_build": requires_build,
+            "build_required": bool(requires_build and not program_id),
+            "ready": bool(not requires_build or program_id),
+        }
+
+    @objc.python_method
+    def _validation_queue_is_pending(self) -> bool:
+        return str(self._validation_queue.get("status", "")) in (
+            "waiting_for_build", "building", "checking", "validating",
+            "cancelling",
+        )
 
     @objc.python_method
     def _set_draft_compiler(
@@ -2881,13 +3453,14 @@ class RAPRuleEditorDocument(NSObject):
         if explicit:
             self.compiler_mode = revisions.EXPLICIT_COMPILER_MODE
         self._compiler_dirty = self._compiler_selection_dirty()
+        self._cancel_validation_for_draft_change(
+            "Draft compiler changed after validation was queued.")
         self._validation_target = {
             "compiler": self.resolved_draft_compiler(),
             "compiler_snapshot": self.draft_compiler_snapshot,
             "program_id": self._draft_program_id(),
         }
-        self._reconcile_validation_results()
-        self._refresh_validation_result_labels()
+        self._invalidate_validation_results()
         self._dirty = (
             self._source_dirty
             or self._coverage_dirty
@@ -2913,13 +3486,14 @@ class RAPRuleEditorDocument(NSObject):
             self.draft_compiler_snapshot = str(
                 info.get("latest_snapshot", ""))
         self._compiler_dirty = self._compiler_selection_dirty()
+        self._cancel_validation_for_draft_change(
+            "Draft compiler mode changed after validation was queued.")
         self._validation_target = {
             "compiler": self.resolved_draft_compiler(),
             "compiler_snapshot": self.draft_compiler_snapshot,
             "program_id": self._draft_program_id(),
         }
-        self._reconcile_validation_results()
-        self._refresh_validation_result_labels()
+        self._invalidate_validation_results()
         self._dirty = (
             self._source_dirty
             or self._coverage_dirty
@@ -3025,8 +3599,8 @@ class RAPRuleEditorDocument(NSObject):
                 action = "cancel"
                 action_title = "Cancel"
             elif requires_build and not ready:
-                action = "build"
-                action_title = "Build…"
+                action = "select"
+                action_title = "Use"
             elif not is_draft:
                 action = "select"
                 action_title = "Use"
@@ -3180,19 +3754,19 @@ class RAPRuleEditorDocument(NSObject):
                 size=12,
                 bold=True,
             )
-            title.setFrame_(NSMakeRect(12, y + 8, 350, 19))
+            title.setFrame_(NSMakeRect(12, y + 8, 280, 19))
             document.addSubview_(title)
 
             badges = []
             if item.get("is_active"):
                 badges.append("Deployed")
             if item.get("is_draft"):
-                badges.append("✓ Draft")
+                badges.append("Selected for draft")
                 if (
                     item.get("requires_build")
                     and not item.get("ready_for_draft")
                 ):
-                    badges.append("build required")
+                    badges.append("Not built for this draft")
             if item.get("job_status") == "ready":
                 badges.append("Ready")
             elif item.get("job_status") == "building":
@@ -3217,7 +3791,7 @@ class RAPRuleEditorDocument(NSObject):
                         )
                     ),
                 )
-                badge.setFrame_(NSMakeRect(366, y + 9, 180, 18))
+                badge.setFrame_(NSMakeRect(300, y + 9, 246, 18))
                 document.addSubview_(badge)
 
             detail = self._label(
@@ -3282,16 +3856,30 @@ class RAPRuleEditorDocument(NSObject):
 
         def completed(result):
             def apply():
+                if self._closed:
+                    return
                 if not result.get("ok"):
                     return
                 info = result.get("rule") or {}
-                self.validation_cases = list(
-                    info.get("validation_cases") or [])
+                next_cases = list(info.get("validation_cases") or [])
+                cases_changed = (
+                    json.dumps(next_cases, sort_keys=True)
+                    != json.dumps(self.validation_cases, sort_keys=True)
+                )
+                self.validation_cases = next_cases
+                self._render_validation_cases()
+                if cases_changed:
+                    self._invalidate_validation_results()
+                    self._cancel_validation_for_draft_change(
+                        "Validation cases changed after validation was queued.")
                 self._saved_validation_cases = json.dumps(
                     self.validation_cases, sort_keys=True)
                 self._validation_dirty = False
-                self._dirty = self._source_dirty or self._coverage_dirty
-                self._render_validation_cases()
+                self._dirty = bool(
+                    self._source_dirty
+                    or self._coverage_dirty
+                    or self._compiler_dirty
+                )
                 self._refresh_ui()
                 self._schedule_content_fit()
             _on_main(apply)
@@ -3339,15 +3927,17 @@ class RAPRuleEditorDocument(NSObject):
                 )
                 if self.compiler_mode == revisions.AUTOMATIC_COMPILER_MODE
                 else (
-                    f"{active_label} is deployed. Choose or build the compiler "
-                    "for the current editor draft; Deploy is the only action "
-                    "that changes the running rule."
+                    f"{active_label} is deployed. Choose the compiler for the "
+                    "current editor draft. Build & Run Tests or Deploy When "
+                    "Ready prepares a missing artifact; only Deploy changes "
+                    "the running rule."
                 )
             )
             if self._active_hash
             else (
-                "Choose or build the compiler for this draft. Nothing runs "
-                "until you Deploy."
+                "Choose the compiler for this draft. Build & Run Tests or "
+                "Deploy When Ready prepares a missing artifact. Nothing "
+                "becomes active until you Deploy."
             )
         )
         catalog_action = {
@@ -3445,27 +4035,44 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _apply_finetune_status(self, result: dict[str, Any]) -> None:
+        if self._closed:
+            return
         self._finetune_status = dict(result)
         active = result.get("active") or {}
-        self.active_compiler = str(active.get("compiler", ""))
-        self.active_compiler_snapshot = str(
-            active.get("compiler_snapshot", ""))
-        self.active_program_id = str(active.get("program_id", ""))
-        self.active_compiler_mode = str(
-            active.get("compiler_mode")
-            or self.active_compiler_mode
-            or revisions.AUTOMATIC_COMPILER_MODE)
-        self.active_artifacts = dict(
-            active.get("artifacts") or self.active_artifacts)
-        if not self._compiler_dirty:
-            self.compiler_mode = self.active_compiler_mode
-            self._sync_draft_compiler_for_source()
+        if active:
+            self.active_compiler = str(
+                active.get("compiler") or self.active_compiler)
+            self.active_compiler_snapshot = str(
+                active.get("compiler_snapshot")
+                or self.active_compiler_snapshot)
+            self.active_program_id = str(
+                active.get("program_id") or self.active_program_id)
+            self.active_compiler_mode = str(
+                active.get("compiler_mode")
+                or self.active_compiler_mode
+                or revisions.AUTOMATIC_COMPILER_MODE)
+            self.active_artifacts = dict(
+                active.get("artifacts") or self.active_artifacts)
+            if not self._compiler_dirty:
+                self.compiler_mode = self.active_compiler_mode
+                self._sync_draft_compiler_for_source()
         job = result.get("job") or {}
         job_status = str(job.get("status", ""))
         job_id = str(job.get("id", ""))
-        if job_status in ("building", "ready", "activated", "deployed"):
+        job_is_current = bool(
+            self._job_matches_current_behavior(job)
+            and (
+                not job.get("compiler")
+                or str(job.get("compiler", ""))
+                == self.resolved_draft_compiler()
+            )
+        )
+        if (
+            job_is_current
+            and job_status in ("building", "ready", "activated", "deployed")
+        ):
             self._clear_diagnostics()
-        elif job_status == "failed":
+        elif job_is_current and job_status == "failed":
             self._set_compilation_message(
                 str(job.get("error") or "Compiler build failed."),
                 job_id,
@@ -3478,6 +4085,8 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _schedule_finetune_poll(self) -> None:
+        if self._closed:
+            return
         if self._finetune_poll_timer:
             self._finetune_poll_timer.cancel()
 
@@ -3605,6 +4214,9 @@ class RAPRuleEditorDocument(NSObject):
     def apply_advanced(self) -> None:
         if self._busy:
             return
+        self._clear_diagnostics()
+        self._cancel_queue_for_draft_change(
+            "Draft changed after deployment was queued.")
         source = str(self._advanced_editor.string())
         projection = rules_api.source_projection(source)
         self.full_source = source
@@ -3616,6 +4228,8 @@ class RAPRuleEditorDocument(NSObject):
         self._current_source_hash = revisions.hash_source(source)
         self._current_behavior_hash = revisions.behavior_hash(source)
         self._sync_draft_compiler_for_source()
+        self._cancel_validation_for_draft_change(
+            "Draft changed after validation was queued.")
         self._dirty = True
         self._invalidate_validation_results()
         self.window.setDocumentEdited_(True)
@@ -3664,7 +4278,6 @@ class RAPRuleEditorDocument(NSObject):
             return
         if not self._validate_form_before_deploy():
             return
-        draft_compiler = self.resolved_draft_compiler()
         if not self._active_hash and not self._scope_confirmed:
             self.show_projects_sheet(on_confirm=self.deploy)
             return
@@ -3682,35 +4295,6 @@ class RAPRuleEditorDocument(NSObject):
             self._deployment_failed(error)
             return
         source_hash = revisions.hash_source(source)
-        source_changed = source_hash != self._active_hash
-        build_job = self._finetune_status.get("job") or {}
-        if (
-            self.compiler_requires_build(draft_compiler)
-            and not self._draft_program_id()
-        ):
-            if (
-                str(build_job.get("status", "")) == "building"
-                and self._job_matches_current_behavior(build_job)
-                and str(build_job.get("compiler", "")) == draft_compiler
-            ):
-                self._queue_current_deployment(
-                    source, source_hash, level_check)
-            else:
-                self._set_compilation_message(
-                    f"Build {self.compiler_label(draft_compiler)} for this "
-                    "draft before deploying.")
-            return
-        stale_build_running = bool(
-            str(build_job.get("status", "")) == "building"
-            and not self._job_matches_current_behavior(build_job)
-        )
-        if (
-            source_changed
-            and stale_build_running
-            and self._confirmed_build_discard_hash != source_hash
-        ):
-            self.confirm_deploy_during_compiler_build(source_hash)
-            return
         self._queue_current_deployment(
             source, source_hash, level_check)
         return
@@ -3752,8 +4336,10 @@ class RAPRuleEditorDocument(NSObject):
         queued_compiler = self.resolved_draft_compiler()
         queued_compiler_mode = self.compiler_mode
         queued_compiler_snapshot = self.draft_compiler_snapshot
-        queued_cases = json.dumps(
-            self.validation_cases, sort_keys=True, ensure_ascii=False)
+        queued_validation_cases = json.dumps(
+            rules_api.normalize_validation_cases(self.validation_cases),
+            sort_keys=True,
+        )
         queued_coverage = json.dumps({
             "mode": self.coverage_mode,
             "selected_projects": sorted(self.selected_projects),
@@ -3782,20 +4368,20 @@ class RAPRuleEditorDocument(NSObject):
             },
             "warnings": (
                 [level_check["warning"]] if not level_check["ok"] else []),
-            "validation_cases": self.validation_cases,
+            "validation_cases": [
+                dict(case) for case in self.validation_cases],
         }
 
         def apply_result(result):
+            if self._closed:
+                return
             if not result.get("ok"):
                 self._set_compilation_message(
                     result.get(
                         "error", "Deployment could not be queued."))
+                if result.get("compiler_catalog_stale"):
+                    self.reload_compiler_catalog(refresh=True)
                 return
-            current_cases = json.dumps(
-                self.validation_cases,
-                sort_keys=True,
-                ensure_ascii=False,
-            )
             current_coverage = json.dumps({
                 "mode": self.coverage_mode,
                 "selected_projects": sorted(self.selected_projects),
@@ -3807,7 +4393,6 @@ class RAPRuleEditorDocument(NSObject):
                 or self.compiler_mode != queued_compiler_mode
                 or self.draft_compiler_snapshot
                 != queued_compiler_snapshot
-                or current_cases != queued_cases
                 or current_coverage != queued_coverage
             ):
                 self._deployment_queue = dict(
@@ -3822,7 +4407,16 @@ class RAPRuleEditorDocument(NSObject):
             self.diagnostics_label.setTextColor_(
                 NSColor.systemBlueColor())
             self.diagnostics_label.setHidden_(False)
-            self._close_queued_editor()
+            self._capture_validation_cases()
+            current_validation_cases = json.dumps(
+                rules_api.normalize_validation_cases(self.validation_cases),
+                sort_keys=True,
+            )
+            if current_validation_cases == queued_validation_cases:
+                self._close_queued_editor()
+            else:
+                self._persist_validation_cases_for_queued_deployment(
+                    deployment_id)
 
         def completed(result):
             error = str(result.get("error", ""))
@@ -3839,8 +4433,80 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def _close_queued_editor(self) -> None:
-        if self._queue_is_pending() and self.window.isVisible():
+        if (
+            (
+                self._queue_is_pending()
+                or str(self._deployment_queue.get("status", ""))
+                == "succeeded"
+            )
+            and self.window.isVisible()
+        ):
             self.window.close()
+
+    @objc.python_method
+    def _persist_validation_cases_for_queued_deployment(
+        self, deployment_id: str
+    ) -> None:
+        if self._closed:
+            return
+        self._capture_validation_cases()
+        cases = rules_api.normalize_validation_cases(self.validation_cases)
+        cases_fingerprint = json.dumps(cases, sort_keys=True)
+        self._validation_save_generation += 1
+        self.validation_status.setStringValue_(
+            "Saving the latest test cases before closing…")
+        self.validation_status.setTextColor_(
+            NSColor.secondaryLabelColor())
+
+        def completed(result):
+            def apply():
+                if self._closed:
+                    return
+                current_queue_id = str(
+                    self._deployment_queue.get("id", ""))
+                if current_queue_id != deployment_id:
+                    return
+                self._capture_validation_cases()
+                current_cases = rules_api.normalize_validation_cases(
+                    self.validation_cases)
+                current_fingerprint = json.dumps(
+                    current_cases, sort_keys=True)
+                if not result.get("ok"):
+                    self._validation_dirty = True
+                    self._dirty = True
+                    self.window.setDocumentEdited_(True)
+                    self.validation_status.setStringValue_(
+                        result.get(
+                            "error",
+                            "The deployment was queued, but the latest test "
+                            "cases could not be saved.",
+                        ))
+                    self.validation_status.setTextColor_(
+                        NSColor.systemRedColor())
+                    return
+                if current_fingerprint != cases_fingerprint:
+                    self._persist_validation_cases_for_queued_deployment(
+                        deployment_id)
+                    return
+                self.validation_cases = list(
+                    result.get("cases") or current_cases)
+                self._saved_validation_cases = json.dumps(
+                    self.validation_cases, sort_keys=True)
+                self._validation_dirty = False
+                status = str(self._deployment_queue.get("status", ""))
+                if status in (
+                    "waiting_for_build", "building", "checking",
+                    "validating", "deploying", "succeeded",
+                ):
+                    self._close_queued_editor()
+            _on_main(apply)
+
+        self.model.perform({
+            "type": "save_validation_cases",
+            "rule_id": self.rule_id,
+            "project_root": self.project_root,
+            "validation_cases": cases,
+        }, completed, timeout=10)
 
     @objc.python_method
     def _recover_deployment_after_disconnect(
@@ -4170,11 +4836,12 @@ class RAPRuleEditorDocument(NSObject):
 
     @objc.python_method
     def show(self) -> None:
+        self._closed = False
         NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         if not self._shown:
             self._fit_window_to_content()
-            self.reload_compiler_catalog()
-            self.reload_validation_results()
+            self.reload_compiler_catalog(then=self.reload_validation_results)
+            self.reload_validation_queue()
             self.reload_deployment_queue()
         self.window.makeKeyAndOrderFront_(None)
         self.window.contentView().layoutSubtreeIfNeeded()
@@ -4232,15 +4899,18 @@ class RAPRuleEditorDocument(NSObject):
             self._advanced_apply = None
             self._refresh_finding_context()
             return
+        self._closed = True
+        self._validation_save_generation += 1
+        self._validation_load_generation += 1
         if self._finetune_poll_timer:
             self._finetune_poll_timer.cancel()
             self._finetune_poll_timer = None
-        if (
-            self._deployment_queue_poll_timer
-            and not self._queue_is_pending()
-        ):
+        if self._deployment_queue_poll_timer:
             self._deployment_queue_poll_timer.cancel()
             self._deployment_queue_poll_timer = None
+        if self._validation_queue_poll_timer:
+            self._validation_queue_poll_timer.cancel()
+            self._validation_queue_poll_timer = None
         if self._content_fit_timer:
             self._content_fit_timer.cancel()
             self._content_fit_timer = None

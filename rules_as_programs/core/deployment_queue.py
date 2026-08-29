@@ -1,4 +1,4 @@
-"""Persistent deployment intents waiting on long-running compiler builds."""
+"""Persistent deployment, validation, and optimization workflow intents."""
 
 from __future__ import annotations
 
@@ -14,7 +14,9 @@ from .. import config
 PENDING_STATUSES = {
     "waiting_for_build", "building", "checking", "validating", "deploying",
 }
+CANCELLABLE_DEPLOYMENT_STATUSES = PENDING_STATUSES - {"deploying"}
 DEPLOYMENT_KIND = "deployment"
+VALIDATION_KIND = "validation"
 OPTIMIZATION_KIND = "optimization"
 
 
@@ -71,6 +73,27 @@ class DeploymentQueueStore:
             self._save(entries)
             return dict(value)
 
+    def compare_and_update(
+        self,
+        queue_id: str,
+        expected_statuses: set[str],
+        **changes: Any,
+    ) -> dict[str, Any] | None:
+        """Atomically update an entry only while it remains in an expected state."""
+        with self._lock:
+            entries = self._load()
+            value = entries.get(queue_id)
+            if (
+                not value
+                or str(value.get("status", "")) not in expected_statuses
+            ):
+                return None
+            value.update(changes)
+            value["updated_at"] = time.time()
+            entries[queue_id] = value
+            self._save(entries)
+            return dict(value)
+
     def get(self, queue_id: str) -> dict[str, Any] | None:
         with self._lock:
             value = self._load().get(queue_id)
@@ -115,10 +138,15 @@ class DeploymentQueueStore:
         return values
 
     def cancel(
-        self, queue_id: str, reason: str = "Cancelled by user."
+        self,
+        queue_id: str,
+        reason: str = "Cancelled by user.",
+        *,
+        expected_statuses: set[str] | None = None,
     ) -> dict[str, Any] | None:
-        return self.update(
+        return self.compare_and_update(
             queue_id,
+            expected_statuses or PENDING_STATUSES,
             status="cancelled",
             error=reason,
             finished_at=time.time(),

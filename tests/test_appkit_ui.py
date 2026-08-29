@@ -337,7 +337,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
     attention_buttons = [
         control for control in _walk(attention_cell)
         if isinstance(control, NSButton)]
-    assert "Open Cursor" in {
+    assert "Open Codex" in {
         str(button.title()) for button in attention_buttons}
     assert "Clear" not in {
         str(button.title()) for button in attention_buttons}
@@ -523,7 +523,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
         "current_rule": {
             "source": "from rules_as_programs import rule\n",
             "scope": "project",
-            "trigger": "afterAgentResponse",
+            "trigger": "Stop",
             "definition": {"source_path": "/tmp/rule.py"},
         },
         "audit": {"rule_source": "from rules_as_programs import rule\n"},
@@ -544,7 +544,7 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
                 "sha256": "inputhash",
                 "char_count": 32,
                 "format": "plain",
-                "json_pointer": "/text",
+                "json_pointer": "/last_assistant_message",
                 "pointer_source": "default",
                 "value_type": "string",
                 "event_ids": ["event"],
@@ -553,11 +553,11 @@ def test_popover_and_structured_detail_construct(monkeypatch, tmp_path):
             "trigger": {
                 "event_id": "event",
                 "kind": "message",
-                "hook": "afterAgentResponse",
+                "hook": "Stop",
                 "included_in_input": True,
                 "raw_payload": {
-                    "hook_event_name": "afterAgentResponse",
-                    "text": "Agent response",
+                    "hook_event_name": "Stop",
+                    "last_assistant_message": "Agent response",
                 },
             },
         },
@@ -882,6 +882,11 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert document.description_editor.textContainer().widthTracksTextView()
     assert document.name_field.nextKeyView() == document.trigger_popup
     assert document.trigger_popup.nextKeyView() == document.description_editor
+    assert document.description_editor.nextKeyView() == (
+        document.compiler_action_button)
+    arranged = list(document._content_stack.arrangedSubviews())
+    assert arranged.index(document.compiler_row) < arranged.index(
+        document.validation_section)
     assert document.deploy_button.isEnabled()
     document.deploy()
     assert not document.trigger_error_label.isHidden()
@@ -897,12 +902,12 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
         for index in range(7)
     ] == [
         "",
-        "afterShellExecution",
-        "afterAgentThought",
-        "preToolUse",
-        "afterAgentResponse",
-        "postToolUseFailure",
-        "afterFileEdit",
+        "Stop",
+        "PreToolUse",
+        "PostToolUse",
+        "UserPromptSubmit",
+        "SubagentStop",
+        "PermissionRequest",
     ]
     assert str(document.input_contract_label.stringValue()) == (
         "Choose one supported trigger.")
@@ -933,9 +938,9 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert document.content_scroll.contentView().bounds().origin.y == 0
     document.trigger_popup.selectItemAtIndex_(1)
     document.trigger_changed(document.trigger_popup)
-    assert document.trigger == "afterShellExecution"
+    assert document.trigger == "Stop"
     assert document.trigger_error_label.isHidden()
-    assert str(document.input_contract_label.stringValue()) == "Command"
+    assert str(document.input_contract_label.stringValue()) == "Assistant response"
     assert document.deploy_button.isEnabled()
     assert document.deploy_button.bezelColor().isEqual_(
         NSColor.controlAccentColor())
@@ -960,7 +965,7 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
                     "schema_version": 4,
                 "input": {
                     "text": "exact finding input",
-                    "json_pointer": "/text",
+                    "json_pointer": "/last_assistant_message",
                 },
                     "severity": "warn",
             },
@@ -1059,7 +1064,7 @@ def test_rule_editor_prioritizes_intent_and_adapts_without_rebuilds():
     assert document.window is not None
     ok, canonical, error = document._compose()
     assert ok, error
-    assert "trigger='afterShellExecution'" in canonical
+    assert "trigger='Stop'" in canonical
     assert "inputs=" not in canonical
     projection = rules_api.source_projection(canonical)
     assert projection["name"] == "Renamed Example"
@@ -1171,7 +1176,8 @@ def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
     document.deploy()
 
     assert [request["type"] for request in model.requests] == [
-        "compiler_catalog", "deployment_queue_status",
+        "compiler_catalog", "validation_queue_status",
+        "deployment_queue_status",
         "queue_deployment"]
     assert not document.window.isVisible()
     assert str(document.deploy_button.title()) == "Queued"
@@ -1180,11 +1186,16 @@ def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
     queued_hash = revisions.hash_source(queued_source)
     document._notified_queue_terminal = (
         f"{queued_request['deployment_id']}:succeeded")
+    document.show()
     document._apply_deployment_queue({
         "id": queued_request["deployment_id"],
         "status": "succeeded",
         "phase": "Deployed",
         "source_hash": queued_hash,
+        "compiler": queued_request["compiler"],
+        "compiler_mode": queued_request["compiler_mode"],
+        "compiler_snapshot": queued_request["compiler_snapshot"],
+        "coverage": queued_request["coverage"],
         "finished_at": 1,
         "result": {
             "ok": True,
@@ -1211,7 +1222,6 @@ def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
             "impact_count": 1,
         },
     })
-    document.show()
     assert str(document.diagnostics_label.stringValue()).startswith(
         "✓ Deployed")
     assert not document._dirty
@@ -1220,6 +1230,7 @@ def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
     document.description_editor.setString_(
         "Surface rsync commands, including those with unusual flags.")
     document.editor_changed()
+    assert document.diagnostics_label.isHidden()
     document.save_draft()
     assert document.deploy_button.isEnabled()
     assert str(document.state_label.stringValue()) == "Changes not deployed"
@@ -1253,6 +1264,90 @@ def test_rule_editor_deploys_through_prepare_and_commit(monkeypatch):
     assert not document.window.isVisible()
 
 
+def test_new_rule_saves_validation_edits_made_while_queueing(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+    monkeypatch.setattr(
+        rule_editor, "_after_delay", lambda _seconds, _callback: None)
+
+    class Model:
+        def __init__(self):
+            self.queue_request = None
+            self.queue_callback = None
+            self.saved_cases = None
+
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "queue_deployment":
+                self.queue_request = dict(request)
+                self.queue_callback = callback
+            elif request["type"] == "save_validation_cases":
+                self.saved_cases = list(request["validation_cases"])
+                callback({
+                    "ok": True,
+                    "cases": self.saved_cases,
+                })
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Queue case edits")
+    model = Model()
+    manager = rule_editor.RuleEditorManager(model)
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "new_draft": True,
+        "validation_cases": [{
+            "id": "case",
+            "input": "old input",
+            "expected": "OK",
+            "note": "",
+        }],
+        "deployment": {
+            "coverage": {"mode": "selected", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+    ok, queued_source, error = document._compose()
+    assert ok, error
+    document._current_source_hash = revisions.hash_source(queued_source)
+    document._current_behavior_hash = revisions.behavior_hash(queued_source)
+    document._queue_current_deployment(
+        queued_source,
+        revisions.hash_source(queued_source),
+        {"ok": True},
+    )
+    document.validation_controls[0][0].setStringValue_("newest input")
+    document.validation_changed()
+    request = model.queue_request
+
+    model.queue_callback({
+        "ok": True,
+        "queue": {
+            "id": request["deployment_id"],
+            "kind": "deployment",
+            "rule_id": rule_id,
+            "status": "building",
+            "phase": "Building compiler",
+            "source_hash": revisions.hash_source(request["source"]),
+            "compiler": request["compiler"],
+            "compiler_mode": request["compiler_mode"],
+            "compiler_snapshot": request["compiler_snapshot"],
+            "coverage": request["coverage"],
+        },
+    })
+
+    assert model.saved_cases[0]["input"] == "newest input"
+    assert not document.window.isVisible()
+
+
 def test_rule_editor_grows_for_long_spec_and_caps_internal_editor():
     from AppKit import NSApplication, NSScreen
     from rules_as_programs import rules_api
@@ -1267,6 +1362,8 @@ def test_rule_editor_grows_for_long_spec_and_caps_internal_editor():
             return None
 
     NSApplication.sharedApplication()
+    if NSScreen.mainScreen() is None:
+        pytest.skip("screen geometry is unavailable in this test session")
     rule_id = new_rule_id()
     source = rules_api.draft_rule_source(rule_id, "Long spec")
     model = Model()
@@ -1413,7 +1510,7 @@ def test_existing_clean_rule_shows_disabled_deployed_action(monkeypatch):
     assert compiler_rows[1]["can_build"]
     assert compiler_rows[1]["action"] == "select"
     assert compiler_rows[2]["can_build"]
-    assert compiler_rows[2]["action"] == "build"
+    assert compiler_rows[2]["action"] == "select"
     assert compiler_rows[3]["action"] == "select"
     assert compiler_accessory.frame().size.width == 560
     document._finetune_status = {
@@ -1517,6 +1614,14 @@ def test_existing_clean_rule_shows_disabled_deployed_action(monkeypatch):
     document._deployment_queue_poll_recovery_thread.join(timeout=2)
     assert document._deployment_queue_poll_failures == 0
     assert document._queue_is_pending()
+    requests_before_case_edit = len(model.requests)
+    document.validation_controls[0][1].selectItemWithTitle_("INFO")
+    document.validation_changed()
+    assert document._queue_is_pending()
+    assert "cancel_queued_deployment" not in [
+        request["type"]
+        for request in model.requests[requests_before_case_edit:]
+    ]
     document.description_editor.setString_(original_spec)
     document.editor_changed()
     assert model.requests[-1]["type"] == "cancel_queued_deployment"
@@ -1525,10 +1630,25 @@ def test_existing_clean_rule_shows_disabled_deployed_action(monkeypatch):
     document._set_draft_compiler("future-standard", explicit=True)
     document.validation_cases.pop(0)
     document._invalidate_validation_results()
+    document._render_validation_cases()
     assert set(document._validation_results) == {"two"}
     assert document.observed_runs_button.isEnabled()
     document._set_draft_compiler("future-finetune", explicit=True)
-    assert not document.deploy_button.isEnabled()
+    assert document.deploy_button.isEnabled()
+    assert str(document.deploy_button.title()) == "Deploy When Ready"
+    assert document.run_validation_button.isEnabled()
+    assert str(document.run_validation_button.title()) == (
+        "Build & Run 1 Test")
+    request_count = len(model.requests)
+    document.run_validation_cases()
+    assert [request["type"] for request in model.requests[request_count:]] == [
+        "queue_validation"]
+    document.name_field.setStringValue_("Renamed while testing")
+    document.editor_changed()
+    assert model.requests[-1]["type"] == "queue_validation"
+    document.validation_controls[0][1].selectItemWithTitle_("INFO")
+    document.validation_changed()
+    assert model.requests[-1]["type"] == "cancel_queued_validation"
     document._set_compilation_message(
         "Previous compiler failed.", "old-build")
     document._apply_finetune_status({
@@ -1537,11 +1657,12 @@ def test_existing_clean_rule_shows_disabled_deployed_action(monkeypatch):
         "job": {
             "status": "ready",
             "source_hash": digest,
+                "behavior_hash": document._current_behavior_hash,
             "compiler": "future-finetune",
             "program_id": "finetuned-program",
         },
     })
-    assert "Draft: Future Finetuned · ready" in str(
+    assert "Draft: Future Finetuned — ready" in str(
         document.compiler_status_label.stringValue())
     assert document.diagnostics_label.isHidden()
     assert document.deploy_button.isEnabled()
@@ -1570,19 +1691,39 @@ def test_deployed_validation_cases_autosave_remove_and_undo(monkeypatch):
                     "ok": True,
                     "cases": list(request["validation_cases"]),
                 })
-            elif request["type"] == "validate_rule_cases":
+            elif request["type"] == "queue_validation":
                 case = dict(request["validation_cases"][0])
                 callback({
                     "ok": True,
-                    "validation": {
-                        "ok": False,
-                        "passed": 0,
-                        "total": 1,
-                        "results": [{
-                            **case,
-                            "actual": "INFO",
-                            "ok": False,
-                        }],
+                    "queue": {
+                        "id": request["validation_id"],
+                        "kind": "validation",
+                        "rule_id": rule_id,
+                        "source_hash": revisions.hash_source(
+                            request["source"]),
+                        "compiler": request["compiler"],
+                        "compiler_snapshot": request["compiler_snapshot"],
+                        "status": "succeeded",
+                        "result": {
+                            "ok": True,
+                            "target": {
+                                "compiler": request["compiler"],
+                                "compiler_snapshot": request[
+                                    "compiler_snapshot"],
+                                "program_id": "validation-program",
+                            },
+                            "validation": {
+                                "ok": False,
+                                "passed": 0,
+                                "total": 1,
+                                "results": [{
+                                    **case,
+                                    "actual": "INFO",
+                                    "ok": False,
+                                    "program_id": "validation-program",
+                                }],
+                            },
+                        },
                     },
                 })
 
@@ -1628,7 +1769,7 @@ def test_deployed_validation_cases_autosave_remove_and_undo(monkeypatch):
     assert document.validation_scroll.hasVerticalScroller()
     assert not document.validation_scroll.autohidesScrollers()
     assert document.validation_controls[0][0].maximumNumberOfLines() == 1
-    assert "(1)" == str(document.validation_count_label.stringValue())
+    assert "1 case" == str(document.validation_count_label.stringValue())
     assert {
         str(control.stringValue())
         for control in _walk(document.validation_section)
@@ -1674,7 +1815,10 @@ def test_deployed_validation_cases_autosave_remove_and_undo(monkeypatch):
     ]
     document._render_validation_cases()
     assert str(document.validation_count_label.stringValue()) == (
-        "(9) · showing 5")
+        "9 cases")
+    assert str(document.validation_overflow_label.stringValue()) == (
+        "Showing 5 at a time · Scroll to view all 9 cases.")
+    assert not document.validation_overflow_label.isHidden()
     assert document.validation_height_constraint.constant() == 180
     assert document.validation_document.frame().size.height > (
         document.validation_scroll.contentView().bounds().size.height)
@@ -1686,7 +1830,540 @@ def test_deployed_validation_cases_autosave_remove_and_undo(monkeypatch):
     assert document.validation_scroll.contentView().bounds().origin.y >= (
         previous_origin)
     assert str(document.validation_count_label.stringValue()) == (
-        "(10) · showing 5")
+        "10 cases")
+    document._dirty = False
+    document.window.close()
+
+
+def test_validation_save_callbacks_cannot_overwrite_newer_cases(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+
+    class Model:
+        def __init__(self):
+            self.saves = []
+
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "save_validation_cases":
+                self.saves.append((dict(request), callback))
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Ordered saves")
+    digest = revisions.hash_source(source)
+    model = Model()
+    manager = rule_editor.RuleEditorManager(model)
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "definition": {
+            "source_hash": digest,
+            "source_path": "/tmp/library/rule.py",
+        },
+        "working_hash": digest,
+        "active_hash": digest,
+        "active": {"source_hash": digest},
+        "validation_cases": [{
+            "id": "case",
+            "input": "first",
+            "expected": "OK",
+            "note": "",
+        }],
+        "deployment": {
+            "coverage": {"mode": "all", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+
+    document.validation_controls[0][0].setStringValue_("first edit")
+    document._persist_validation_cases()
+    document.validation_controls[0][0].setStringValue_("newest edit")
+    document._persist_validation_cases()
+    first_request, first_callback = model.saves[0]
+    newest_request, newest_callback = model.saves[1]
+
+    newest_callback({
+        "ok": True,
+        "cases": newest_request["validation_cases"],
+    })
+    first_callback({
+        "ok": True,
+        "cases": first_request["validation_cases"],
+    })
+
+    assert document.validation_cases[0]["input"] == "newest edit"
+    assert "newest edit" in document._saved_validation_cases
+    document._dirty = False
+    document.window.close()
+
+
+def test_cached_validation_callback_is_invalidated_by_newer_spec(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+
+    class Model:
+        def __init__(self):
+            self.callbacks = []
+
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "cached_validation_results":
+                self.callbacks.append(callback)
+
+        query = perform
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Cached results")
+    digest = revisions.hash_source(source)
+    manager = rule_editor.RuleEditorManager(Model())
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "definition": {
+            "source_hash": digest,
+            "source_path": "/tmp/library/rule.py",
+        },
+        "working_hash": digest,
+        "active_hash": digest,
+        "active": {"source_hash": digest},
+        "validation_cases": [{
+            "id": "case",
+            "input": "git status",
+            "expected": "OK",
+            "note": "",
+        }],
+        "deployment": {
+            "coverage": {"mode": "all", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+    document.reload_validation_results()
+    callback = manager.model.callbacks[-1]
+    document.description_editor.setString_(
+        document.spec + "\n\nThis is a newer specification.")
+    document.editor_changed()
+
+    callback({
+        "ok": True,
+        "target": {"compiler": "old", "compiler_snapshot": "old"},
+        "validation": {"results": [{
+            "id": "case",
+            "input": "git status",
+            "expected": "OK",
+            "actual": "OK",
+            "ok": True,
+        }]},
+    })
+
+    assert not document._validation_results_loaded
+    assert not document._validation_result_cache
+    document._dirty = False
+    document.window.close()
+
+
+def test_terminal_deployment_preserves_newer_coverage_edit(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+
+    class Model:
+        def perform(self, *_args, **_kwargs):
+            return None
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Coverage callback")
+    digest = revisions.hash_source(source)
+    manager = rule_editor.RuleEditorManager(Model())
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "definition": {
+            "source_hash": digest,
+            "source_path": "/tmp/library/rule.py",
+        },
+        "working_hash": digest,
+        "active_hash": digest,
+        "active": {
+            "source_hash": digest,
+            "behavior_hash": revisions.behavior_hash(source),
+            "compiler": "future-standard",
+            "compiler_snapshot": "standard-snapshot",
+            "compiler_mode": revisions.EXPLICIT_COMPILER_MODE,
+            "program_id": "program",
+        },
+        "deployment": {
+            "coverage": {
+                "mode": "selected",
+                "selected_projects": ["/tmp/old"],
+            },
+            "projects": [
+                {"path": "/tmp/old", "name": "old"},
+                {"path": "/tmp/new", "name": "new"},
+            ],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+    document.compiler_catalog = [{
+        "name": "future-standard",
+        "description": "Future Standard",
+        "default": True,
+        "latest_snapshot": "standard-snapshot",
+        "compiler_kind": "mapper_lora",
+    }]
+    document.compiler_mode = revisions.EXPLICIT_COMPILER_MODE
+    document.draft_compiler = "future-standard"
+    document.draft_compiler_snapshot = "standard-snapshot"
+    document.coverage_mode = "selected"
+    document.selected_projects = ["/tmp/new"]
+    document.coverage_changed()
+    newer_source = source.replace(
+        "return ctx.result(decision)",
+        'return ctx.result("CRITICAL")',
+    )
+    document.full_source = newer_source
+    document._current_source_hash = revisions.hash_source(newer_source)
+    document._current_behavior_hash = revisions.behavior_hash(newer_source)
+    document._source_dirty = True
+    document._notified_queue_terminal = "older-deployment:succeeded"
+
+    document._apply_deployment_queue({
+        "id": "older-deployment",
+        "status": "succeeded",
+        "source_hash": digest,
+        "compiler": "future-standard",
+        "compiler_snapshot": "standard-snapshot",
+        "compiler_mode": revisions.EXPLICIT_COMPILER_MODE,
+        "coverage": {"mode": "all", "selected_projects": []},
+        "finished_at": 1,
+        "result": {
+            "ok": True,
+            "active": dict(document.rule["active"]),
+            "rule": dict(document.rule),
+            "coverage": {"mode": "all", "selected_projects": []},
+        },
+    })
+
+    assert document._coverage_dirty
+    assert document._active_coverage == {
+        "mode": "all", "selected_projects": []}
+    assert document.full_source == newer_source
+    composed_ok, composed, composed_error = document._compose()
+    assert composed_ok, composed_error
+    assert 'return ctx.result("CRITICAL")' in composed
+    assert document.coverage_mode == "selected"
+    assert document.selected_projects == ["/tmp/new"]
+    assert "current edits remain undeployed" in str(
+        document.diagnostics_label.stringValue())
+    document._dirty = False
+    document.window.close()
+
+
+def test_failed_case_save_after_deployment_keeps_document_edited(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+
+    class Model:
+        def __init__(self):
+            self.save_callback = None
+
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "save_validation_cases":
+                self.save_callback = callback
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Failed case save")
+    source_hash = revisions.hash_source(source)
+    model = Model()
+    manager = rule_editor.RuleEditorManager(model)
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "definition": {
+            "source_hash": source_hash,
+            "source_path": "/tmp/library/rule.py",
+        },
+        "working_hash": source_hash,
+        "validation_cases": [{
+            "id": "case",
+            "input": "old input",
+            "expected": "OK",
+            "note": "",
+        }],
+        "deployment": {
+            "coverage": {"mode": "selected", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+    document.validation_controls[0][0].setStringValue_("new input")
+    document.validation_changed()
+    document._deployment_queue = {
+        "id": "deployment",
+        "status": "checking",
+        "source_hash": source_hash,
+        "compiler": "",
+        "compiler_mode": revisions.AUTOMATIC_COMPILER_MODE,
+        "compiler_snapshot": "",
+        "coverage": {"mode": "selected", "selected_projects": []},
+    }
+    document._persist_validation_cases_for_queued_deployment("deployment")
+    assert model.save_callback is not None
+    document._notified_queue_terminal = "deployment:succeeded"
+
+    document._apply_deployment_queue({
+        **document._deployment_queue,
+        "status": "succeeded",
+        "finished_at": 1,
+        "result": {
+            "ok": True,
+            "active": {
+                "source_hash": source_hash,
+                "behavior_hash": revisions.behavior_hash(source),
+                "compiler": "",
+                "compiler_snapshot": "",
+                "compiler_mode": revisions.AUTOMATIC_COMPILER_MODE,
+                "program_id": "program",
+            },
+            "rule": {
+                **document.rule,
+                "source": source,
+                "working_hash": source_hash,
+            },
+            "coverage": {
+                "mode": "selected",
+                "selected_projects": [],
+            },
+        },
+    })
+    model.save_callback({
+        "ok": False,
+        "error": "Could not save the latest test cases.",
+    })
+
+    assert document._validation_dirty
+    assert document._dirty
+    assert document.window.isDocumentEdited()
+    assert "Could not save" in str(
+        document.validation_status.stringValue())
+    document._dirty = False
+    document.window.close()
+
+
+def test_closed_editor_ignores_late_pending_queue_callback(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+    scheduled = []
+    monkeypatch.setattr(
+        rule_editor,
+        "_after_delay",
+        lambda seconds, callback: scheduled.append((seconds, callback)),
+    )
+
+    class Model:
+        def __init__(self):
+            self.deployment_callback = None
+
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "deployment_queue_status":
+                self.deployment_callback = callback
+
+        query = perform
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Closed callback")
+    model = Model()
+    manager = rule_editor.RuleEditorManager(model)
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "new_draft": True,
+        "deployment": {
+            "coverage": {"mode": "selected", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+    callback = model.deployment_callback
+    scheduled.clear()
+    document._dirty = False
+    document.window.close()
+
+    callback({
+        "ok": True,
+        "queue": {
+            "id": "late",
+            "status": "building",
+            "compiler": "future-standard",
+        },
+    })
+
+    assert document._closed
+    assert not scheduled
+    assert not manager.documents
+
+
+def test_old_queue_poll_cannot_replace_newer_intent(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+
+    class Model:
+        def __init__(self):
+            self.deployment_callback = None
+
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "deployment_queue_status":
+                self.deployment_callback = callback
+
+        query = perform
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Queue generations")
+    model = Model()
+    manager = rule_editor.RuleEditorManager(model)
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "new_draft": True,
+        "deployment": {
+            "coverage": {"mode": "selected", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+    old_callback = model.deployment_callback
+    document._pending_deployment_id = "new-intent"
+    document._deployment_queue = {
+        "id": "new-intent",
+        "status": "building",
+    }
+
+    old_callback({
+        "ok": True,
+        "queue": {
+            "id": "old-intent",
+            "status": "cancelled",
+        },
+    })
+
+    assert document._deployment_queue["id"] == "new-intent"
+    assert document._deployment_queue["status"] == "building"
+    document._deployment_queue = {}
+    document._dirty = False
+    document.window.close()
+
+
+def test_validation_submission_recovers_persisted_intent(monkeypatch):
+    from AppKit import NSApplication
+    from rules_as_programs import rules_api
+    from rules_as_programs.core import revisions, validation_store
+    from rules_as_programs.ui import rule_editor
+
+    monkeypatch.setattr(
+        rule_editor, "_on_main", lambda callback: callback())
+    monkeypatch.setattr(
+        rule_editor, "_after_delay", lambda _seconds, _callback: None)
+    monkeypatch.setattr(
+        rule_editor.ipc, "ensure_daemon", lambda wait=8.0: True)
+    status_requests = []
+
+    class Model:
+        def perform(self, request, callback=None, **_kwargs):
+            if request["type"] == "queue_validation":
+                callback({"ok": False, "error": "daemon timed out"})
+
+    NSApplication.sharedApplication()
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Recover validation")
+    manager = rule_editor.RuleEditorManager(Model())
+    manager.open({
+        "id": rule_id,
+        "scope": "global",
+        "source": source,
+        "projection": rules_api.source_projection(source),
+        "new_draft": True,
+        "validation_cases": [{
+            "id": "case",
+            "input": "git status",
+            "expected": "OK",
+            "note": "",
+        }],
+        "deployment": {
+            "coverage": {"mode": "selected", "selected_projects": []},
+            "projects": [],
+        },
+    }, "")
+    document = next(iter(manager.documents.values()))
+
+    def send_request(request, timeout=10):
+        status_requests.append(request)
+        return {
+            "ok": True,
+            "queue": {
+                "id": request["validation_id"],
+                "kind": "validation",
+                "rule_id": rule_id,
+                "source_hash": revisions.hash_source(source),
+                "spec_hash": validation_store.spec_fingerprint(document.spec),
+                "validation_hash": document._validation_intent_hash(),
+                "compiler": document.resolved_draft_compiler(),
+                "compiler_snapshot": document.draft_compiler_snapshot,
+                "status": "building",
+            },
+        }
+
+    monkeypatch.setattr(rule_editor.ipc, "send_request", send_request)
+    document.run_validation_cases()
+    document._validation_queue_poll_recovery_thread.join(timeout=2)
+
+    assert status_requests[0]["type"] == "validation_queue_status"
+    assert document._validation_queue["status"] == "building"
+    assert document._pending_validation_id
+    document._validation_queue = {}
     document._dirty = False
     document.window.close()
 
@@ -1715,7 +2392,7 @@ def test_evaluation_history_filters_and_shows_exact_record(monkeypatch):
                         "duration_ms": 61,
                         "finding_id": 7,
                         "rule": {"id": "rule", "name": "Rule"},
-                        "trigger": {"hook": "afterShellExecution"},
+                        "trigger": {"hook": "PreToolUse"},
                         "input": {
                             "json_pointer": "/command",
                             "text": "rsync src/ host:/app",
@@ -1730,7 +2407,7 @@ def test_evaluation_history_filters_and_shows_exact_record(monkeypatch):
                         "duration_ms": 42,
                         "finding_id": None,
                         "rule": {"id": "rule", "name": "Rule"},
-                        "trigger": {"hook": "afterShellExecution"},
+                        "trigger": {"hook": "PreToolUse"},
                         "input": {
                             "json_pointer": "/command",
                             "text": "git push",
@@ -1765,6 +2442,8 @@ def test_evaluation_history_filters_and_shows_exact_record(monkeypatch):
     assert "PREDICTION" in str(history.detail.string())
     assert "Last 2 · 1 OK · 1 findings · 0 errors" in str(
         history.summary_label.stringValue())
+    if NSPasteboard.generalPasteboard() is None:
+        pytest.skip("general pasteboard is unavailable in this test session")
     history.copy_selected_input()
     assert NSPasteboard.generalPasteboard().stringForType_(
         NSPasteboardTypeString) == "rsync src/ host:/app"

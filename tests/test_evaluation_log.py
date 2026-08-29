@@ -8,7 +8,7 @@ def _start(evaluation_id: str, rule_id: str = "rule"):
         "project_root": "/project",
         "conversation_id": "conversation",
         "rule": {"id": rule_id, "name": "Rule"},
-        "trigger": {"hook": "afterAgentResponse", "event_id": "event"},
+        "trigger": {"hook": "Stop", "event_id": "event"},
         "input": {
             "json_pointer": "/text",
             "pointer_source": "default",

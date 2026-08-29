@@ -1,7 +1,7 @@
 """``rap`` command-line interface.
 
 The important one is ``rap init`` -- the single-command onboarding that installs
-Cursor hooks, scaffolds rule programs, optionally converts existing prose rules,
+Codex hooks, scaffolds rule programs, optionally converts existing prose rules,
 and launches the daemon + tray. Everything else (status, rules management,
 daemon/tray control) supports that workflow.
 """
@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 
 from . import config, ipc, autostart, paw_runtime, rules_api
-from .adapters.cursor import CursorAdapter
+from .adapters.codex import CodexAdapter
+from .adapters.codex.adapter import remove_installed_hooks
 from .core.rule import load_rules, load_rule_file
 from . import scaffold
 
@@ -51,28 +52,32 @@ def cmd_init(args) -> int:
     print(f"Rules as Programs: setting up ({scope} scope)")
     print(f"  project: {project_root}")
 
-    # 1. Cursor hooks
-    adapter = CursorAdapter()
+    # 1. Preserve pre-Codex RAP rules and project configuration.
+    for note in scaffold.migrate_legacy_cursor_state(scope, project_root):
+        print(f"  migration: {note}")
+
+    # 2. Codex hooks
+    adapter = CodexAdapter()
     for note in adapter.install(scope, project_root):
         print(f"  hooks: {note}")
 
-    # 2. Scaffold built-in rule programs
+    # 3. Scaffold built-in rule programs
     for note in scaffold.install_builtins(scope, project_root):
         print(f"  rules: {note}")
 
-    # 3. Optionally convert existing prose rules
+    # 4. Optionally convert existing prose rules
     if args.scan:
         for note in scaffold.convert_prose_rules(project_root, scope):
             print(f"  scan: {note}")
 
-    # 4. Refresh the menu-bar icon from programasweights.com (falls back to bundled)
+    # 5. Refresh the menu-bar icon from programasweights.com (falls back to bundled)
     print(f"  icon: {'refreshed from programasweights.com' if _refresh_icon() else 'using bundled asset'}")
 
-    # 5. Login autostart so the menu item is always there
+    # 6. Login autostart so the menu item is always there
     if not args.no_autostart:
         print(f"  autostart: {autostart.install(sys.executable)}")
 
-    # 6. Launch daemon + tray
+    # 7. Launch daemon + tray
     if not args.no_launch:
         ok = ipc.ensure_daemon()
         print(f"  daemon: {'running' if ok else 'could not start (will autostart on first hook)'}")
@@ -84,14 +89,14 @@ def cmd_init(args) -> int:
 
     print(
         "\nDone. Rule programs will now audit this project's agent runs.\n"
-        "Reload Cursor (or restart) so it picks up .cursor/hooks.json.\n"
+        "Restart Codex, then open /hooks and trust the RAP hooks.\n"
         "Findings appear in the top-right menu item; per-project logs live in\n"
-        ".cursor/rules-as-programs/log/. You can also run `rap status`."
+        ".codex/rules-as-programs/log/. You can also run `rap status`."
     )
     if args.scan:
         print(
-            "\nTip: to convert your existing rules with high quality, ask the Cursor\n"
-            "agent to follow the 'Convert existing rules' section of AGENTS.md."
+            "\nTip: to convert your existing rules with high quality, ask Codex to\n"
+            "follow the 'Convert existing rules' section of AGENTS.md."
         )
     return 0
 
@@ -132,32 +137,16 @@ def cmd_stop(args) -> int:
 def cmd_uninstall(args) -> int:
     print("Rules as Programs: uninstalling")
     print(f"  autostart: {autostart.uninstall()}")
-    # Remove our hook entries from hooks.json (both scopes).
-    from .adapters.cursor.adapter import SUBSCRIBED_HOOKS, _WRAPPER_NAME
-    import json
+    # Remove our hook entries from Codex hooks.json (both scopes).
     proj = os.path.abspath(args.path or os.getcwd())
     for scope in ("project", "global"):
-        hooks_json = config.cursor_hooks_path(scope, proj)
-        if not hooks_json.exists():
-            continue
-        try:
-            data = json.loads(hooks_json.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        hooks = data.get("hooks", {})
-        for event in SUBSCRIBED_HOOKS:
-            arr = hooks.get(event)
-            if isinstance(arr, list):
-                hooks[event] = [h for h in arr
-                                if not (isinstance(h, dict) and _WRAPPER_NAME in str(h.get("command", "")))]
-                if not hooks[event]:
-                    hooks.pop(event, None)
-        hooks_json.write_text(json.dumps(data, indent=2) + "\n")
-        print(f"  hooks: cleaned {hooks_json}")
+        hooks_json = config.codex_hooks_path(scope, proj)
+        if remove_installed_hooks(hooks_json):
+            print(f"  hooks: cleaned {hooks_json}")
     ipc.send_request({"type": "shutdown"})
     print("  daemon: stopped")
     print("\nNote: rule files and cached state were left in place.\n"
-          f"Remove manually if desired: {config.state_dir()} and .cursor/rules-as-programs/")
+          f"Remove manually if desired: {config.state_dir()} and .codex/rules-as-programs/")
     return 0
 
 
@@ -336,8 +325,8 @@ def cmd_doctor(args) -> int:
     print(f"  global rules:  {config.global_rules_dir()}")
     proj = os.getcwd()
     print(f"  project rules: {config.project_rules_dir(proj)}")
-    for scope, path in (("global", config.cursor_hooks_path('global')),
-                        ("project", config.cursor_hooks_path('project', proj))):
+    for scope, path in (("global", config.codex_hooks_path('global')),
+                        ("project", config.codex_hooks_path('project', proj))):
         print(f"  hooks ({scope}): {path} {'[present]' if Path(path).exists() else '[absent]'}")
     return 0
 
@@ -346,7 +335,7 @@ def cmd_doctor(args) -> int:
 
 def _add_scope_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument("--global", dest="global_scope", action="store_true",
-                   help="apply to all projects (~/.cursor) instead of this repo")
+                   help="apply to all projects ($CODEX_HOME) instead of this repo")
     p.add_argument("--path", default=None, help="project root (default: cwd)")
 
 

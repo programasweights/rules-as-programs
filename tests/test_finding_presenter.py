@@ -34,7 +34,7 @@ def _detail(input_text='{"message":"hello","nested":{"value":1}}'):
             "severity": "warn",
             "trigger": {
                 "event_id": "trigger",
-                "hook": "afterAgentResponse",
+                "hook": "Stop",
                 "event": {
                     "id": "trigger", "kind": "message", "text": "trigger"},
             },

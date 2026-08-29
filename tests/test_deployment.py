@@ -5,7 +5,10 @@ from pathlib import Path
 
 from rules_as_programs import config, rules_api
 from rules_as_programs.core import revisions
-from rules_as_programs.core.deployment_queue import DeploymentQueueStore
+from rules_as_programs.core.deployment_queue import (
+    CANCELLABLE_DEPLOYMENT_STATUSES,
+    DeploymentQueueStore,
+)
 from rules_as_programs.core.rule import new_rule_id
 from rules_as_programs.core.validation_store import ValidationResultStore
 from rules_as_programs.daemon import Daemon
@@ -22,9 +25,12 @@ class Runtime:
         self.cached_programs = {}
 
     def program_id_for_spec(self, _spec, compiler=None, **_kwargs):
+        key = (_spec.strip(), compiler or "")
+        if key in self.cached_programs:
+            return self.cached_programs[key]
         self.compiles += 1
         self.compilers.append(compiler)
-        self.cached_programs[(_spec.strip(), compiler or "")] = "program"
+        self.cached_programs[key] = "program"
         return "program"
 
     def cached_program_id_for_spec(self, spec, compiler=None):
@@ -95,7 +101,7 @@ def _daemon(monkeypatch, tmp_path, projects, *, fail_cases=False):
     monkeypatch.setattr(
         config, "global_rules_dir", lambda: tmp_path / "global-rules")
     monkeypatch.setattr(
-        "rules_as_programs.daemon.cursor_projects.discover_projects",
+        "rules_as_programs.daemon.codex_projects.discover_projects",
         lambda limit=100: [
             {"path": str(path), "name": path.name} for path in projects
         ],
@@ -117,8 +123,11 @@ def _daemon(monkeypatch, tmp_path, projects, *, fail_cases=False):
     daemon._deployment_lock = threading.Lock()
     daemon._finetune_jobs = {}
     daemon._finetune_lock = threading.Lock()
+    daemon._workflow_admission_lock = threading.Lock()
     daemon._queued_deployment_lock = threading.Lock()
     daemon._queued_deployments_running = set()
+    daemon._queued_validation_lock = threading.Lock()
+    daemon._queued_validations_running = set()
     return daemon
 
 
@@ -186,6 +195,30 @@ def test_new_rule_draft_no_longer_requires_a_project(monkeypatch, tmp_path):
     assert coverage["mode"] == "selected"
     assert coverage["selected_projects"] == [str(project)]
     assert coverage["confirmed"]
+
+
+def test_legacy_activation_compiles_without_implicit_validation(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "legacy-activation"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project], fail_cases=True)
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Legacy activation")
+    saved = rules_api.save_library_draft(
+        rule_id, source, expected_absent=True)
+    assert saved["ok"]
+    runs_before = daemon.runtime.runs
+
+    result = daemon.dispatch({
+        "type": "activate_rule",
+        "rule_id": rule_id,
+        "project_root": str(project),
+    })
+
+    assert result["ok"]
+    assert daemon.runtime.runs == runs_before
+    assert result["active"]["program_id"] == "program"
 
 
 def test_rule_name_changes_do_not_change_behavior_identity(
@@ -580,6 +613,35 @@ def test_finetuned_build_requires_explicit_activation(
     assert validation["target"]["compiler_snapshot"] == (
         "future-ft-v2-snapshot")
     assert daemon.runtime.compiles == compiles_before_validation
+    queued = daemon.queue_validation({
+        "validation_id": "pinned-snapshot-validation",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": source,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "program_id": activated["active"]["program_id"],
+        "validation_cases": [{
+            "id": "pinned",
+            "input": "git push",
+            "expected": "OK",
+        }],
+    })
+    original_compiler_info = daemon.runtime.compiler_info
+
+    def advanced_catalog(name=""):
+        info = dict(original_compiler_info(name))
+        if name == "future-ft-v2":
+            info["latest_snapshot"] = "future-ft-v2-new-snapshot"
+        return info
+
+    daemon.runtime.compiler_info = advanced_catalog
+    daemon._run_queued_validation(queued["queue"]["id"])
+    pinned = daemon.validation_queue_status(
+        rule_id, queued["queue"]["id"])["queue"]
+    assert pinned["status"] == "succeeded"
+    assert pinned["result"]["target"]["compiler_snapshot"] == (
+        "future-ft-v2-snapshot")
 
 
 def test_stale_finetuned_build_cannot_activate(monkeypatch, tmp_path):
@@ -734,10 +796,116 @@ def test_deploy_when_ready_runs_in_background_and_persists_status(
         "Decide whether this queued draft should be shown to the user.",
     )
     cases = [{"id": "safe", "input": "git push", "expected": "OK"}]
-    started = daemon.start_finetune(
-        rule_id, str(project), "future-ft-v2", changed, cases)
-    queued = daemon.queue_deployment({
+    request = {
         "deployment_id": "queued-intent",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": changed,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "validation_cases": cases,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "expected_active_hash": committed["active"]["source_hash"],
+    }
+    queued = daemon.queue_deployment(request)
+
+    assert queued["ok"]
+    queue_id = queued["queue"]["id"]
+    duplicate = daemon.queue_deployment(request)
+    conflicting = daemon.queue_deployment({
+        **request,
+        "coverage": {"mode": "all", "selected_projects": []},
+    })
+    assert duplicate["idempotent"]
+    assert conflicting["conflict"]
+    assert duplicate["queue"]["id"] == queue_id
+    assert queued["queue"]["status"] == "building"
+    assert DeploymentQueueStore(
+        tmp_path / "deployment-queue.json"
+    ).get(queue_id)["status"] == "building"
+    reopened = daemon.dispatch({
+        "type": "rule_get",
+        "rule_id": rule_id,
+        "project_root": str(project),
+    })["rule"]
+    assert reopened["source"] == changed
+    assert reopened["deployment"]["draft_coverage"]["compiler"] == (
+        "future-ft-v2")
+    daemon.deployment_queue.update(queue_id, status="checking")
+    reopened_checking = daemon.dispatch({
+        "type": "rule_get",
+        "rule_id": rule_id,
+        "project_root": str(project),
+    })["rule"]
+    assert reopened_checking["source"] == changed
+    assert reopened_checking["deployment"]["draft_coverage"][
+        "selected_projects"
+    ] == [str(project)]
+    latest_cases = [{
+        "id": "updated",
+        "input": "rm -rf build",
+        "expected": "WARNING",
+    }]
+    rules_api.save_validation_cases(
+        reopened["definition"]["source_path"], latest_cases)
+
+    daemon._run_queued_deployment(queue_id)
+    finished = daemon.deployment_queue_status(rule_id)["queue"]
+
+    assert finished["status"] == "succeeded"
+    assert daemon.runtime.compilers[-1] == "future-ft-v2"
+    assert finished["result"]["active"]["compiler"] == "future-ft-v2"
+    assert finished["result"]["active"]["source_hash"] == (
+        revisions.hash_source(changed))
+    assert rules_api.validation_cases(rule_id, str(project)) == [
+        {**latest_cases[0], "note": ""}]
+
+
+def test_validation_and_deployment_share_build_without_gating(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "shared-build"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project], fail_cases=True)
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Shared build")
+    initial = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    committed = daemon.commit_rule_deployment(initial["token"])
+    changed = source.replace(
+        "Decide whether this input should be shown to the user.",
+        "Decide whether this shared compiler build should be shown.",
+    )
+    cases = [{"id": "fails", "input": "git push", "expected": "OK"}]
+    validation_request = {
+        "validation_id": "validation-intent",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": changed,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "validation_cases": cases,
+    }
+    validation = daemon.queue_validation(validation_request)
+    duplicate_validation = daemon.queue_validation(validation_request)
+    conflicting_validation = daemon.queue_validation({
+        **validation_request,
+        "validation_cases": [{
+            "id": "different",
+            "input": "rm -rf build",
+            "expected": "WARNING",
+        }],
+    })
+    deployment = daemon.queue_deployment({
+        "deployment_id": "deployment-intent",
         "rule_id": rule_id,
         "project_root": str(project),
         "source": changed,
@@ -751,38 +919,119 @@ def test_deploy_when_ready_runs_in_background_and_persists_status(
         "expected_active_hash": committed["active"]["source_hash"],
     })
 
-    assert queued["ok"]
-    queue_id = queued["queue"]["id"]
-    duplicate = daemon.queue_deployment({
-        "deployment_id": "queued-intent",
+    assert validation["queue"]["status"] == "building"
+    assert duplicate_validation["idempotent"]
+    assert conflicting_validation["conflict"]
+    assert deployment["queue"]["status"] == "building"
+    assert daemon.deployment_queue.active_for_rule(
+        rule_id, kind="validation")["id"] == "validation-intent"
+    compiles_before = daemon.runtime.compiles
+
+    daemon._run_queued_validation("validation-intent")
+    validation_status = daemon.validation_queue_status(
+        rule_id, "validation-intent")["queue"]
+    assert validation_status["status"] == "succeeded"
+    assert not validation_status["result"]["validation"]["ok"]
+    assert daemon.runtime.compiles == compiles_before + 1
+    compiles_after_validation = daemon.runtime.compiles
+
+    daemon._run_queued_deployment("deployment-intent")
+    deployment_status = daemon.deployment_queue_status(
+        rule_id, "deployment-intent")["queue"]
+    assert deployment_status["status"] == "succeeded"
+    assert daemon.runtime.compiles == compiles_after_validation
+    assert deployment_status["result"]["active"]["compiler"] == "future-ft-v2"
+
+
+def test_pending_validation_resumes_after_restart(monkeypatch, tmp_path):
+    project = tmp_path / "restart-validation"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Restart validation")
+    prepared = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    daemon.commit_rule_deployment(prepared["token"])
+    queued = daemon.queue_validation({
+        "validation_id": "restart-validation-intent",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": source,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "validation_cases": [{
+            "id": "safe",
+            "input": "git push",
+            "expected": "OK",
+        }],
+    })
+    assert queued["queue"]["status"] == "building"
+
+    restarted = _daemon(monkeypatch, tmp_path, [project])
+    pending = restarted.deployment_queue.pending(kind="validation")
+    assert [item["id"] for item in pending] == [
+        "restart-validation-intent"]
+
+    restarted._run_queued_validation("restart-validation-intent")
+
+    status = restarted.validation_queue_status(
+        rule_id, "restart-validation-intent")["queue"]
+    assert status["status"] == "succeeded"
+    assert status["result"]["validation"]["ok"]
+
+
+def test_stale_compiler_snapshot_is_rejected_before_queueing(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "stale-compiler"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Stale compiler")
+    prepared = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    committed = daemon.commit_rule_deployment(prepared["token"])
+    changed = source.replace("Stale compiler", "Stale compiler changed")
+    cases = [{"id": "safe", "input": "git push", "expected": "OK"}]
+
+    validation = daemon.queue_validation({
+        "validation_id": "stale-validation",
         "rule_id": rule_id,
         "project_root": str(project),
         "source": changed,
         "compiler": "future-ft-v2",
+        "compiler_snapshot": "superseded-snapshot",
+        "validation_cases": cases,
     })
-    assert duplicate["idempotent"]
-    assert duplicate["queue"]["id"] == queue_id
-    assert queued["queue"]["status"] == "waiting_for_build"
-    assert DeploymentQueueStore(
-        tmp_path / "deployment-queue.json"
-    ).get(queue_id)["status"] == "waiting_for_build"
-    reopened = daemon.dispatch({
-        "type": "rule_get",
+    deployment = daemon.queue_deployment({
+        "deployment_id": "stale-deployment",
         "rule_id": rule_id,
         "project_root": str(project),
-    })["rule"]
-    assert reopened["source"] == changed
-    assert reopened["deployment"]["draft_coverage"]["compiler"] == (
-        "future-ft-v2")
+        "source": changed,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "superseded-snapshot",
+        "validation_cases": cases,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "expected_active_hash": committed["active"]["source_hash"],
+    })
 
-    daemon._run_finetune(rule_id, started["job"]["id"])
-    daemon._run_queued_deployment(queue_id)
-    finished = daemon.deployment_queue_status(rule_id)["queue"]
-
-    assert finished["status"] == "succeeded"
-    assert finished["result"]["active"]["compiler"] == "future-ft-v2"
-    assert finished["result"]["active"]["source_hash"] == (
-        revisions.hash_source(changed))
+    assert validation["compiler_catalog_stale"]
+    assert deployment["compiler_catalog_stale"]
+    assert daemon.deployment_queue.get("stale-validation") is None
+    assert daemon.deployment_queue.get("stale-deployment") is None
 
 
 def test_queued_deployment_ignores_failed_validation(
@@ -856,6 +1105,7 @@ def test_standard_deployment_uses_persistent_idempotent_queue(
         project_root=str(project),
     )
     committed = daemon.commit_rule_deployment(initial["token"])
+    compiles_before = daemon.runtime.compiles
     changed = source.replace(
         "Decide whether this input should be shown to the user.",
         "Decide whether this queued standard draft should be shown.",
@@ -879,8 +1129,470 @@ def test_standard_deployment_uses_persistent_idempotent_queue(
     finished = daemon.deployment_queue_status(
         rule_id, "standard-intent")["queue"]
     assert finished["status"] == "succeeded"
+    assert daemon.runtime.compiles == compiles_before + 1
     assert finished["result"]["active"]["source_hash"] == (
         revisions.hash_source(changed))
+
+
+def test_coverage_only_queue_applies_requested_projects(
+    monkeypatch, tmp_path
+):
+    first = tmp_path / "coverage-first"
+    second = tmp_path / "coverage-second"
+    first.mkdir()
+    second.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [first, second])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Coverage queue")
+    initial = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(first)]},
+        project_root=str(first),
+    )
+    committed = daemon.commit_rule_deployment(initial["token"])
+    active = committed["active"]
+    queued = daemon.queue_deployment({
+        "deployment_id": "coverage-only",
+        "rule_id": rule_id,
+        "project_root": str(first),
+        "source": source,
+        "compiler": active["compiler"],
+        "compiler_mode": active["compiler_mode"],
+        "compiler_snapshot": active["compiler_snapshot"],
+        "program_id": active["program_id"],
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(second)],
+        },
+        "expected_active_hash": active["source_hash"],
+    })
+
+    daemon._run_queued_deployment(queued["queue"]["id"])
+
+    finished = daemon.deployment_queue_status(
+        rule_id, "coverage-only")["queue"]
+    assert finished["status"] == "succeeded"
+    assert finished["result"]["coverage"]["selected_projects"] == [
+        str(second)]
+    assert not rules_api.is_enabled(rule_id, str(first))
+    assert rules_api.is_enabled(rule_id, str(second))
+
+
+def test_cancelling_building_deployment_cannot_resurrect_worker(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "cancel-deployment"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    monkeypatch.setattr(
+        daemon, "_schedule_queued_deployment", lambda *_args, **_kwargs: None)
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Cancel deployment")
+    initial = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    committed = daemon.commit_rule_deployment(initial["token"])
+    changed = source.replace(
+        "Decide whether this input should be shown to the user.",
+        "Decide whether this cancelled draft should be shown.",
+    )
+    queued = daemon.queue_deployment({
+        "deployment_id": "cancelled-deployment",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": changed,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "expected_active_hash": committed["active"]["source_hash"],
+    })
+    started = threading.Event()
+    release = threading.Event()
+    compile_program = daemon._compile_program_for_snapshot
+
+    def blocked_compile(*args, **kwargs):
+        started.set()
+        assert release.wait(2)
+        return compile_program(*args, **kwargs)
+
+    monkeypatch.setattr(
+        daemon, "_compile_program_for_snapshot", blocked_compile)
+    worker = threading.Thread(
+        target=daemon._run_queued_deployment,
+        args=(queued["queue"]["id"],),
+    )
+    worker.start()
+    assert started.wait(2)
+
+    cancelled = daemon.cancel_queued_deployment(
+        rule_id,
+        "Draft changed.",
+        queued["queue"]["id"],
+    )
+    release.set()
+    worker.join(timeout=2)
+
+    assert cancelled["ok"]
+    assert not worker.is_alive()
+    assert daemon.deployment_queue.get(
+        queued["queue"]["id"])["status"] == "cancelled"
+    current = rules_api.get_rule(rule_id, str(project))
+    assert current["active"]["source_hash"] == committed["active"]["source_hash"]
+
+
+def test_cancelling_building_validation_cannot_run_or_resurrect(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "cancel-validation"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Cancel validation")
+    queued = daemon.queue_validation({
+        "validation_id": "cancelled-validation",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": source,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "validation_cases": [{
+            "id": "safe",
+            "input": "git status",
+            "expected": "OK",
+        }],
+    })
+    started = threading.Event()
+    release = threading.Event()
+    compile_program = daemon._compile_program_for_snapshot
+
+    def blocked_compile(*args, **kwargs):
+        started.set()
+        assert release.wait(2)
+        return compile_program(*args, **kwargs)
+
+    monkeypatch.setattr(
+        daemon, "_compile_program_for_snapshot", blocked_compile)
+    worker = threading.Thread(
+        target=daemon._run_queued_validation,
+        args=(queued["queue"]["id"],),
+    )
+    worker.start()
+    assert started.wait(2)
+
+    cancelled = daemon.cancel_queued_validation(
+        rule_id,
+        "Cases changed.",
+        queued["queue"]["id"],
+    )
+    release.set()
+    worker.join(timeout=2)
+
+    assert cancelled["ok"]
+    assert not worker.is_alive()
+    assert daemon.runtime.runs == 0
+    assert daemon.deployment_queue.get(
+        queued["queue"]["id"])["status"] == "cancelled"
+
+
+def test_late_cancellation_is_scoped_to_original_intent(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "intent-cancellation"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    monkeypatch.setattr(
+        daemon, "_schedule_queued_deployment", lambda *_args, **_kwargs: None)
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Intent cancellation")
+    first = daemon.queue_deployment({
+        "deployment_id": "old-intent",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": source,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "expected_active_hash": "",
+    })
+    changed = source.replace("Intent cancellation", "New intent")
+    second = daemon.queue_deployment({
+        "deployment_id": "new-intent",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": changed,
+        "compiler": "future-ft-v2",
+        "compiler_snapshot": "future-ft-v2-snapshot",
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "expected_active_hash": "",
+    })
+
+    late = daemon.cancel_queued_deployment(
+        rule_id, "Late callback.", first["queue"]["id"])
+
+    assert not late["ok"]
+    assert daemon.deployment_queue.get(
+        second["queue"]["id"])["status"] == "building"
+
+
+def test_compile_rejects_snapshot_change_during_build(
+    monkeypatch, tmp_path
+):
+    daemon = _daemon(monkeypatch, tmp_path, [])
+    snapshots = iter(("snapshot-a", "snapshot-b"))
+    monkeypatch.setattr(daemon.runtime, "compiler_info", lambda _name="": {
+        "name": "moving-compiler",
+        "latest_snapshot": next(snapshots),
+        "compiler_kind": "mapper_lora",
+    })
+
+    result = daemon._compile_program_for_snapshot(
+        "Return OK.",
+        "moving-compiler",
+        "snapshot-a",
+        timeout=None,
+    )
+
+    assert not result["ok"]
+    assert result["compiler_catalog_stale"]
+
+
+def test_queued_deployment_requires_successful_local_warmup(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "warmup-gate"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Warmup gate")
+    initial = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    committed = daemon.commit_rule_deployment(initial["token"])
+    changed = source.replace(
+        "Decide whether this input should be shown to the user.",
+        "Decide whether this warmup-gated input should be shown.",
+    )
+    queued = daemon.queue_deployment({
+        "deployment_id": "warmup-gated",
+        "rule_id": rule_id,
+        "project_root": str(project),
+        "source": changed,
+        "compiler": "future-standard",
+        "compiler_snapshot": "standard-snapshot",
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+        "expected_active_hash": committed["active"]["source_hash"],
+    })
+    monkeypatch.setattr(daemon.runtime, "warm", lambda _program_id: False)
+
+    daemon._run_queued_deployment(queued["queue"]["id"])
+
+    finished = daemon.deployment_queue.get(queued["queue"]["id"])
+    assert finished["status"] == "failed"
+    assert finished["phase"] == "Warmup failed"
+    active = rules_api.get_rule(rule_id, str(project))["active"]
+    assert active["source_hash"] == committed["active"]["source_hash"]
+
+
+def test_finetune_and_direct_validation_reject_stale_snapshots(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "snapshot-gates"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Snapshot gates")
+    started = daemon.start_finetune(
+        rule_id, str(project), "future-ft-v2", source, [])
+    original_info = daemon.runtime.compiler_info
+
+    def changed_info(name=""):
+        value = dict(original_info(name))
+        if name == "future-ft-v2":
+            value["latest_snapshot"] = "newer-snapshot"
+        return value
+
+    monkeypatch.setattr(daemon.runtime, "compiler_info", changed_info)
+    compiles_before = daemon.runtime.compiles
+    daemon._run_finetune(rule_id, started["job"]["id"])
+
+    job = daemon.finetune_status(rule_id, str(project))["job"]
+    assert job["status"] == "failed"
+    assert daemon.runtime.compiles == compiles_before
+
+    validation = daemon.validate_rule_cases(
+        rule_id,
+        str(project),
+        source,
+        [{"id": "case", "input": "git status", "expected": "OK"}],
+        "future-ft-v2",
+        "future-ft-v2-snapshot",
+    )
+
+    assert not validation["ok"]
+    assert validation["compiler_catalog_stale"]
+    assert daemon.runtime.runs == 0
+
+
+def test_concurrent_validation_additions_are_serialized(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "validation-additions"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Concurrent cases")
+    prepared = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    committed = daemon.commit_rule_deployment(prepared["token"])
+    source_path = committed["rule"]["definition"]["source_path"]
+    original_load = rules_api.validation_cases_for_path
+    active_readers = 0
+    max_readers = 0
+    readers_lock = threading.Lock()
+    start = threading.Event()
+
+    def slow_load(path):
+        nonlocal active_readers, max_readers
+        with readers_lock:
+            active_readers += 1
+            max_readers = max(max_readers, active_readers)
+        try:
+            threading.Event().wait(0.03)
+            return original_load(path)
+        finally:
+            with readers_lock:
+                active_readers -= 1
+
+    monkeypatch.setattr(rules_api, "validation_cases_for_path", slow_load)
+    results = []
+
+    def add(input_text):
+        assert start.wait(2)
+        results.append(rules_api.add_validation_case(
+            rule_id, str(project), input_text, "OK"))
+
+    threads = [
+        threading.Thread(target=add, args=("first",)),
+        threading.Thread(target=add, args=("second",)),
+    ]
+    for thread in threads:
+        thread.start()
+    start.set()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(result["ok"] for result in results)
+    assert max_readers == 1
+    assert {
+        case["input"]
+        for case in rules_api.validation_cases_for_path(source_path)
+    } == {"first", "second"}
+
+
+def test_validation_case_save_cannot_be_lost_during_commit(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "validation-commit"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Validation commit")
+    initial = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        project_root=str(project),
+    )
+    committed = daemon.commit_rule_deployment(initial["token"])
+    source_path = committed["rule"]["definition"]["source_path"]
+    old_cases = [{
+        "id": "old",
+        "input": "git status",
+        "expected": "OK",
+    }]
+    newer_cases = [{
+        "id": "new",
+        "input": "rm -rf build",
+        "expected": "WARNING",
+    }]
+    rules_api.save_validation_cases(source_path, old_cases)
+    prepared = _prepare(
+        daemon,
+        rule_id,
+        source,
+        {"mode": "selected", "selected_projects": [str(project)]},
+        source_changed=False,
+        expected_active_hash=committed["active"]["source_hash"],
+        project_root=str(project),
+    )
+    entered_commit = threading.Event()
+    release_commit = threading.Event()
+    original_save = rules_api.save_library_draft
+
+    def blocked_save(*args, **kwargs):
+        entered_commit.set()
+        assert release_commit.wait(2)
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(rules_api, "save_library_draft", blocked_save)
+    commit_result = {}
+    save_result = {}
+
+    def commit():
+        commit_result.update(
+            daemon.commit_rule_deployment(prepared["token"]))
+
+    def save():
+        save_result.update(daemon.dispatch({
+            "type": "save_validation_cases",
+            "rule_id": rule_id,
+            "project_root": str(project),
+            "validation_cases": newer_cases,
+        }))
+
+    commit_thread = threading.Thread(target=commit)
+    commit_thread.start()
+    assert entered_commit.wait(2)
+    save_thread = threading.Thread(target=save)
+    save_thread.start()
+    release_commit.set()
+    commit_thread.join(timeout=2)
+    save_thread.join(timeout=2)
+
+    assert commit_result["ok"]
+    assert save_result["ok"]
+    assert rules_api.validation_cases(rule_id, str(project)) == [{
+        **newer_cases[0],
+        "note": "",
+    }]
 
 
 def test_automatic_deploy_promotes_background_finetune_without_tests(
@@ -941,6 +1653,59 @@ def test_automatic_deploy_promotes_background_finetune_without_tests(
     finished = daemon.deployment_queue.latest_for_rule(
         rule_id, kind="optimization")
     assert finished["status"] == "succeeded"
+
+
+def test_cancelled_optimization_cannot_promote_after_build(
+    monkeypatch, tmp_path
+):
+    project = tmp_path / "cancel-optimization"
+    project.mkdir()
+    daemon = _daemon(monkeypatch, tmp_path, [project])
+    rule_id = new_rule_id()
+    source = rules_api.draft_rule_source(rule_id, "Cancel optimization")
+    prepared = daemon.prepare_rule_deployment({
+        "rule_id": rule_id,
+        "source": source,
+        "project_root": str(project),
+        "source_changed": True,
+        "expected_active_hash": "",
+        "compiler_mode": revisions.AUTOMATIC_COMPILER_MODE,
+        "coverage": {
+            "mode": "selected",
+            "selected_projects": [str(project)],
+        },
+    })
+    committed = daemon.commit_rule_deployment(prepared["token"])
+    queue_id = committed["optimization"]["id"]
+    base_compiler = committed["active"]["compiler"]
+    started = threading.Event()
+    release = threading.Event()
+    compile_program = daemon._compile_program_for_snapshot
+
+    def blocked_compile(*args, **kwargs):
+        started.set()
+        assert release.wait(2)
+        return compile_program(*args, **kwargs)
+
+    monkeypatch.setattr(
+        daemon, "_compile_program_for_snapshot", blocked_compile)
+    worker = threading.Thread(
+        target=daemon._run_optimization, args=(queue_id,))
+    worker.start()
+    assert started.wait(2)
+    cancelled = daemon.deployment_queue.cancel(
+        queue_id,
+        "Automatic optimization disabled.",
+        expected_statuses=CANCELLABLE_DEPLOYMENT_STATUSES,
+    )
+    release.set()
+    worker.join(timeout=2)
+
+    assert cancelled["status"] == "cancelled"
+    assert not worker.is_alive()
+    active = rules_api.get_rule(rule_id, str(project))["active"]
+    assert active["compiler"] == base_compiler
+    assert daemon.deployment_queue.get(queue_id)["status"] == "cancelled"
 
 
 def test_explicit_compiler_deploy_does_not_schedule_optimization(

@@ -400,7 +400,7 @@ class PersistentPopoverRenderer:
                 True,
             ),
             (
-                "Open Project in Cursor",
+                "Open Project in Codex",
                 lambda path=project_root:
                 self.controller.open_project_path(path),
                 True,
@@ -858,8 +858,8 @@ class PersistentPopoverRenderer:
             for project in self.snapshot.projects
         ] or [{
             "type": "empty",
-            "title": "No Cursor projects found",
-            "message": "Run rap init --scan in a Cursor project.",
+            "title": "No Codex projects found",
+            "message": "Run rap init --scan in a Codex project.",
         }]
 
     @staticmethod
@@ -1147,7 +1147,7 @@ class PersistentPopoverRenderer:
                 str(value.get("message", "Agent needs a reply")),
                 (38, 27, 370, 34), size=10.5, lines=2))
             cell.addSubview_(self._button(
-                "Open Cursor", (270, 4, 100, 26),
+                "Open Codex", (270, 4, 100, 26),
                 lambda _sender, item=value:
                 self.controller.open_attention_project(item)))
             complete = self._button(

@@ -3,7 +3,7 @@ project's existing prose rules into Python rule drafts.
 
 Conversion is intentionally conservative: it produces a *draft* ``.py`` rule
 (left disabled) whose ``SPEC`` embeds the original prose and a SATISFIED/VIOLATED
-contract. The user (or the Cursor agent, per AGENTS.md) then refines the spec and
+contract. The user (or Codex, per AGENTS.md) then refines the spec and
 examples, runs ``rap rules test``, and enables it.
 """
 
@@ -17,6 +17,31 @@ from . import config
 from .core.rule import new_rule_id
 
 BUILTIN_DIR = Path(__file__).parent / "builtin_rules"
+
+# Old Cursor trigger -> (Codex trigger, old default pointer, Codex override).
+# An empty Codex override means to use that trigger's new documented default.
+LEGACY_TRIGGER_MIGRATIONS = {
+    "afterAgentResponse": ("Stop", "/text", ""),
+    "afterAgentThought": ("Stop", "/text", ""),
+    "beforeSubmitPrompt": ("UserPromptSubmit", "/prompt", ""),
+    "preToolUse": ("PreToolUse", "/tool_name", ""),
+    "postToolUse": ("PostToolUse", "/tool_output", ""),
+    "postToolUseFailure": ("PostToolUse", "/error_message", ""),
+    "beforeShellExecution": ("PreToolUse", "/command", ""),
+    "afterShellExecution": ("PreToolUse", "/command", ""),
+    "afterFileEdit": ("PostToolUse", "/file_path", "/tool_input"),
+    "beforeReadFile": ("PreToolUse", "/file_path", ""),
+    "beforeMCPExecution": ("PreToolUse", "/tool_name", ""),
+    "afterMCPExecution": ("PostToolUse", "/result_json", ""),
+    "subagentStart": ("SubagentStart", "/task", ""),
+    "subagentStop": ("SubagentStop", "/summary", ""),
+    "preCompact": ("PreCompact", "/trigger", ""),
+    "sessionStart": ("SessionStart", "/composer_mode", ""),
+    "sessionEnd": ("SessionEnd", "/final_status", ""),
+    "stop": ("Stop", "/status", ""),
+    "beforeTabFileRead": ("PreToolUse", "/file_path", ""),
+    "afterTabFileEdit": ("PostToolUse", "/file_path", "/tool_input"),
+}
 
 
 def builtin_rules() -> list[Path]:
@@ -61,6 +86,97 @@ def rules_dir_for(scope: str, project_root: str | None) -> Path:
     if scope == "global":
         return config.global_rules_dir()
     return config.project_rules_dir(project_root or Path.cwd())
+
+
+def _copy_missing_tree(source: Path, destination: Path) -> int:
+    if not source.exists():
+        return 0
+    copied = 0
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            continue
+        relative = path.relative_to(source)
+        target = destination / relative
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif path.is_file() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            copied += 1
+    return copied
+
+
+def _migrate_rule_triggers(directory: Path) -> int:
+    from . import rules_api
+
+    migrated = 0
+    for path in directory.glob("*/rule.py") if directory.exists() else ():
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        projection = rules_api.source_projection(source)
+        old_trigger = str(projection.get("trigger", ""))
+        mapping = LEGACY_TRIGGER_MIGRATIONS.get(old_trigger)
+        if not projection.get("ok") or mapping is None:
+            continue
+        new_trigger, old_default_pointer, new_default_override = mapping
+        pointer = str(projection.get("input_pointer", ""))
+        new_pointer = (
+            new_default_override
+            if not pointer or pointer == old_default_pointer
+            else pointer
+        )
+        ok, updated, _error = rules_api.patch_source_projection(
+            source,
+            trigger=new_trigger,
+            input_pointer=new_pointer,
+            function_source=str(projection.get("function_source", "")),
+        )
+        if not ok or updated == source:
+            continue
+        path.write_text(updated, encoding="utf-8")
+        migrated += 1
+    return migrated
+
+
+def migrate_legacy_cursor_state(
+    scope: str,
+    project_root: str | None,
+) -> list[str]:
+    """Copy missing pre-Codex RAP state and translate old trigger metadata.
+
+    The legacy tree is deliberately retained as a rollback copy. Existing Codex
+    files always win, so rerunning ``rap init`` cannot overwrite newer work.
+    """
+    notes: list[str] = []
+    scopes = ["global"]
+    if scope == "project":
+        scopes.append("project")
+    for current_scope in scopes:
+        if current_scope == "global":
+            source = config.legacy_rules_dir("global")
+            destination = config.global_rules_dir()
+        else:
+            source = config.legacy_project_state_dir(project_root or Path.cwd())
+            destination = Path(project_root or Path.cwd()) / ".codex" / config.APP_NAME
+        copied = _copy_missing_tree(source, destination)
+        if copied:
+            notes.append(
+                f"copied {copied} legacy file{'s' if copied != 1 else ''} "
+                f"from {source}"
+            )
+        rules_directory = (
+            destination if current_scope == "global"
+            else destination / "rules"
+        )
+        migrated = _migrate_rule_triggers(rules_directory)
+        if migrated:
+            notes.append(
+                f"updated {migrated} legacy rule trigger"
+                f"{'s' if migrated != 1 else ''} for Codex"
+            )
+    return notes
 
 
 def install_builtins(scope: str, project_root: str | None, overwrite: bool = False) -> list[str]:
@@ -126,7 +242,7 @@ def add_builtin(
 # --- discover existing prose rules -----------------------------------------
 
 def discover_prose_rules(project_root: str) -> list[tuple[str, str]]:
-    """Return (name, text) for existing Cursor/agent rule sources."""
+    """Return prose agent instructions that can seed independent rules."""
     root = Path(project_root)
     found: list[tuple[str, str]] = []
     candidates: list[Path] = []
@@ -134,7 +250,7 @@ def discover_prose_rules(project_root: str) -> list[tuple[str, str]]:
     if rules_dir.exists():
         candidates += sorted(rules_dir.glob("*.mdc"))
         candidates += sorted(rules_dir.glob("*.md"))
-    for name in ("AGENTS.md", ".cursorrules"):
+    for name in ("AGENTS.md", "AGENTS.override.md", ".cursorrules"):
         p = root / name
         if p.exists():
             candidates.append(p)
@@ -171,7 +287,7 @@ def draft_rule_py(name: str, prose: str) -> tuple[str, str]:
             "Return OK when the rule was not violated.\n"
             "Return WARNING when the rule was violated."
         ),
-        trigger="afterAgentResponse",
+        trigger="Stop",
     )
     return f"{rule_id}/rule.py", src
 

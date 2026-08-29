@@ -191,7 +191,7 @@ def test_development_reset_removes_db_ledgers_and_audits(monkeypatch, tmp_path):
     ledgers = state / "ledgers"
     ledgers.mkdir()
     (ledgers / "conversation.jsonl").write_text("{}\n")
-    log = project / ".cursor/rules-as-programs/log"
+    log = project / ".codex/rules-as-programs/log"
     log.mkdir(parents=True)
     (log / "audit.jsonl").write_text("{}\n")
     (log / "evaluations.jsonl").write_text("{}\n")

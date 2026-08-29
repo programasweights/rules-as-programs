@@ -6,7 +6,7 @@ A rule is ONE decorated function per file:
 
     SPEC = '''Decide ...\nReturn ONLY one of: OK, INFO, WARNING, CRITICAL\n...'''
 
-    @rule(trigger="afterShellExecution", spec=SPEC)
+    @rule(trigger="PreToolUse", spec=SPEC)
     def no_rsync(ctx):
         "Do not use rsync."                        # title (from docstring)
         decision = ctx.paw(SPEC)(ctx.input)
@@ -16,8 +16,8 @@ Finding rules return ``ctx.result("OK"|"INFO"|"WARNING"|"CRITICAL")``. ``OK``
 returns ``None``; the other labels create one strict severity result.
 
 The ``ctx`` argument is handed to the function by the engine (the author never
-constructs it). ``trigger=...`` selects one predefined Cursor input field.
-``ctx.input`` is the exact mapped Cursor field. Advanced rules can override the
+constructs it). ``trigger=...`` selects one predefined Codex input field.
+``ctx.input`` is the exact mapped Codex field. Advanced rules can override the
 registry mapping with ``input_pointer=...``. The context also exposes
 ``ctx.paw(spec, compiler=None)`` and project/conversation identifiers.
 

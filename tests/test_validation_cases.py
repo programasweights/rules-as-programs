@@ -4,7 +4,8 @@ from rules_as_programs import config, rules_api
 from rules_as_programs.core.rule import new_rule_id
 
 
-def test_validation_cases_are_separate_from_rule_spec(tmp_path):
+def test_validation_cases_are_separate_from_rule_spec(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     source_path = tmp_path / "rule" / "rule.py"
     source_path.parent.mkdir()
     source_path.write_text("SPEC = 'unchanged'\n")
@@ -42,7 +43,8 @@ def test_validation_cases_are_separate_from_rule_spec(tmp_path):
     assert stored["version"] == 1
 
 
-def test_invalid_validation_cases_are_not_persisted(tmp_path):
+def test_invalid_validation_cases_are_not_persisted(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     source_path = tmp_path / "rule.py"
     source_path.write_text("# rule\n")
     result = rules_api.save_validation_cases(str(source_path), [
@@ -54,6 +56,7 @@ def test_invalid_validation_cases_are_not_persisted(tmp_path):
 
 
 def test_rule_get_includes_saved_validation_cases(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(
         config, "global_rules_dir", lambda: tmp_path / "global-rules")
     rule_id = new_rule_id()

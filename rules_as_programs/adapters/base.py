@@ -1,6 +1,6 @@
 """Adapter interface -- the extension point for supporting new coding agents.
 
-To add a new integration (Claude Code, Codex, ...), implement an ``Adapter``
+To add a new coding-agent integration, implement an ``Adapter``
 that:
 
 1. ``normalize(raw)`` -- turn one raw hook/event payload into zero or more

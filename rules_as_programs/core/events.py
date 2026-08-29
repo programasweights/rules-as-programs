@@ -1,6 +1,6 @@
 """Normalized event schema.
 
-Every coding-agent integration (Cursor today, others later) maps its raw hook
+Every coding-agent integration maps its raw hook
 payloads into these agent-agnostic :class:`Event` objects. The rest of the
 system only ever sees ``Event``s, which is what keeps the core reusable.
 """

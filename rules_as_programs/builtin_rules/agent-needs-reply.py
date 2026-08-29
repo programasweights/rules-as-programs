@@ -20,7 +20,7 @@ Output: OK"""
 @rule(
     id="gn3xtat6av4fy690",
     name="Detect when an agent needs a reply",
-    trigger="afterAgentResponse",
+    trigger="Stop",
     channel="attention",
     spec=SPEC,
 )

@@ -8,6 +8,7 @@ class FakePaw:
     def __init__(self):
         self.calls = 0
         self.compile_calls = 0
+        self.compile_kwargs = []
         self.standard_snapshot = "standard-2027"
         self.active_inferences = 0
         self.max_active_inferences = 0
@@ -38,6 +39,7 @@ class FakePaw:
 
     def compile(self, _spec, **_kwargs):
         self.compile_calls += 1
+        self.compile_kwargs.append(dict(_kwargs))
         return type("Program", (), {"id": f"program-{self.compile_calls}"})()
 
     def function(self, _program_id):
@@ -124,6 +126,10 @@ def test_program_cache_is_scoped_to_compiler_snapshot(
     assert first == "program-1"
     assert second == "program-2"
     assert fake.compile_calls == 2
+    assert all(
+        call["public"] is True and call["ephemeral"] is False
+        for call in fake.compile_kwargs
+    )
     runtime.shutdown()
 
 

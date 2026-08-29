@@ -23,71 +23,38 @@ class TriggerDefinition:
 
 _DEFINITIONS = (
     TriggerDefinition(
-        "afterShellExecution", "shell_exec", "Executed shell command",
-        "/command", "Command", "Shell & tools", 1, True, "monospace"),
+        "Stop", "message", "Assistant response",
+        "/last_assistant_message", "Assistant response", "Agent", 1, True),
     TriggerDefinition(
-        "afterAgentThought", "thought", "Agent thought",
-        "/text", "Agent thought", "Agent", 2, True),
+        "PreToolUse", "tool_use", "Tool invocation",
+        "/tool_input", "Tool input", "Shell & tools", 2, True, "monospace"),
     TriggerDefinition(
-        "preToolUse", "tool_use", "Tool invocation",
-        "/tool_name", "Tool name", "Shell & tools", 3, True, "monospace"),
+        "PostToolUse", "tool_result", "Tool result",
+        "/tool_response", "Tool result", "Shell & tools", 3, True, "monospace"),
     TriggerDefinition(
-        "afterAgentResponse", "message", "Assistant response",
-        "/text", "Assistant response", "Agent", 4, True),
+        "UserPromptSubmit", "user_prompt", "User prompt",
+        "/prompt", "User prompt", "Agent", 4, True),
     TriggerDefinition(
-        "postToolUseFailure", "tool_failure", "Tool failure",
-        "/error_message", "Failure message", "Shell & tools", 5, True),
+        "SubagentStop", "subagent_stop", "Subagent response",
+        "/last_assistant_message", "Subagent response", "Agent", 5, True),
     TriggerDefinition(
-        "afterFileEdit", "file_edit", "Edited file",
-        "/file_path", "File path", "Files", 6, True, "path"),
+        "PermissionRequest", "permission_request", "Approval request",
+        "/tool_name", "Tool name", "Shell & tools", 6, True, "monospace"),
     TriggerDefinition(
-        "beforeShellExecution", "shell_attempt", "Attempted shell command",
-        "/command", "Command", "Shell & tools", 7, typography="monospace"),
+        "SubagentStart", "subagent_start", "Subagent start",
+        "/agent_type", "Subagent type", "Agent", 7),
     TriggerDefinition(
-        "subagentStop", "subagent_stop", "Subagent result",
-        "/summary", "Subagent summary", "Agent", 8),
+        "PreCompact", "pre_compact", "Before context compaction",
+        "/trigger", "Compaction trigger", "Session", 8),
     TriggerDefinition(
-        "subagentStart", "subagent_start", "Subagent task",
-        "/task", "Subagent task", "Agent", 9),
+        "PostCompact", "post_compact", "After context compaction",
+        "/trigger", "Compaction trigger", "Session", 9),
     TriggerDefinition(
-        "beforeReadFile", "file_read", "Read file",
-        "/file_path", "File path", "Files", 10, typography="path"),
+        "SessionStart", "session_start", "Session start",
+        "/source", "Start source", "Session", 10),
     TriggerDefinition(
-        "postToolUse", "tool_result", "Tool result",
-        "/tool_output", "Tool output", "Shell & tools", 11, typography="monospace"),
-    TriggerDefinition(
-        "beforeMCPExecution", "mcp_attempt", "MCP invocation",
-        "/tool_name", "MCP tool name", "MCP", 12,
-        typography="monospace", availability="desktop"),
-    TriggerDefinition(
-        "afterMCPExecution", "mcp_result", "MCP result",
-        "/result_json", "MCP result", "MCP", 13,
-        typography="monospace", availability="desktop"),
-    TriggerDefinition(
-        "stop", "session_stop", "Agent stop",
-        "/status", "Stop status", "Session", 14),
-    TriggerDefinition(
-        "preCompact", "pre_compact", "Context compaction",
-        "/trigger", "Compaction trigger", "Session", 15),
-    TriggerDefinition(
-        "sessionEnd", "session_end", "Session end",
-        "/final_status", "Final status", "Session", 16,
-        availability="desktop"),
-    TriggerDefinition(
-        "sessionStart", "session_start", "Session start",
-        "/composer_mode", "Composer mode", "Session", 17,
-        availability="desktop"),
-    TriggerDefinition(
-        "beforeSubmitPrompt", "user_prompt", "User prompt",
-        "/prompt", "User prompt", "Agent", 18),
-    TriggerDefinition(
-        "afterTabFileEdit", "tab_file_edit", "Tab edited file",
-        "/file_path", "File path", "Tab / IDE", 19,
-        typography="path", availability="ide"),
-    TriggerDefinition(
-        "beforeTabFileRead", "tab_file_read", "Tab read file",
-        "/file_path", "File path", "Tab / IDE", 20,
-        typography="path", availability="ide"),
+        "SessionEnd", "session_end", "Session end",
+        "/reason", "End reason", "Session", 11),
 )
 
 TRIGGERS = {definition.hook: definition for definition in _DEFINITIONS}

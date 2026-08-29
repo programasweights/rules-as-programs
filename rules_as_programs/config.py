@@ -6,8 +6,8 @@ Two ideas live here:
   under a single cache dir, overridable with ``RAP_STATE_DIR``.
 * **Rules** are resolved from two scopes so users can keep constraints global or
   scope them to a single repo:
-    - global:  ``~/.cursor/rules-as-programs/rules/<id>/rule.py``
-    - project: ``<repo>/.cursor/rules-as-programs/rules/<id>/rule.py``
+    - global:  ``~/.codex/rules-as-programs/rules/<id>/rule.py``
+    - project: ``<repo>/.codex/rules-as-programs/rules/<id>/rule.py``
   Project rules override global rules that share the same ``id``.
 """
 
@@ -124,7 +124,7 @@ def revision_dir() -> Path:
 # --- per-project audit log (lives inside the project) ----------------------
 
 def project_log_dir(project_root: str | os.PathLike[str]) -> Path:
-    return Path(project_root) / ".cursor" / APP_NAME / "log"
+    return Path(project_root) / ".codex" / APP_NAME / "log"
 
 
 def project_log_file(project_root: str | os.PathLike[str]) -> Path:
@@ -138,7 +138,7 @@ def project_evaluation_log_file(
 
 
 def project_rules_config_path(project_root: str | os.PathLike[str]) -> Path:
-    return Path(project_root) / ".cursor" / APP_NAME / "config.json"
+    return Path(project_root) / ".codex" / APP_NAME / "config.json"
 
 
 # --- bundled brand assets --------------------------------------------------
@@ -163,23 +163,50 @@ def icon_png() -> Path:
 # --- Rule scopes -----------------------------------------------------------
 
 def global_rules_dir() -> Path:
-    return Path.home() / ".cursor" / APP_NAME / "rules"
+    return codex_home() / APP_NAME / "rules"
 
 
 def project_rules_dir(project_root: str | os.PathLike[str]) -> Path:
-    return Path(project_root) / ".cursor" / APP_NAME / "rules"
+    return Path(project_root) / ".codex" / APP_NAME / "rules"
 
 
-def cursor_hooks_path(scope: str, project_root: str | os.PathLike[str] | None = None) -> Path:
-    """Path to the Cursor ``hooks.json`` for a given scope.
+def codex_home() -> Path:
+    """Codex user configuration root, honoring ``CODEX_HOME``."""
+    configured = os.environ.get("CODEX_HOME")
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
 
-    scope: ``"global"`` -> ``~/.cursor/hooks.json``
-           ``"project"`` -> ``<project_root>/.cursor/hooks.json``
+
+def codex_hooks_path(
+    scope: str,
+    project_root: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Path to the Codex ``hooks.json`` for a given scope.
+
+    scope: ``"global"`` -> ``$CODEX_HOME/hooks.json``
+           ``"project"`` -> ``<project_root>/.codex/hooks.json``
     """
     if scope == "global":
-        return Path.home() / ".cursor" / "hooks.json"
+        return codex_home() / "hooks.json"
     if scope == "project":
         if project_root is None:
             project_root = os.getcwd()
-        return Path(project_root) / ".cursor" / "hooks.json"
+        return Path(project_root) / ".codex" / "hooks.json"
     raise ValueError(f"unknown scope: {scope!r}")
+
+
+def legacy_rules_dir(
+    scope: str,
+    project_root: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Pre-Codex RAP rule directory used only by the migration path."""
+    if scope == "global":
+        return Path.home() / ".cursor" / APP_NAME / "rules"
+    if scope == "project":
+        return Path(project_root or os.getcwd()) / ".cursor" / APP_NAME / "rules"
+    raise ValueError(f"unknown scope: {scope!r}")
+
+
+def legacy_project_state_dir(
+    project_root: str | os.PathLike[str],
+) -> Path:
+    return Path(project_root) / ".cursor" / APP_NAME

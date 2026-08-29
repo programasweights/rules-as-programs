@@ -328,9 +328,9 @@ class RAPFindingInspector(NSObject):
     def _build_header(self) -> None:
         self.project_button = self.button(
             "", lambda _sender: self.open_project(),
-            accessibility="Open project in Cursor")
+            accessibility="Open project in Codex")
         self.project_button.setFont_(NSFont.systemFontOfSize_(10))
-        self.project_button.setToolTip_("Open project in Cursor")
+        self.project_button.setToolTip_("Open project in Codex")
         self.project_button.setTranslatesAutoresizingMaskIntoConstraints_(False)
         self.severity_image = NSImageView.alloc().init()
         self.severity_image.setTranslatesAutoresizingMaskIntoConstraints_(False)
@@ -870,7 +870,7 @@ class RAPFindingInspector(NSObject):
         menu = NSMenu.alloc().initWithTitle_("Finding actions")
         self._menus.append(menu)
         for title, callback in (
-            ("Open Project in Cursor", self.open_project),
+            ("Open Project in Codex", self.open_project),
             ("Evaluation History…", self.show_evaluation_history),
             ("Evaluation Details", self.show_evaluation_details),
             ("Recorded Rule", self.show_recorded_rule),

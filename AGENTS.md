@@ -1,6 +1,6 @@
 # Rules as Programs — setup guide for coding agents
 
-You are helping a user add **Rules as Programs** to their existing Cursor
+You are helping a user add **Rules as Programs** to their existing Codex
 project. Rules as Programs turns each agent rule into an independent Python
 function (PAW-backed for fuzzy judgment) that audits the agent's reasoning and
 actions and reports violations. v1 is **non-blocking** (observability only).
@@ -37,19 +37,22 @@ because the hook and login-autostart entry retain its interpreter path.
 rap init --scan
 ```
 
-This installs the Cursor hook (`.cursor/hooks.json` + `.cursor/hooks/rap-hook.sh`),
-scaffolds the built-in rule programs (`.py`) into `.cursor/rules-as-programs/rules/`,
+This installs the Codex hook (`.codex/hooks.json` + `.codex/hooks/rap-hook.sh`),
+scaffolds the built-in rule programs (`.py`) into `.codex/rules-as-programs/rules/`,
 drafts rule programs from any existing prose rules it finds (`--scan`), and
 launches the daemon + menu-bar item.
 
 - Prefer `rap init --scan` for a project-local setup (recommended).
 - Use `rap init --global --scan` only if the user wants the rules to apply to
-  **all** their projects (writes to `~/.cursor/`).
+  **all** their projects (writes to `$CODEX_HOME`, normally `~/.codex/`).
+- Restart Codex, open `/hooks`, and review and trust the RAP hook definitions.
+  Codex skips new or changed non-managed hooks until their exact hash is trusted.
 
 ## 3. Convert the user's existing rules (do this well)
 
 This is the highest-value step. For each independent rule expressed in
-`.cursor/rules/*.mdc`, `.cursor/rules/*.md`, `AGENTS.md`, or `.cursorrules`,
+`AGENTS.md`, `AGENTS.override.md`, or legacy `.cursor/rules/*.mdc`,
+`.cursor/rules/*.md`, and `.cursorrules` files,
 author a real rule program. `rap init --scan` creates one *disabled* rough draft
 per top-level source document from a short excerpt; it does not split documents
 into rules. Treat those drafts as starting points, create separate programs
@@ -66,15 +69,15 @@ from rules_as_programs import rule
 SPEC = """Decide whether the observed evidence violates this project rule.
 Return ONLY one of: OK, INFO, WARNING, CRITICAL
 
-Input: <exact Cursor trigger field that follows the rule>
+Input: <exact Codex trigger field that follows the rule>
 Output: OK
 
-Input: <exact Cursor trigger field that breaks the rule>
+Input: <exact Codex trigger field that breaks the rule>
 Output: WARNING"""
 
 @rule(id="7km3v9c2xq4t8n1p",
       name="My project rule",
-      trigger="afterAgentResponse",
+      trigger="Stop",
       spec=SPEC)
 def my_rule(ctx):
     "One-line title from the docstring."
@@ -84,7 +87,7 @@ def my_rule(ctx):
 
 For each rule:
 
-1. Choose one Cursor trigger whose predefined field directly contains the
+1. Choose one Codex trigger whose predefined field directly contains the
    observable signal. Basic rules never aggregate events.
 2. Write a tight `SPEC` ending in `Return ONLY one of: ...` with 3-5 `Input:`/
    `Output:` examples containing that exact scalar field. `rap rules test`
@@ -115,14 +118,15 @@ rap rules list
 
 `rap doctor` should show the PAW SDK installed, the daemon running, and the
 project `hooks.json` present. `rap rules list` should list the built-in rules
-plus any you converted. These checks do not prove that Cursor reloaded the
-hook. After reloading Cursor, run one agent turn and inspect the macOS tray's
-project activity or `.cursor/rules-as-programs/log/evaluations.jsonl`.
+plus any you converted. These checks do not prove that Codex trusts the current
+hook hash. After trusting the hooks with `/hooks`, run one agent turn and
+inspect the macOS tray's project activity or
+`.codex/rules-as-programs/log/evaluations.jsonl`.
 
 ## 5. Tell the user what to do next
 
-- **Reload Cursor** (or restart it) so it picks up `.cursor/hooks.json`. Hooks
-  do not activate until Cursor reloads them.
+- **Restart Codex**, open `/hooks`, and trust the RAP hooks. Project-local hooks
+  also require the project `.codex/` layer to be trusted.
 - The detailed interface below is macOS-only. Linux and Windows expose a
   reduced system-tray menu; Windows users must start it with `rap tray`.
 - Findings appear in the **top-right menu-bar item** as a severity-colored
@@ -168,19 +172,19 @@ project activity or `.cursor/rules-as-programs/log/evaluations.jsonl`.
   stdout/stderr and worker tracebacks are retained in
   `~/.cache/rules-as-programs/daemon-stderr.log`.
 - **Rules for Project** is a shareable checklist stored in
-  `.cursor/rules-as-programs/config.json`; personal hidden-finding choices stay
+  `.codex/rules-as-programs/config.json`; personal hidden-finding choices stay
   local. Every rule row has a labelled **Actions…** menu, and the Rule Editor
   exposes **Delete Rule…**, **Remove Installed Rule…**, or **Use Shared
   Version…** as appropriate. Removal moves orphaned open findings to
   **Reviewed** as **Rule deleted**, while keeping their recorded source and
   audit history.
 - Project-owned sources live at
-  `.cursor/rules-as-programs/rules/<id>/rule.py`; shared/deployed sources live
-  at `~/.cursor/rules-as-programs/rules/<id>/rule.py`. A project override that
+  `.codex/rules-as-programs/rules/<id>/rule.py`; shared/deployed sources live
+  at `~/.codex/rules-as-programs/rules/<id>/rule.py`. A project override that
   shares a library rule's ID cannot currently Deploy until the source conflict
   is resolved. Project assignment lives in
-  `.cursor/rules-as-programs/config.json`; per-project finding occurrences are
-  at `.cursor/rules-as-programs/log/audit.jsonl`, and all invocation outcomes
+  `.codex/rules-as-programs/config.json`; per-project finding occurrences are
+  at `.codex/rules-as-programs/log/audit.jsonl`, and all invocation outcomes
   are at `evaluations.jsonl` and in Evaluation History.
 - Rule names are mutable display metadata. Rename operations must not stale
   findings, invalidate compiler candidates, or require new PAW programs;
@@ -196,8 +200,11 @@ project activity or `.cursor/rules-as-programs/log/evaluations.jsonl`.
 
 ## Notes
 
-- `rap init` merges valid existing hook JSON and preserves existing rule files.
-  Back up malformed hook configuration because it may be replaced.
+- `rap init` merges valid existing Codex hook JSON and preserves existing rule
+  files. Back up malformed hook configuration because it may be replaced. It
+  copies missing legacy RAP files from `.cursor/` without deleting the legacy
+  tree or overwriting newer `.codex/` files, and translates known Cursor trigger
+  metadata to Codex trigger names.
 - Rules drafted by `--scan` are created **disabled**. Review the fuzzy
   description and project coverage. On macOS, use **Deploy** before relying on
   the rule. On Linux/Windows, test and enable it from the CLI; explain that this
@@ -211,3 +218,16 @@ project activity or `.cursor/rules-as-programs/log/evaluations.jsonl`.
   and project log directories. Pause stops evaluation, not collection. Do not
   commit secrets, and verify project ignore rules before sharing generated
   logs or test cases.
+
+## Repository development rules
+
+- Every `programasweights.compile(...)` call must explicitly use `public=True`
+  and `ephemeral=False`; compiled programs are public and persistent.
+- Keep local PAW/llama.cpp function creation, warmup, and inference serialized
+  through the one supervised process-global subprocess. Compilation may use a
+  separate executor.
+- When the user requests a Git commit, preserve the repository's existing user
+  author and committer identity. Do not add AI attribution or co-author trailers.
+- After implementing the requested scope, run proportionate tests and one
+  focused review pass. Complete requested commit and push steps once verification
+  succeeds rather than expanding into repeated speculative review loops.
