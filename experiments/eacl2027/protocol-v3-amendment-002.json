@@ -1,0 +1,19 @@
+{
+  "amendment_id": "protocol-v3-amendment-002",
+  "created_utc": "2026-08-30T15:33:31Z",
+  "status": "frozen before any external-dataset matched-base prediction and before inspecting any controlled-dataset matched-base output",
+  "protocol_commit": "6f9f7ae550d48931d934ee1166e97b1c7f471288",
+  "affected_study": "matched_backbone",
+  "correction": {
+    "field": "studies.matched_backbone.datasets[1].sha256",
+    "frozen_value": "11127228f6a79adf665bc1fe2bf9b753bd5d99600b0edb7f91e9220e2b6d0ae",
+    "correct_value": "111272280d28c8a7c5e42d8d7b202250ab115e32684715ebba06f1bdf2b6d0ae",
+    "reason": "The frozen protocol copied the external dataset digest incorrectly. The corrected value is the SHA-256 of the already tracked dataset bytes and is also recorded by the pre-existing tracked external-manifest.json and every pre-existing frozen external-run manifest.",
+    "data_or_outcome_change": false
+  },
+  "unchanged": [
+    "external dataset bytes, order, and 160-case count",
+    "all model, prompt, decoding, parsing, repeat, contrast, and claim-gate choices",
+    "all controlled-dataset settings and outputs"
+  ]
+}
