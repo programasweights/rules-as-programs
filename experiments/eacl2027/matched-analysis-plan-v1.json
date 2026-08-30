@@ -1,0 +1,47 @@
+{
+  "analysis_id": "eacl2027-matched-backbone-v1",
+  "created_utc": "2026-08-30T15:34:25Z",
+  "status": "frozen without inspecting any matched-base prediction or label outcome",
+  "protocol_commit": "6f9f7ae550d48931d934ee1166e97b1c7f471288",
+  "amendments": [
+    "protocol-v3-amendment-001",
+    "protocol-v3-amendment-002"
+  ],
+  "datasets": {
+    "controlled": {
+      "sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561",
+      "cases": 192
+    },
+    "external": {
+      "sha256": "111272280d28c8a7c5e42d8d7b202250ab115e32684715ebba06f1bdf2b6d0ae",
+      "cases": 160
+    }
+  },
+  "completed_run_rule": "The two fresh-process matched-base runs must have identical ordered case IDs, raw output bytes, strict predictions, and within-run repeat hashes. If they differ, retain and report both but do not evaluate the compilation-gain claim gate.",
+  "systems": [
+    "direct matched Qwen3-0.6B",
+    "PAW standard mapper",
+    "PAW finetuned compiler"
+  ],
+  "primary_metric": "mean across rules of positive-class F1",
+  "secondary_metrics": [
+    "full-label exact accuracy",
+    "pooled positive precision",
+    "pooled positive recall",
+    "invalid-output rate",
+    "per-rule positive-class F1 and exact accuracy"
+  ],
+  "contrasts": [
+    "PAW standard minus direct matched Qwen3-0.6B",
+    "PAW finetuned minus direct matched Qwen3-0.6B"
+  ],
+  "uncertainty": {
+    "samples": 5000,
+    "seed": 20270903,
+    "method": "paired hierarchical percentile bootstrap: resample rules with replacement, then complete contrast pairs within each sampled rule, using the identical draws for both systems",
+    "interval": "two-sided 95% percentile interval"
+  },
+  "claim_gate": "For each dataset and named compiler, call the matched compilation gain supported only when the lower 95% bound for the preregistered macro positive-class F1 delta is greater than zero.",
+  "multiplicity": "Report all four dataset-by-compiler intervals. The estimation claim gate is interval-based and no omnibus null-hypothesis declaration is made.",
+  "latency": "Report matched-base latency descriptively only; make no cross-system latency comparison unless hardware, runtime, quantization, call boundary, and batching are identical."
+}
