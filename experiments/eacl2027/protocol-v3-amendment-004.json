@@ -1,0 +1,34 @@
+{
+  "amendment_id": "protocol-v3-amendment-004",
+  "created_utc": "2026-08-30T16:11:00Z",
+  "status": "frozen before any protocol-v3 systems matrix, soak, offline, or fault outcome",
+  "affected_study": "scaling_fault_offline",
+  "reason": "Outcome-blind production-path review found that several originally named fault boundaries cannot be injected faithfully with the public runtime interfaces. The measurable subset is fixed here before execution rather than approximating those boundaries and overstating coverage.",
+  "unchanged_confirmatory_components": {
+    "matrix": "1, 2, 4, and 8 rules by 1, 4, and 8 projects; five fresh daemon/state repetitions; 250 sequential events and 24/64 bursts; round-robin and one-project-hotspot traffic",
+    "accounting": "all expected evaluations including OK outcomes, with exact missing, duplicate, unexpected, failed, provenance, and cross-project checks",
+    "offline": "fixed after-prepare replay with the exact process-level outbound-socket enforcement boundary reported",
+    "soak": "10,000 events, eight rules, eight projects",
+    "partition": "formal watgpu execution must report Slurm partition ALL"
+  },
+  "fault_subset": {
+    "repetitions_each": 20,
+    "measured": [
+      "daemon absent at installed-hook launch followed by respawn and next-event recovery",
+      "idle supervised inference-worker termination followed by next-event recovery",
+      "native inference timeout induced by stopping the idle worker before dispatch",
+      "SQLite exclusive-lock persistence failure beyond the production busy timeout",
+      "malformed JSON and oversized trigger payload",
+      "concurrent duplicate delivery within the active admission window",
+      "stale deployment commit failure while the previous revision remains active"
+    ],
+    "not_measured": [
+      "daemon termination at controlled instants before and after acknowledgement",
+      "worker termination at a verified instruction inside active llama.cpp inference",
+      "a persistence failure other than the declared SQLite lock boundary",
+      "duplicate delivery after window expiry and across daemon restart",
+      "remote compiler transport failure"
+    ]
+  },
+  "claim_limit": "Treat each completed probe only as evidence for its exact injected boundary. Make no comprehensive fault-tolerance or full original-fault-matrix claim."
+}
