@@ -24,7 +24,9 @@ truncation, and zero invalid outputs or runtime errors. It ran as Slurm job
 Transformers 4.57.6.
 
 `operational.json` contains synthetic hook/IPC, unavailable-daemon, and ingress
-deduplication probes, together with its own clean source revision.
+deduplication probes. It was produced from clean source revision `0b21e08` and
+has SHA-256
+`10547ae8ab6a2a2cca00ff653228070711f911eb863429d8d1cdb6032559cb51`.
 `provenance-workflow.json` contains the deterministic
 15-assertion backend provenance trace. `native-inventory.json` contains only
 aggregate counts; raw native event text remains private and Git-ignored.

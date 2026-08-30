@@ -1,0 +1,800 @@
+{
+  "daemon_unavailable": {
+    "daemon_spawn": "intercepted after the attempt was recorded",
+    "daemon_spawn_attempts": 100,
+    "fault": "daemon Unix socket absent",
+    "metric": {
+      "hook_client_main_absent_socket_to_return_ms": {
+        "count": 100,
+        "maximum": 19.647917,
+        "mean": 1.544968,
+        "minimum": 0.476625,
+        "p50_nearest_rank": 0.834209,
+        "p95_nearest_rank": 5.110833,
+        "unit": "ms"
+      }
+    },
+    "outputs_all_empty_json_objects": true,
+    "probe_boundary": "hook_client.main entry to return; interpreter startup and the intercepted daemon process launch are excluded",
+    "repetitions": 100,
+    "return_codes_all_zero": true
+  },
+  "duplicate_admission": {
+    "clock": "injected deterministic logical seconds",
+    "configured_ttl_seconds": 60.0,
+    "probe_boundary": "Daemon ingress admission only; excludes ledger writes, rule evaluation, and user-visible latency",
+    "scenarios": {
+      "concurrent_identical_delivery": {
+        "admitted_per_trial": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "all_trials_admitted_exactly_one": true,
+        "attempts_per_trial": 16,
+        "suppressed_per_trial": [
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15,
+          15
+        ],
+        "trials": 20
+      },
+      "distinct_tool_use_ids": {
+        "admission_outcomes": [
+          true,
+          true
+        ],
+        "admitted": 2,
+        "attempts": 2,
+        "suppressed_as_duplicate": 0
+      },
+      "identical_delivery_after_ttl": {
+        "admission_outcomes": [
+          true,
+          true
+        ],
+        "admitted": 2,
+        "attempts": 2,
+        "suppressed_as_duplicate": 0
+      },
+      "identical_global_and_project_delivery_within_ttl": {
+        "admission_outcomes": [
+          true,
+          false
+        ],
+        "admitted": 1,
+        "attempts": 2,
+        "suppressed_as_duplicate": 1
+      },
+      "stop_dual_projection_from_two_hook_layers": {
+        "admission_outcomes": [
+          true,
+          true,
+          false,
+          false
+        ],
+        "admitted": 2,
+        "attempts": 4,
+        "normalized_kinds": [
+          "message",
+          "session_stop",
+          "message",
+          "session_stop"
+        ],
+        "suppressed_as_duplicate": 2
+      }
+    }
+  },
+  "experiment": "eacl2027-local-operational-v1",
+  "generated_at_utc": "2026-08-30T08:40:28.516815+00:00",
+  "hook_handoff": {
+    "fixture": "synthetic PreToolUse; one normalized event per invocation",
+    "measured_invocations": 100,
+    "metric_definitions": {
+      "mock_request_received_to_ack_sent_ms": "mock timestamp after complete request receipt to timestamp after sending its immediate JSON acknowledgement",
+      "parent_launch_call_to_hook_exit_ms": "perf_counter timestamp immediately before subprocess.run to the timestamp immediately after subprocess.run returned",
+      "parent_launch_call_to_mock_request_received_ms": "perf_counter timestamp immediately before subprocess.run to the mock timestamp after reading the complete newline-delimited request"
+    },
+    "metrics": {
+      "mock_request_received_to_ack_sent_ms": {
+        "count": 100,
+        "maximum": 0.221416,
+        "mean": 0.098371,
+        "minimum": 0.071042,
+        "p50_nearest_rank": 0.092459,
+        "p95_nearest_rank": 0.12575,
+        "unit": "ms"
+      },
+      "parent_launch_call_to_hook_exit_ms": {
+        "count": 100,
+        "maximum": 700.307167,
+        "mean": 255.813423,
+        "minimum": 168.810417,
+        "p50_nearest_rank": 228.98325,
+        "p95_nearest_rank": 394.468042,
+        "unit": "ms"
+      },
+      "parent_launch_call_to_mock_request_received_ms": {
+        "count": 100,
+        "maximum": 648.332292,
+        "mean": 221.966612,
+        "minimum": 148.367125,
+        "p50_nearest_rank": 198.016959,
+        "p95_nearest_rank": 354.173375,
+        "unit": "ms"
+      }
+    },
+    "mock_response": {
+      "accepted": true,
+      "ok": true
+    },
+    "samples": [
+      {
+        "mock_request_received_to_ack_sent_ms": 0.085542,
+        "parent_launch_call_to_hook_exit_ms": 248.239417,
+        "parent_launch_call_to_mock_request_received_ms": 222.22525,
+        "sequence": 0
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.095709,
+        "parent_launch_call_to_hook_exit_ms": 231.176125,
+        "parent_launch_call_to_mock_request_received_ms": 200.404708,
+        "sequence": 1
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.113166,
+        "parent_launch_call_to_hook_exit_ms": 309.344959,
+        "parent_launch_call_to_mock_request_received_ms": 255.432334,
+        "sequence": 2
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.078208,
+        "parent_launch_call_to_hook_exit_ms": 379.0715,
+        "parent_launch_call_to_mock_request_received_ms": 350.518584,
+        "sequence": 3
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.095083,
+        "parent_launch_call_to_hook_exit_ms": 229.193209,
+        "parent_launch_call_to_mock_request_received_ms": 201.937459,
+        "sequence": 4
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.098875,
+        "parent_launch_call_to_hook_exit_ms": 208.612875,
+        "parent_launch_call_to_mock_request_received_ms": 185.530292,
+        "sequence": 5
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.101917,
+        "parent_launch_call_to_hook_exit_ms": 199.092542,
+        "parent_launch_call_to_mock_request_received_ms": 175.591125,
+        "sequence": 6
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.104667,
+        "parent_launch_call_to_hook_exit_ms": 374.563417,
+        "parent_launch_call_to_mock_request_received_ms": 354.173375,
+        "sequence": 7
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.092459,
+        "parent_launch_call_to_hook_exit_ms": 235.372666,
+        "parent_launch_call_to_mock_request_received_ms": 207.455666,
+        "sequence": 8
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.120375,
+        "parent_launch_call_to_hook_exit_ms": 239.095958,
+        "parent_launch_call_to_mock_request_received_ms": 212.299917,
+        "sequence": 9
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.090209,
+        "parent_launch_call_to_hook_exit_ms": 219.531375,
+        "parent_launch_call_to_mock_request_received_ms": 199.542875,
+        "sequence": 10
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.104291,
+        "parent_launch_call_to_hook_exit_ms": 221.172792,
+        "parent_launch_call_to_mock_request_received_ms": 190.364459,
+        "sequence": 11
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.094334,
+        "parent_launch_call_to_hook_exit_ms": 223.873333,
+        "parent_launch_call_to_mock_request_received_ms": 194.820958,
+        "sequence": 12
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.086042,
+        "parent_launch_call_to_hook_exit_ms": 595.696042,
+        "parent_launch_call_to_mock_request_received_ms": 561.678125,
+        "sequence": 13
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.088833,
+        "parent_launch_call_to_hook_exit_ms": 461.143834,
+        "parent_launch_call_to_mock_request_received_ms": 377.578334,
+        "sequence": 14
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.112833,
+        "parent_launch_call_to_hook_exit_ms": 209.184459,
+        "parent_launch_call_to_mock_request_received_ms": 175.922084,
+        "sequence": 15
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.086792,
+        "parent_launch_call_to_hook_exit_ms": 226.688041,
+        "parent_launch_call_to_mock_request_received_ms": 193.504958,
+        "sequence": 16
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.105166,
+        "parent_launch_call_to_hook_exit_ms": 534.288625,
+        "parent_launch_call_to_mock_request_received_ms": 262.439084,
+        "sequence": 17
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.0745,
+        "parent_launch_call_to_hook_exit_ms": 700.307167,
+        "parent_launch_call_to_mock_request_received_ms": 648.332292,
+        "sequence": 18
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.087458,
+        "parent_launch_call_to_hook_exit_ms": 243.210708,
+        "parent_launch_call_to_mock_request_received_ms": 211.770042,
+        "sequence": 19
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.108209,
+        "parent_launch_call_to_hook_exit_ms": 266.75575,
+        "parent_launch_call_to_mock_request_received_ms": 234.061375,
+        "sequence": 20
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.096833,
+        "parent_launch_call_to_hook_exit_ms": 238.484709,
+        "parent_launch_call_to_mock_request_received_ms": 205.789667,
+        "sequence": 21
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.083875,
+        "parent_launch_call_to_hook_exit_ms": 248.003416,
+        "parent_launch_call_to_mock_request_received_ms": 221.491458,
+        "sequence": 22
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.089625,
+        "parent_launch_call_to_hook_exit_ms": 270.280875,
+        "parent_launch_call_to_mock_request_received_ms": 222.065459,
+        "sequence": 23
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.098125,
+        "parent_launch_call_to_hook_exit_ms": 368.190667,
+        "parent_launch_call_to_mock_request_received_ms": 338.697334,
+        "sequence": 24
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.091583,
+        "parent_launch_call_to_hook_exit_ms": 261.091667,
+        "parent_launch_call_to_mock_request_received_ms": 233.501792,
+        "sequence": 25
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.098833,
+        "parent_launch_call_to_hook_exit_ms": 258.47025,
+        "parent_launch_call_to_mock_request_received_ms": 228.848375,
+        "sequence": 26
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.10675,
+        "parent_launch_call_to_hook_exit_ms": 311.541,
+        "parent_launch_call_to_mock_request_received_ms": 278.446458,
+        "sequence": 27
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.09675,
+        "parent_launch_call_to_hook_exit_ms": 305.190791,
+        "parent_launch_call_to_mock_request_received_ms": 235.916875,
+        "sequence": 28
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.105166,
+        "parent_launch_call_to_hook_exit_ms": 228.98325,
+        "parent_launch_call_to_mock_request_received_ms": 204.076792,
+        "sequence": 29
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.12575,
+        "parent_launch_call_to_hook_exit_ms": 212.071417,
+        "parent_launch_call_to_mock_request_received_ms": 187.7175,
+        "sequence": 30
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.083375,
+        "parent_launch_call_to_hook_exit_ms": 230.0085,
+        "parent_launch_call_to_mock_request_received_ms": 188.382042,
+        "sequence": 31
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.111291,
+        "parent_launch_call_to_hook_exit_ms": 238.332166,
+        "parent_launch_call_to_mock_request_received_ms": 216.735375,
+        "sequence": 32
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.09875,
+        "parent_launch_call_to_hook_exit_ms": 227.115625,
+        "parent_launch_call_to_mock_request_received_ms": 195.129084,
+        "sequence": 33
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.088416,
+        "parent_launch_call_to_hook_exit_ms": 251.254167,
+        "parent_launch_call_to_mock_request_received_ms": 208.270084,
+        "sequence": 34
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.085042,
+        "parent_launch_call_to_hook_exit_ms": 308.267,
+        "parent_launch_call_to_mock_request_received_ms": 263.923458,
+        "sequence": 35
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.10125,
+        "parent_launch_call_to_hook_exit_ms": 377.117333,
+        "parent_launch_call_to_mock_request_received_ms": 342.851417,
+        "sequence": 36
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.091208,
+        "parent_launch_call_to_hook_exit_ms": 212.125333,
+        "parent_launch_call_to_mock_request_received_ms": 189.958083,
+        "sequence": 37
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.086042,
+        "parent_launch_call_to_hook_exit_ms": 228.877375,
+        "parent_launch_call_to_mock_request_received_ms": 203.220833,
+        "sequence": 38
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.146917,
+        "parent_launch_call_to_hook_exit_ms": 205.915667,
+        "parent_launch_call_to_mock_request_received_ms": 184.994458,
+        "sequence": 39
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.105042,
+        "parent_launch_call_to_hook_exit_ms": 227.709167,
+        "parent_launch_call_to_mock_request_received_ms": 197.528167,
+        "sequence": 40
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.116792,
+        "parent_launch_call_to_hook_exit_ms": 278.316375,
+        "parent_launch_call_to_mock_request_received_ms": 249.745167,
+        "sequence": 41
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.197208,
+        "parent_launch_call_to_hook_exit_ms": 244.477375,
+        "parent_launch_call_to_mock_request_received_ms": 218.702375,
+        "sequence": 42
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.083625,
+        "parent_launch_call_to_hook_exit_ms": 226.378875,
+        "parent_launch_call_to_mock_request_received_ms": 198.979917,
+        "sequence": 43
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.092459,
+        "parent_launch_call_to_hook_exit_ms": 227.109208,
+        "parent_launch_call_to_mock_request_received_ms": 196.552166,
+        "sequence": 44
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.087166,
+        "parent_launch_call_to_hook_exit_ms": 205.42525,
+        "parent_launch_call_to_mock_request_received_ms": 184.366084,
+        "sequence": 45
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.117042,
+        "parent_launch_call_to_hook_exit_ms": 239.727875,
+        "parent_launch_call_to_mock_request_received_ms": 216.981416,
+        "sequence": 46
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.080375,
+        "parent_launch_call_to_hook_exit_ms": 229.2255,
+        "parent_launch_call_to_mock_request_received_ms": 205.274541,
+        "sequence": 47
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.092,
+        "parent_launch_call_to_hook_exit_ms": 178.965083,
+        "parent_launch_call_to_mock_request_received_ms": 158.940625,
+        "sequence": 48
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.112125,
+        "parent_launch_call_to_hook_exit_ms": 200.542625,
+        "parent_launch_call_to_mock_request_received_ms": 167.375417,
+        "sequence": 49
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.112375,
+        "parent_launch_call_to_hook_exit_ms": 256.745584,
+        "parent_launch_call_to_mock_request_received_ms": 230.7,
+        "sequence": 50
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.087,
+        "parent_launch_call_to_hook_exit_ms": 199.355458,
+        "parent_launch_call_to_mock_request_received_ms": 181.118583,
+        "sequence": 51
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.084917,
+        "parent_launch_call_to_hook_exit_ms": 185.164875,
+        "parent_launch_call_to_mock_request_received_ms": 167.320916,
+        "sequence": 52
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.116417,
+        "parent_launch_call_to_hook_exit_ms": 170.97925,
+        "parent_launch_call_to_mock_request_received_ms": 153.056292,
+        "sequence": 53
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.086625,
+        "parent_launch_call_to_hook_exit_ms": 178.844166,
+        "parent_launch_call_to_mock_request_received_ms": 160.561916,
+        "sequence": 54
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.078541,
+        "parent_launch_call_to_hook_exit_ms": 195.513458,
+        "parent_launch_call_to_mock_request_received_ms": 175.22275,
+        "sequence": 55
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.093042,
+        "parent_launch_call_to_hook_exit_ms": 191.780375,
+        "parent_launch_call_to_mock_request_received_ms": 170.769,
+        "sequence": 56
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.101333,
+        "parent_launch_call_to_hook_exit_ms": 206.753416,
+        "parent_launch_call_to_mock_request_received_ms": 184.257583,
+        "sequence": 57
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.084959,
+        "parent_launch_call_to_hook_exit_ms": 271.16575,
+        "parent_launch_call_to_mock_request_received_ms": 232.587083,
+        "sequence": 58
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.100333,
+        "parent_launch_call_to_hook_exit_ms": 280.156791,
+        "parent_launch_call_to_mock_request_received_ms": 239.433083,
+        "sequence": 59
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.082875,
+        "parent_launch_call_to_hook_exit_ms": 209.021542,
+        "parent_launch_call_to_mock_request_received_ms": 188.33975,
+        "sequence": 60
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.09275,
+        "parent_launch_call_to_hook_exit_ms": 277.076959,
+        "parent_launch_call_to_mock_request_received_ms": 234.447875,
+        "sequence": 61
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.092917,
+        "parent_launch_call_to_hook_exit_ms": 273.449333,
+        "parent_launch_call_to_mock_request_received_ms": 247.304333,
+        "sequence": 62
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.097,
+        "parent_launch_call_to_hook_exit_ms": 209.816333,
+        "parent_launch_call_to_mock_request_received_ms": 187.778792,
+        "sequence": 63
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.090666,
+        "parent_launch_call_to_hook_exit_ms": 236.788708,
+        "parent_launch_call_to_mock_request_received_ms": 202.161417,
+        "sequence": 64
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.074833,
+        "parent_launch_call_to_hook_exit_ms": 220.981417,
+        "parent_launch_call_to_mock_request_received_ms": 198.016959,
+        "sequence": 65
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.079584,
+        "parent_launch_call_to_hook_exit_ms": 302.336708,
+        "parent_launch_call_to_mock_request_received_ms": 274.068208,
+        "sequence": 66
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.1,
+        "parent_launch_call_to_hook_exit_ms": 227.884209,
+        "parent_launch_call_to_mock_request_received_ms": 195.046709,
+        "sequence": 67
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.085625,
+        "parent_launch_call_to_hook_exit_ms": 287.714708,
+        "parent_launch_call_to_mock_request_received_ms": 252.700375,
+        "sequence": 68
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.210917,
+        "parent_launch_call_to_hook_exit_ms": 210.096584,
+        "parent_launch_call_to_mock_request_received_ms": 187.07775,
+        "sequence": 69
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.079292,
+        "parent_launch_call_to_hook_exit_ms": 201.081875,
+        "parent_launch_call_to_mock_request_received_ms": 178.997083,
+        "sequence": 70
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.081875,
+        "parent_launch_call_to_hook_exit_ms": 193.840167,
+        "parent_launch_call_to_mock_request_received_ms": 173.3715,
+        "sequence": 71
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.087875,
+        "parent_launch_call_to_hook_exit_ms": 177.265792,
+        "parent_launch_call_to_mock_request_received_ms": 157.563625,
+        "sequence": 72
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.085916,
+        "parent_launch_call_to_hook_exit_ms": 185.79575,
+        "parent_launch_call_to_mock_request_received_ms": 164.999167,
+        "sequence": 73
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.08825,
+        "parent_launch_call_to_hook_exit_ms": 187.829833,
+        "parent_launch_call_to_mock_request_received_ms": 165.496292,
+        "sequence": 74
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.221416,
+        "parent_launch_call_to_hook_exit_ms": 191.063458,
+        "parent_launch_call_to_mock_request_received_ms": 171.493125,
+        "sequence": 75
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.076792,
+        "parent_launch_call_to_hook_exit_ms": 207.15025,
+        "parent_launch_call_to_mock_request_received_ms": 187.334583,
+        "sequence": 76
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.095417,
+        "parent_launch_call_to_hook_exit_ms": 199.32825,
+        "parent_launch_call_to_mock_request_received_ms": 179.879125,
+        "sequence": 77
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.087292,
+        "parent_launch_call_to_hook_exit_ms": 266.411417,
+        "parent_launch_call_to_mock_request_received_ms": 193.205667,
+        "sequence": 78
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.079959,
+        "parent_launch_call_to_hook_exit_ms": 386.372625,
+        "parent_launch_call_to_mock_request_received_ms": 357.753666,
+        "sequence": 79
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.149542,
+        "parent_launch_call_to_hook_exit_ms": 258.344917,
+        "parent_launch_call_to_mock_request_received_ms": 226.965708,
+        "sequence": 80
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.079459,
+        "parent_launch_call_to_hook_exit_ms": 231.292792,
+        "parent_launch_call_to_mock_request_received_ms": 192.3285,
+        "sequence": 81
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.08325,
+        "parent_launch_call_to_hook_exit_ms": 349.54,
+        "parent_launch_call_to_mock_request_received_ms": 322.467,
+        "sequence": 82
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.096791,
+        "parent_launch_call_to_hook_exit_ms": 229.325334,
+        "parent_launch_call_to_mock_request_received_ms": 200.899584,
+        "sequence": 83
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.089791,
+        "parent_launch_call_to_hook_exit_ms": 212.853458,
+        "parent_launch_call_to_mock_request_received_ms": 187.899625,
+        "sequence": 84
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.121042,
+        "parent_launch_call_to_hook_exit_ms": 194.938833,
+        "parent_launch_call_to_mock_request_received_ms": 173.442125,
+        "sequence": 85
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.093083,
+        "parent_launch_call_to_hook_exit_ms": 226.758667,
+        "parent_launch_call_to_mock_request_received_ms": 191.84875,
+        "sequence": 86
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.078625,
+        "parent_launch_call_to_hook_exit_ms": 186.070583,
+        "parent_launch_call_to_mock_request_received_ms": 163.452166,
+        "sequence": 87
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.097833,
+        "parent_launch_call_to_hook_exit_ms": 184.460042,
+        "parent_launch_call_to_mock_request_received_ms": 163.940584,
+        "sequence": 88
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.092333,
+        "parent_launch_call_to_hook_exit_ms": 189.104375,
+        "parent_launch_call_to_mock_request_received_ms": 163.878625,
+        "sequence": 89
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.096125,
+        "parent_launch_call_to_hook_exit_ms": 227.213625,
+        "parent_launch_call_to_mock_request_received_ms": 201.947042,
+        "sequence": 90
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.094208,
+        "parent_launch_call_to_hook_exit_ms": 229.810625,
+        "parent_launch_call_to_mock_request_received_ms": 197.879125,
+        "sequence": 91
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.072958,
+        "parent_launch_call_to_hook_exit_ms": 168.810417,
+        "parent_launch_call_to_mock_request_received_ms": 148.367125,
+        "sequence": 92
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.088083,
+        "parent_launch_call_to_hook_exit_ms": 394.468042,
+        "parent_launch_call_to_mock_request_received_ms": 170.844334,
+        "sequence": 93
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.095667,
+        "parent_launch_call_to_hook_exit_ms": 423.339375,
+        "parent_launch_call_to_mock_request_received_ms": 392.304,
+        "sequence": 94
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.071042,
+        "parent_launch_call_to_hook_exit_ms": 201.40025,
+        "parent_launch_call_to_mock_request_received_ms": 179.522417,
+        "sequence": 95
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.122,
+        "parent_launch_call_to_hook_exit_ms": 211.288708,
+        "parent_launch_call_to_mock_request_received_ms": 182.055875,
+        "sequence": 96
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.091417,
+        "parent_launch_call_to_hook_exit_ms": 207.59725,
+        "parent_launch_call_to_mock_request_received_ms": 187.555875,
+        "sequence": 97
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.106417,
+        "parent_launch_call_to_hook_exit_ms": 362.437375,
+        "parent_launch_call_to_mock_request_received_ms": 325.188208,
+        "sequence": 98
+      },
+      {
+        "mock_request_received_to_ack_sent_ms": 0.086583,
+        "parent_launch_call_to_hook_exit_ms": 309.70925,
+        "parent_launch_call_to_mock_request_received_ms": 271.765625,
+        "sequence": 99
+      }
+    ],
+    "transport": "newline-delimited JSON over an isolated Unix socket",
+    "validated_mock_requests": 110,
+    "warmup_invocations_excluded": 10
+  },
+  "measurement_scope": {
+    "daemon_unavailable": "In-process hook_client.main absent-socket fail-open path; interpreter and daemon-startup time excluded",
+    "duplicate_admission": "Deterministic daemon admission decisions only; no PAW inference",
+    "hook_handoff": "Parent timestamp immediately before hook subprocess launch through complete request receipt by an immediate-ack local Unix-socket mock; not Codex turn latency",
+    "user_visible_latency_measured": false
+  },
+  "provenance": {
+    "data": "synthetic fixtures only; temporary RAP_STATE_DIR removed",
+    "git": {
+      "commit": "0b21e08a7da8dd555ea6a0f70bd363f27c92e8e7",
+      "dirty": false,
+      "scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "machine": "arm64",
+    "packages": {
+      "programasweights": "0.4.2",
+      "rules-as-programs": "0.1.0"
+    },
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.12.10 | packaged by conda-forge | (main, Apr 10 2025, 22:19:24) [Clang 18.1.8 ]",
+    "python_executable_basename": "python",
+    "script": "experiments/eacl2027/run_operational.py",
+    "script_sha256": "0c59f948fb07e3f25bc35d2a1776a5f1992eced8dff33b7be710a418ea291dee"
+  },
+  "schema_version": 1
+}
