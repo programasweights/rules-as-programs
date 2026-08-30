@@ -1,0 +1,36 @@
+{
+  "amendment_id": "protocol-v3-amendment-001",
+  "created_utc": "2026-08-30T15:30:10Z",
+  "status": "frozen before the replacement attempt and before any matched-base prediction was produced",
+  "protocol_commit": "6f9f7ae550d48931d934ee1166e97b1c7f471288",
+  "harness_commit": "e08cddcc0e1b383f7f67ba9d46670f56f87453af",
+  "affected_study": "matched_backbone",
+  "failed_attempt": {
+    "attempt_id": "matched-base-controlled-run1-sandboxed",
+    "dataset": "experiments/eacl2027/data/public/controlled.jsonl",
+    "planned_output": "experiments/eacl2027/outputs/frozen/v3/matched-base-controlled-run1.jsonl",
+    "command": "python experiments/eacl2027/run_matched_base_judge.py --dataset experiments/eacl2027/data/public/controlled.jsonl --output experiments/eacl2027/outputs/frozen/v3/matched-base-controlled-run1.jsonl --max-new-tokens 8 --repeat-count 2 --n-gpu-layers 0 --n-threads 4 --seed 0",
+    "exit_code": 1,
+    "failure_stage": "llama.cpp context construction, before prompt evaluation",
+    "error": "ValueError: Failed to create llama_context",
+    "independent_diagnosis": "A verbose model-construction probe reported that the sandbox could not create a Metal command queue and therefore could not initialize the llama.cpp backend.",
+    "predictions_produced": 0,
+    "output_file_created": false
+  },
+  "replacement_rule": {
+    "authorization": "Protocol v3 permits a complete-cell rerun after an infrastructure failure identified independently of system output, with both attempts retained.",
+    "change": "Run the identical committed harness and identical command outside the filesystem sandbox so the installed llama.cpp Metal backend can construct its context.",
+    "unchanged": [
+      "dataset bytes and order",
+      "model bytes and SHA-256 pin",
+      "prompt construction",
+      "decoding and parser",
+      "repeat count",
+      "CPU layer setting",
+      "thread count",
+      "seed",
+      "output path"
+    ],
+    "outcome_rule": "Retain the failed attempt in all reporting and do not use it as one of the two completed formal prediction runs."
+  }
+}
