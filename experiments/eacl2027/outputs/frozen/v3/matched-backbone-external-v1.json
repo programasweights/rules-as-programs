@@ -1,0 +1,251 @@
+{
+  "analysis_id": "eacl2027-matched-backbone-v1",
+  "bootstrap": {
+    "method": "paired hierarchical percentile bootstrap: resample rules with replacement, then complete contrast pairs within each sampled rule, using the identical draws for both systems",
+    "samples": 5000,
+    "seed": 20270903
+  },
+  "cases": 160,
+  "contrasts": {
+    "paw_finetuned": {
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.5125,
+          "low": 0.31875
+        },
+        "macro_f1": {
+          "high": 0.7527601109223594,
+          "low": 0.3728276677483402
+        }
+      },
+      "delta": {
+        "exact_accuracy": 0.42499999999999993,
+        "macro_f1": 0.5569823773287831
+      },
+      "macro_f1_gain_gate_supported": true
+    },
+    "paw_standard": {
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.4,
+          "low": 0.23750000000000004
+        },
+        "macro_f1": {
+          "high": 0.6390801758996713,
+          "low": 0.2781336531440131
+        }
+      },
+      "delta": {
+        "exact_accuracy": 0.31875,
+        "macro_f1": 0.45099646829905926
+      },
+      "macro_f1_gain_gate_supported": true
+    }
+  },
+  "dataset_kind": "external",
+  "dataset_sha256": "111272280d28c8a7c5e42d8d7b202250ab115e32684715ebba06f1bdf2b6d0ae",
+  "fresh_matched_runs_exactly_identical": true,
+  "provenance": {
+    "dataset": {
+      "path": "experiments/eacl2027/data/public/external.jsonl",
+      "sha256": "111272280d28c8a7c5e42d8d7b202250ab115e32684715ebba06f1bdf2b6d0ae"
+    },
+    "matched_run1": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/v3/matched-base-external-run1.jsonl.manifest.json",
+      "manifest_sha256": "c53d8eeff67d60715d07c2447cd5993cb23fb72e147684ca440f8a361039c617",
+      "path": "experiments/eacl2027/outputs/frozen/v3/matched-base-external-run1.jsonl",
+      "sha256": "0bb97d9b91698fa36d59a01b54b63840521f2507584bed0beb299f5c8486fc8a"
+    },
+    "matched_run2": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/v3/matched-base-external-run2.jsonl.manifest.json",
+      "manifest_sha256": "931105393d9e5ec943be4bad8bcbbea0a0b955dccf0b655c3fd9b770c4c79450",
+      "path": "experiments/eacl2027/outputs/frozen/v3/matched-base-external-run2.jsonl",
+      "sha256": "fd1eabe2ffc167de3c8452d7c5cac6d2846ce8dd754160e2e409bf352780dbbf"
+    },
+    "paw_finetuned": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/external-paw-finetuned.jsonl.manifest.json",
+      "manifest_sha256": "2cf8266d87b3c832411c16b5cca8de606ef212d599306226fa0a02df68286469",
+      "path": "experiments/eacl2027/outputs/frozen/external-paw-finetuned.jsonl",
+      "sha256": "8bd307e7fe7de266e7ec154de5bec8fee73918ebf9ca5a9878ad1f55757d2888"
+    },
+    "paw_standard": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/external-paw-standard.jsonl.manifest.json",
+      "manifest_sha256": "d6365810d4ed54ed140a3650cbf5d9ada156390dce1fc7775acc2d3ddc9f099f",
+      "path": "experiments/eacl2027/outputs/frozen/external-paw-standard.jsonl",
+      "sha256": "08824e35c8466096ea1a205d7114128dd74cedb050a55b7b2fa4c4bd4710dedd"
+    }
+  },
+  "systems": {
+    "matched_base": {
+      "exact_accuracy": 0.51875,
+      "invalid_rate": 0.0,
+      "macro_f1": 0.38879692600200766,
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.45,
+          "f1": 0.6206896551724138,
+          "precision": 0.47368421052631576,
+          "recall": 0.9
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 0.6,
+          "f1": 0.4285714285714285,
+          "precision": 0.75,
+          "recall": 0.3
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.55,
+          "f1": 0.5263157894736842,
+          "precision": 0.5555555555555556,
+          "recall": 0.5
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 0.5,
+          "f1": 0.6666666666666666,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 0.5,
+          "f1": 0.28571428571428575,
+          "precision": 0.5,
+          "recall": 0.2
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.45,
+          "f1": 0.15384615384615383,
+          "precision": 0.3333333333333333,
+          "recall": 0.1
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.6,
+          "f1": 0.4285714285714285,
+          "precision": 0.75,
+          "recall": 0.3
+        }
+      },
+      "precision": 0.5238095238095238,
+      "recall": 0.4125
+    },
+    "paw_finetuned": {
+      "exact_accuracy": 0.94375,
+      "invalid_rate": 0.0,
+      "macro_f1": 0.9457793033307907,
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.9,
+          "f1": 0.888888888888889,
+          "precision": 1.0,
+          "recall": 0.8
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.95,
+          "f1": 0.9473684210526316,
+          "precision": 1.0,
+          "recall": 0.9
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.95,
+          "f1": 0.9473684210526316,
+          "precision": 1.0,
+          "recall": 0.9
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.75,
+          "f1": 0.7826086956521738,
+          "precision": 0.6923076923076923,
+          "recall": 0.9
+        }
+      },
+      "precision": 0.9493670886075949,
+      "recall": 0.9375
+    },
+    "paw_standard": {
+      "exact_accuracy": 0.8375,
+      "invalid_rate": 0.0,
+      "macro_f1": 0.8397933943010669,
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.8,
+          "f1": 0.7777777777777777,
+          "precision": 0.875,
+          "recall": 0.7
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8333333333333333,
+          "precision": 0.7142857142857143,
+          "recall": 1.0
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8181818181818182,
+          "precision": 0.75,
+          "recall": 0.9
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 0.85,
+          "f1": 0.8695652173913044,
+          "precision": 0.7692307692307693,
+          "recall": 1.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 0.8,
+          "f1": 0.7777777777777777,
+          "precision": 0.875,
+          "recall": 0.7
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.85,
+          "f1": 0.8235294117647058,
+          "precision": 1.0,
+          "recall": 0.7
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8181818181818182,
+          "precision": 0.75,
+          "recall": 0.9
+        }
+      },
+      "precision": 0.8214285714285714,
+      "recall": 0.8625
+    }
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "analysis_id": "eacl2027-matched-backbone-v1",
+  "bootstrap": {
+    "method": "paired hierarchical percentile bootstrap: resample rules with replacement, then complete contrast pairs within each sampled rule, using the identical draws for both systems",
+    "samples": 5000,
+    "seed": 20270903
+  },
+  "cases": 192,
+  "contrasts": {
+    "paw_finetuned": {
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.5625,
+          "low": 0.35416666666666663
+        },
+        "macro_f1": {
+          "high": 0.4148222181404424,
+          "low": 0.23683036047480135
+        }
+      },
+      "delta": {
+        "exact_accuracy": 0.44791666666666674,
+        "macro_f1": 0.31296592285186087
+      },
+      "macro_f1_gain_gate_supported": true
+    },
+    "paw_standard": {
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.4895833333333333,
+          "low": 0.06770833333333337
+        },
+        "macro_f1": {
+          "high": 0.33982524509303014,
+          "low": -0.03901397705237029
+        }
+      },
+      "delta": {
+        "exact_accuracy": 0.3125,
+        "macro_f1": 0.18288696819307437
+      },
+      "macro_f1_gain_gate_supported": false
+    }
+  },
+  "dataset_kind": "controlled",
+  "dataset_sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561",
+  "fresh_matched_runs_exactly_identical": true,
+  "provenance": {
+    "dataset": {
+      "path": "experiments/eacl2027/data/public/controlled.jsonl",
+      "sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561"
+    },
+    "matched_run1": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/v3/matched-base-controlled-run1.jsonl.manifest.json",
+      "manifest_sha256": "80c6ac8721dd41aa2871a18bf31c6b12218f1e9759c22c52eecb37fe3c290eab",
+      "path": "experiments/eacl2027/outputs/frozen/v3/matched-base-controlled-run1.jsonl",
+      "sha256": "b26b785733203d71689a35d04b62166c61461a80853d40783763313cbff730a5"
+    },
+    "matched_run2": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/v3/matched-base-controlled-run2.jsonl.manifest.json",
+      "manifest_sha256": "e27443f5a908a068f898897123f54db2cb23e392520a075bb87d9d17ce9e693b",
+      "path": "experiments/eacl2027/outputs/frozen/v3/matched-base-controlled-run2.jsonl",
+      "sha256": "61e5aaab7cac8ca96d3873fe0a7e773e561a6166e5b2588ecd7eab546ed3d6a2"
+    },
+    "paw_finetuned": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl.manifest.json",
+      "manifest_sha256": "1fc6c24eb9e494d14848a1c0d569683bbe43c273463c0659bb873b400047fbf6",
+      "path": "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl",
+      "sha256": "249c427ac65d531f2db390a2c1f957fdf2b7df15e49b15cf776eab582d4d24f2"
+    },
+    "paw_standard": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/paw-standard.jsonl.manifest.json",
+      "manifest_sha256": "3773e2cb57bec19e10b1b0567b6eb60f769b4fa7003a4371a94b68a31db746f6",
+      "path": "experiments/eacl2027/outputs/frozen/paw-standard.jsonl",
+      "sha256": "b8fadfb7cb7bde7915f602f83dde289031ace2f25960ecc8a569671bd099e663"
+    }
+  },
+  "systems": {
+    "matched_base": {
+      "exact_accuracy": 0.5104166666666666,
+      "invalid_rate": 0.0,
+      "macro_f1": 0.6479953847481021,
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.5625,
+          "f1": 0.6956521739130436,
+          "precision": 0.5333333333333333,
+          "recall": 1.0
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.375,
+          "f1": 0.53125,
+          "precision": 0.425,
+          "recall": 0.7083333333333334
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.5,
+          "f1": 0.6666666666666666,
+          "precision": 0.5,
+          "recall": 1.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 0.6041666666666666,
+          "f1": 0.6984126984126983,
+          "precision": 0.5641025641025641,
+          "recall": 0.9166666666666666
+        }
+      },
+      "precision": 0.5058139534883721,
+      "recall": 0.90625
+    },
+    "paw_finetuned": {
+      "exact_accuracy": 0.9583333333333334,
+      "invalid_rate": 0.0,
+      "macro_f1": 0.960961307599963,
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.9166666666666666,
+          "f1": 0.923076923076923,
+          "precision": 0.8571428571428571,
+          "recall": 1.0
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.9791666666666666,
+          "f1": 0.9795918367346939,
+          "precision": 0.96,
+          "recall": 1.0
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.9375,
+          "f1": 0.9411764705882353,
+          "precision": 0.8888888888888888,
+          "recall": 1.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "precision": 0.9230769230769231,
+      "recall": 1.0
+    },
+    "paw_standard": {
+      "exact_accuracy": 0.8229166666666666,
+      "invalid_rate": 0.0,
+      "macro_f1": 0.8308823529411765,
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.5208333333333334,
+          "f1": 0.5490196078431373,
+          "precision": 0.5185185185185185,
+          "recall": 0.5833333333333334
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.875,
+          "f1": 0.875,
+          "precision": 0.875,
+          "recall": 0.875
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.9375,
+          "f1": 0.9411764705882353,
+          "precision": 0.8888888888888888,
+          "recall": 1.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 0.9583333333333334,
+          "f1": 0.9583333333333334,
+          "precision": 0.9583333333333334,
+          "recall": 0.9583333333333334
+        }
+      },
+      "precision": 0.803921568627451,
+      "recall": 0.8541666666666666
+    }
+  }
+}
