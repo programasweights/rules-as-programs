@@ -1,0 +1,109 @@
+{
+  "cases": 192,
+  "compile_attempts": 3,
+  "compiler": "paw-ft-bs48",
+  "compiler_info": {
+    "78v34vpkzm2jp4rx": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "finetune_lora",
+      "default": false,
+      "description": "Finetuned Standard \u2014 finetunes a per-spec adapter on top of the standard compiler for much higher accuracy (~2-5 min). Same tiny program, runs offline / in-browser at ~100ms.",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Finetuned Standard (0.6B)",
+      "latest_snapshot": "paw-ft-bs48-20260530",
+      "name": "paw-ft-bs48",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "fdg0z9837mz4v0ka": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "finetune_lora",
+      "default": false,
+      "description": "Finetuned Standard \u2014 finetunes a per-spec adapter on top of the standard compiler for much higher accuracy (~2-5 min). Same tiny program, runs offline / in-browser at ~100ms.",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Finetuned Standard (0.6B)",
+      "latest_snapshot": "paw-ft-bs48-20260530",
+      "name": "paw-ft-bs48",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "gn3xtat6av4fy690": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "finetune_lora",
+      "default": false,
+      "description": "Finetuned Standard \u2014 finetunes a per-spec adapter on top of the standard compiler for much higher accuracy (~2-5 min). Same tiny program, runs offline / in-browser at ~100ms.",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Finetuned Standard (0.6B)",
+      "latest_snapshot": "paw-ft-bs48-20260530",
+      "name": "paw-ft-bs48",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "hrmhr6hr13ffv8nb": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "finetune_lora",
+      "default": false,
+      "description": "Finetuned Standard \u2014 finetunes a per-spec adapter on top of the standard compiler for much higher accuracy (~2-5 min). Same tiny program, runs offline / in-browser at ~100ms.",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Finetuned Standard (0.6B)",
+      "latest_snapshot": "paw-ft-bs48-20260530",
+      "name": "paw-ft-bs48",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    }
+  },
+  "dataset": "experiments/eacl2027/data/public/controlled.jsonl",
+  "dataset_sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561",
+  "elapsed_seconds": 64.458909,
+  "git": {
+    "commit": "91dbb03d6d332678e717bf8f0640110ae1f40402",
+    "dirty": false,
+    "scope": [
+      "rules_as_programs",
+      "experiments/eacl2027",
+      "pyproject.toml"
+    ]
+  },
+  "machine": "arm64",
+  "output_sha256": "249c427ac65d531f2db390a2c1f957fdf2b7df15e49b15cf776eab582d4d24f2",
+  "packages": {
+    "llama-cpp-python": "0.3.19",
+    "programasweights": "0.4.2",
+    "rules-as-programs": "0.1.0"
+  },
+  "pid": 52696,
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "program_ids": {
+    "78v34vpkzm2jp4rx": "b619825b8bc23bab4c07",
+    "fdg0z9837mz4v0ka": "3db9a70d1472e94ffc7f",
+    "gn3xtat6av4fy690": "551b62ad8213566b5114",
+    "hrmhr6hr13ffv8nb": "e62ef279de8b51c5505f"
+  },
+  "python": "3.12.10 | packaged by conda-forge | (main, Apr 10 2025, 22:19:24) [Clang 18.1.8 ]",
+  "schema_version": 1,
+  "system": "paw:paw-ft-bs48"
+}

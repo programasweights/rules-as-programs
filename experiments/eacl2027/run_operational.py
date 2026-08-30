@@ -107,6 +107,11 @@ def _package_version(name: str) -> str:
         return "not-installed"
 
 
+def _python_executable_basename(python_executable: str) -> str:
+    """Return useful interpreter provenance without exposing a local path."""
+    return Path(python_executable).name
+
+
 def _synthetic_pre_tool(project: Path, tool_use_id: str) -> dict[str, Any]:
     return {
         "session_id": "synthetic-operational-session",
@@ -651,7 +656,9 @@ def run_operational(
             "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "git": _git_state(),
             "python": sys.version,
-            "python_executable": str(Path(python_executable).resolve()),
+            "python_executable_basename": _python_executable_basename(
+                python_executable
+            ),
             "platform": platform.platform(),
             "machine": platform.machine(),
             "packages": {

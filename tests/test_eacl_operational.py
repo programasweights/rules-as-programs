@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from experiments.eacl2027.run_operational import (
+    _python_executable_basename,
     measure_daemon_unavailable,
     measure_duplicate_admission,
     measure_hook_handoff,
 )
+
+
+def test_python_provenance_does_not_expose_local_path():
+    assert (
+        _python_executable_basename("/Users/researcher/private-env/bin/python3.12")
+        == "python3.12"
+    )
 
 
 def test_hook_handoff_uses_isolated_socket_mock(tmp_path):

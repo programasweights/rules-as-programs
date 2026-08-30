@@ -1,0 +1,31 @@
+{
+  "cases": 192,
+  "compile_attempts": 3,
+  "compiler": "",
+  "compiler_info": {},
+  "dataset": "experiments/eacl2027/data/public/controlled.jsonl",
+  "dataset_sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561",
+  "elapsed_seconds": 0.141714,
+  "git": {
+    "commit": "91dbb03d6d332678e717bf8f0640110ae1f40402",
+    "dirty": false,
+    "scope": [
+      "rules_as_programs",
+      "experiments/eacl2027",
+      "pyproject.toml"
+    ]
+  },
+  "machine": "arm64",
+  "output_sha256": "6577297215dbb2dfac3e120a5460332ff0204e94d8dec9d9f94b7d38b9ac2462",
+  "packages": {
+    "llama-cpp-python": "0.3.19",
+    "programasweights": "0.4.2",
+    "rules-as-programs": "0.1.0"
+  },
+  "pid": 43817,
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "program_ids": {},
+  "python": "3.12.10 | packaged by conda-forge | (main, Apr 10 2025, 22:19:24) [Clang 18.1.8 ]",
+  "schema_version": 1,
+  "system": "lexical"
+}

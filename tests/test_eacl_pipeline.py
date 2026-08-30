@@ -312,7 +312,7 @@ def test_open_judge_refuses_prompt_truncation():
 
 
 def test_existing_benchmark_manifests_match_outputs_when_present():
-    manifests = sorted((EXPERIMENT_ROOT / "outputs").glob("*.jsonl.manifest.json"))
+    manifests = sorted((EXPERIMENT_ROOT / "outputs").rglob("*.jsonl.manifest.json"))
     for manifest_path in manifests:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         output = Path(str(manifest_path).removesuffix(".manifest.json"))
@@ -331,3 +331,6 @@ def test_existing_benchmark_manifests_match_outputs_when_present():
             sum(1 for line in output.read_text(encoding="utf-8").splitlines() if line)
             == manifest["cases"]
         )
+        if "frozen" in manifest_path.parts:
+            assert manifest["git"]["commit"]
+            assert manifest["git"]["dirty"] is False

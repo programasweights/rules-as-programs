@@ -333,6 +333,22 @@ the shared [`Event`](rules_as_programs/core/events.py) schema and installs the
 agent's hooks. The daemon, engine, PAW runtime, stores, and UI model can be
 reused.
 
+## EACL 2027 evaluation artifact
+
+The reproducible system-demonstration evaluation lives in
+[`experiments/eacl2027`](experiments/eacl2027). It includes the frozen
+192-case paired-contrast dataset, four rule programs, deterministic and open
+model baselines, PAW runs, bounded operational probes, and a 15-assertion
+backend provenance workflow. Publication outputs and per-run manifests are
+indexed in
+[`experiments/eacl2027/outputs/frozen/README.md`](experiments/eacl2027/outputs/frozen/README.md).
+
+The frozen quality runs point to clean source commit `91dbb03`; every other
+artifact records its own clean source revision. Private native event text stays
+outside Git. The controlled benchmark is synthetic with labels fixed by
+construction; it is not presented as naturally distributed or human-annotated
+data.
+
 ## License
 
 MIT.

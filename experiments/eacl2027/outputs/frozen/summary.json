@@ -1,0 +1,299 @@
+{
+  "runs": [
+    {
+      "cases": 192,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.5,
+          "low": 0.5
+        },
+        "macro_f1": {
+          "high": 0.0,
+          "low": 0.0
+        },
+        "precision": {
+          "high": 0.0,
+          "low": 0.0
+        },
+        "recall": {
+          "high": 0.0,
+          "low": 0.0
+        }
+      },
+      "exact_accuracy": 0.5,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 0.000166,
+        "p95": 0.00031044999999999955,
+        "p99": 0.0007537800000000001
+      },
+      "macro_f1": 0.0,
+      "path": "experiments/eacl2027/outputs/frozen/always-ok.jsonl",
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "precision": 0.0,
+      "recall": 0.0,
+      "system": "always-ok"
+    },
+    {
+      "cases": 192,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.921875,
+          "low": 0.8385416666666666
+        },
+        "macro_f1": {
+          "high": 0.9128432027375969,
+          "low": 0.7994055672737496
+        },
+        "precision": {
+          "high": 1.0,
+          "low": 0.958904109589041
+        },
+        "recall": {
+          "high": 0.8541666666666666,
+          "low": 0.6875
+        }
+      },
+      "exact_accuracy": 0.8802083333333334,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 0.0078125,
+        "p95": 0.028789549999999966,
+        "p99": 1.3999075300000006
+      },
+      "macro_f1": 0.8627184746497183,
+      "path": "experiments/eacl2027/outputs/frozen/lexical.jsonl",
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.9583333333333334,
+          "f1": 0.9565217391304348,
+          "precision": 1.0,
+          "recall": 0.9166666666666666
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.8541666666666666,
+          "f1": 0.8372093023255814,
+          "precision": 0.9473684210526315,
+          "recall": 0.75
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.875,
+          "f1": 0.8571428571428571,
+          "precision": 1.0,
+          "recall": 0.75
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 0.8333333333333334,
+          "f1": 0.8,
+          "precision": 1.0,
+          "recall": 0.6666666666666666
+        }
+      },
+      "precision": 0.9866666666666667,
+      "recall": 0.7708333333333334,
+      "system": "lexical"
+    },
+    {
+      "cases": 192,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.875,
+          "low": 0.765625
+        },
+        "macro_f1": {
+          "high": 0.8739269596860954,
+          "low": 0.783671669612184
+        },
+        "precision": {
+          "high": 0.8695652173913043,
+          "low": 0.7428571428571429
+        },
+        "recall": {
+          "high": 0.9166666666666666,
+          "low": 0.78125
+        }
+      },
+      "exact_accuracy": 0.8229166666666666,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 193.756792,
+        "p95": 587.4589145499995,
+        "p99": 982.4986762500004
+      },
+      "macro_f1": 0.8308823529411765,
+      "path": "experiments/eacl2027/outputs/frozen/paw-standard.jsonl",
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.5208333333333334,
+          "f1": 0.5490196078431373,
+          "precision": 0.5185185185185185,
+          "recall": 0.5833333333333334
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.875,
+          "f1": 0.875,
+          "precision": 0.875,
+          "recall": 0.875
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.9375,
+          "f1": 0.9411764705882353,
+          "precision": 0.8888888888888888,
+          "recall": 1.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 0.9583333333333334,
+          "f1": 0.9583333333333334,
+          "precision": 0.9583333333333334,
+          "recall": 0.9583333333333334
+        }
+      },
+      "precision": 0.803921568627451,
+      "recall": 0.8541666666666666,
+      "system": "paw:paw-4b-qwen3-0.6b"
+    },
+    {
+      "cases": 192,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.984375,
+          "low": 0.9270833333333334
+        },
+        "macro_f1": {
+          "high": 0.9840435747886018,
+          "low": 0.9372601044228667
+        },
+        "precision": {
+          "high": 0.9696969696969697,
+          "low": 0.8727272727272727
+        },
+        "recall": {
+          "high": 1.0,
+          "low": 1.0
+        }
+      },
+      "exact_accuracy": 0.9583333333333334,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 257.37325,
+        "p95": 845.5208605999999,
+        "p99": 1258.6110480300015
+      },
+      "macro_f1": 0.960961307599963,
+      "path": "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl",
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.9166666666666666,
+          "f1": 0.923076923076923,
+          "precision": 0.8571428571428571,
+          "recall": 1.0
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.9791666666666666,
+          "f1": 0.9795918367346939,
+          "precision": 0.96,
+          "recall": 1.0
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.9375,
+          "f1": 0.9411764705882353,
+          "precision": 0.8888888888888888,
+          "recall": 1.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "precision": 0.9230769230769231,
+      "recall": 1.0,
+      "system": "paw:paw-ft-bs48"
+    },
+    {
+      "cases": 192,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.8489583333333334,
+          "low": 0.7498697916666667
+        },
+        "macro_f1": {
+          "high": 0.8705998664551353,
+          "low": 0.8085892372297303
+        },
+        "precision": {
+          "high": 0.7768595041322314,
+          "low": 0.67390918902251
+        },
+        "recall": {
+          "high": 1.0,
+          "low": 0.9270833333333334
+        }
+      },
+      "exact_accuracy": 0.796875,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 23.4115455,
+        "p95": 24.836389,
+        "p99": 181.54460699999998
+      },
+      "macro_f1": 0.8385397169620536,
+      "path": "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl",
+      "per_rule": {
+        "78v34vpkzm2jp4rx": {
+          "exact_accuracy": 0.7083333333333334,
+          "f1": 0.7741935483870968,
+          "precision": 0.631578947368421,
+          "recall": 1.0
+        },
+        "fdg0z9837mz4v0ka": {
+          "exact_accuracy": 0.6041666666666666,
+          "f1": 0.6984126984126983,
+          "precision": 0.5641025641025641,
+          "recall": 0.9166666666666666
+        },
+        "gn3xtat6av4fy690": {
+          "exact_accuracy": 0.9791666666666666,
+          "f1": 0.9795918367346939,
+          "precision": 0.96,
+          "recall": 1.0
+        },
+        "hrmhr6hr13ffv8nb": {
+          "exact_accuracy": 0.8958333333333334,
+          "f1": 0.9019607843137256,
+          "precision": 0.8518518518518519,
+          "recall": 0.9583333333333334
+        }
+      },
+      "precision": 0.7209302325581395,
+      "recall": 0.96875,
+      "system": "open-judge:Qwen/Qwen3-4B-Instruct-2507"
+    }
+  ]
+}

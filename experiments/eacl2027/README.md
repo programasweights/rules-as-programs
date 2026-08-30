@@ -79,6 +79,13 @@ $PY experiments/eacl2027/summarize.py \
   --latex experiments/eacl2027/outputs/quality-table.tex
 ```
 
+The publication snapshot is checked in under `outputs/frozen/`. Its
+`README.md` indexes the exact clean source commit, hashes, system metrics,
+hardware, and measurement boundaries. In particular, the independent Qwen run
+used its immutable model commit on Slurm partition `ALL`; the manifest records
+the NVIDIA L40S and software versions. Root-level output files remain ignored
+scratch space so reruns cannot silently replace the frozen evidence.
+
 ## Local operational probes
 
 The operational harness uses synthetic events and a temporary
