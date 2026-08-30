@@ -1,0 +1,329 @@
+{
+  "protocol_version": "3.0.0",
+  "created_date": "2026-08-30",
+  "status": "frozen before any protocol-v3 model prediction, hidden-case authorship, public-session run, or formal scaling/fault run",
+  "motivation": "Protocol v3 addresses the known protocol-v2 limitations: no matched uncompiled backbone, purposive rule selection, specification/test co-design, synthetic-only event fields, and a one-rule one-project canonical systems run.",
+  "known_before_freeze": [
+    "all protocol-v1 and protocol-v2 datasets, predictions, analyses, and installed-path measurements",
+    "the protocol-v2 paper draft and its stated limitations",
+    "the PAW manifests identify Qwen/Qwen3-0.6B with runtime qwen3-0.6b-q6_k as the local interpreter"
+  ],
+  "studies": {
+    "matched_backbone": {
+      "status": "confirmatory addition on already frozen protocol-v1 and protocol-v2 cases",
+      "datasets": [
+        {
+          "path": "experiments/eacl2027/data/public/controlled.jsonl",
+          "sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561",
+          "cases": 192
+        },
+        {
+          "path": "experiments/eacl2027/data/public/external.jsonl",
+          "sha256": "11127228f6a79adf665bc1fe2bf9b753bd5d99600b0edb7f91e9220e2b6d0ae",
+          "cases": 160
+        }
+      ],
+      "model": {
+        "interpreter": "Qwen/Qwen3-0.6B",
+        "runtime_id": "qwen3-0.6b-q6_k",
+        "gguf_repository": "programasweights/Qwen3-0.6B-GGUF-Q6_K",
+        "gguf_file": "qwen3-0.6b-q6_k.gguf",
+        "gguf_size_bytes": 622733120,
+        "gguf_sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c",
+        "context_tokens": 2048
+      },
+      "inference": {
+        "prompt": "the same disclosed full-SPEC plus exact-input direct-judge prompt used by the open-model baseline runner",
+        "decoding": "greedy",
+        "maximum_new_tokens": 8,
+        "parser": "the complete stripped response must be exactly one of OK, INFO, WARNING, or CRITICAL",
+        "formal_runs": 2,
+        "repeat_rule": "run twice from fresh model construction and report whether prediction bytes are identical; retain both attempts if not identical"
+      },
+      "named_contrasts": [
+        "PAW standard minus direct matched Qwen3-0.6B",
+        "PAW finetuned minus direct matched Qwen3-0.6B"
+      ],
+      "latency_rule": "compare latency only if quantization, runtime, hardware, call boundary, and batching are identical; otherwise report it without a cross-system speed claim"
+    },
+    "repository_uniform_heldout": {
+      "status": "confirmatory",
+      "source": {
+        "repository": "reporails/30k-corpus",
+        "commit": "00272e946b95765654ef06fe1e7f8ae7aa7e0535",
+        "file": "validation_key.csv",
+        "sha256": "82dd3d2f1c02ae3e4045f4312e4c0b39c5d8f92b427b9e9da842a3e075676130",
+        "records": 2814,
+        "project_values": 399,
+        "license": "CC-BY-4.0",
+        "project_identity_limit": "the source exposes a project field rather than an owner/repository slug; one-per-project claims refer to this exact corpus field"
+      },
+      "selection": {
+        "seed": "20270902",
+        "encoding": "exact UTF-8 CSV field values",
+        "one_record_per_project": "within each exact project value, choose the row with the lexicographically smallest lowercase hex SHA-256 of seed + NUL + 'record' + NUL + project + NUL + id",
+        "project_order": "sort chosen rows by lowercase hex SHA-256 of seed + NUL + 'project' + NUL + project, then project, then integer id",
+        "screening_batch_size": 80,
+        "target_eligible_rules": 24,
+        "stopping_rule": "screen complete fixed-order batches until at least 24 adjudicated eligible records exist; choose the first 24 eligible in fixed project order; if all 399 are exhausted, report the achieved count and do not replace exclusions purposively",
+        "screeners": 2,
+        "screening_independence": "screeners work from separate packets and cannot inspect any model prediction",
+        "disagreement": "a third author adjudicates eligibility before the selected rule set is revealed",
+        "eligibility": [
+          "the record contains one independent behavioral obligation or one atom can be extracted without changing its meaning",
+          "the complete observable signal is one scalar field of exactly one supported Codex trigger",
+          "a verdict can be made from that field without hidden transcript, filesystem, artifact, task-outcome, or multi-event state",
+          "both a compliant and violating field value are plausible",
+          "the record and extracted atom contain no secret or personal data"
+        ],
+        "supported_trigger_fields": {
+          "Stop": "/last_assistant_message",
+          "PreToolUse": "/tool_input",
+          "PostToolUse": "/tool_response",
+          "UserPromptSubmit": "/prompt"
+        },
+        "exclusion_codes": [
+          "cross_reference_or_incomplete_fragment",
+          "multiple_obligations_not_safely_separable",
+          "requires_multiple_events_or_order",
+          "requires_filesystem_or_artifact_state",
+          "requires_task_outcome",
+          "unsupported_or_no_scalar_trigger_field",
+          "not_behavioral_or_no_contrast",
+          "ambiguous_normative_target",
+          "sensitive_content",
+          "other_with_required_explanation"
+        ]
+      },
+      "authorship_separation": {
+        "rotation": "for each rule, specification author, hidden-case author, and blind label adjudicator are distinct roles; roles rotate across rules",
+        "specification": "exactly four visible examples: two OK and two finding-level examples; the specification author may not inspect hidden cases or predictions",
+        "deterministic_baseline": "written from source atom, declared field, and frozen specification only; maximum 20 active minutes per rule; may abstain; source and author choice are frozen before hidden-case authorship",
+        "routed_system": "the specification author chooses deterministic or PAW before hidden-case authorship; this routing choice is frozen and scored without revision",
+        "hidden_cases": "one separate case author writes eight contrast pairs per rule from the source atom and declared field without seeing specification examples, deterministic source, routing choice, or predictions",
+        "labels": "two non-case authors independently label shuffled exact fields from the source atom and declared field while blind to intended polarity and predictions; disagreements are retained and adjudicated",
+        "failed_contrasts": "retain every case even when the adjudicated label disagrees with its author's intended polarity",
+        "human_evidence_rule": "agent-generated or agent-screened material must be labeled as such and must never be described as independently human-authored"
+      },
+      "size": {
+        "rules": 24,
+        "pairs_per_rule": 8,
+        "cases_per_rule": 16,
+        "total_pairs": 192,
+        "total_cases": 384
+      },
+      "systems": [
+        "always-OK",
+        "frozen rule-specific deterministic baseline including abstentions",
+        "direct matched Qwen3-0.6B",
+        "PAW standard mapper",
+        "PAW finetuned compiler",
+        "Qwen3-4B-Instruct-2507 direct judge",
+        "predeclared author-routed deterministic-or-PAW system"
+      ],
+      "primary_metrics": [
+        "mean across fixed selected rules of positive-class F1",
+        "mean across fixed selected rules of full-label exact accuracy"
+      ],
+      "secondary_metrics": [
+        "pooled positive precision and recall",
+        "per-rule F1 and exact accuracy distribution",
+        "worst-quartile rule performance",
+        "invalid-output rate",
+        "deterministic abstention rate",
+        "active authoring minutes and source lines for deterministic rules",
+        "screening yield with Wilson 95% interval",
+        "raw screening and labeling agreement plus Cohen kappa"
+      ],
+      "uncertainty": {
+        "bootstrap_samples": 5000,
+        "seed": 20270903,
+        "method": "hierarchical resampling of rules, then complete pairs within each sampled rule",
+        "named_tests": "within-pair exact-correctness label swaps for the two PAW-versus-matched-base contrasts and routed-system-versus-best-single-system contrast, Holm adjusted",
+        "population_limit": "uncertainty is conditional on the pinned source corpus and eligibility protocol; do not claim private-repository prevalence"
+      },
+      "freeze": "publish selection code, screening decisions, rule atoms, specifications, deterministic baselines, routing choices, and a SHA-256 commitment to hidden cases before any system sees a hidden field"
+    },
+    "public_codex_field_replay": {
+      "status": "confirmatory if completed without privacy exclusions after the study begins; otherwise report as incomplete",
+      "rules": "the first eight eligible rules in the repository-uniform fixed order",
+      "tasks_per_rule": 3,
+      "instruction_conditions": [
+        "source instruction present",
+        "source instruction removed"
+      ],
+      "planned_sessions": 48,
+      "environment": "fresh sandboxed checkout of a pinned public repository commit with a public task prompt",
+      "pins": [
+        "repository commit",
+        "task prompt",
+        "Codex client version",
+        "model",
+        "reasoning effort",
+        "permissions and network settings",
+        "rule source and deployed revision"
+      ],
+      "sampling": "retain every matching exact hook field up to 30 per session; above 30, retain the 30 smallest SHA-256 ranks of session id + NUL + event id before annotation and report the sampling fraction",
+      "annotation": {
+        "annotators": 2,
+        "blind_to": [
+          "instruction condition",
+          "model prediction",
+          "finding status"
+        ],
+        "labels": [
+          "OK",
+          "INFO",
+          "WARNING",
+          "CRITICAL",
+          "UNRESOLVABLE_FROM_DECLARED_FIELD"
+        ],
+        "adjudication": "retain individual labels and one adjudicated label"
+      },
+      "primary_metrics": [
+        "fraction resolvable from the declared field",
+        "exact accuracy on adjudicated resolvable fields",
+        "positive precision and false alerts per session"
+      ],
+      "recall_gate": "report recall and F1 inferentially only if at least 20 adjudicated positive resolvable fields occur across the complete fixed session set",
+      "secondary_metrics": [
+        "positive opportunity-conditioned rate",
+        "sessions with at least one actionable finding",
+        "exact input/rule/revision linkage rate",
+        "raw agreement and Cohen kappa",
+        "task-cluster bootstrap intervals",
+        "instruction-present versus instruction-removed agent behavior as a secondary paired description"
+      ],
+      "claim_limit": "do not call the observed rate natural population prevalence and do not claim RAP improves agent task success because RAP is non-blocking"
+    },
+    "scaling_fault_offline": {
+      "status": "confirmatory systems study",
+      "rules": "the first 1, 2, 4, or all 8 frozen protocol-v2 external PAW finetuned programs in source-manifest order",
+      "projects": [
+        1,
+        4,
+        8
+      ],
+      "rules_per_project": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "fresh_daemon_repetitions_per_cell": 5,
+      "sequential_events_per_cell": 250,
+      "bursts_per_fresh_start": [
+        24,
+        64
+      ],
+      "traffic": [
+        "round-robin across projects",
+        "one-project hotspot"
+      ],
+      "accounting_unit": "every expected rule evaluation, including OK outcomes, not only stored findings",
+      "metrics": [
+        "hook-exit p50, p95, and max",
+        "event-to-first and event-to-last expected evaluation p50, p95, and p99",
+        "queue-drain seconds and evaluations per second",
+        "missing, duplicate, unexpected, and wrong-project evaluations and findings",
+        "per-project p95 fairness",
+        "recursive daemon and worker RSS and CPU",
+        "open file descriptors",
+        "ledger, database, WAL, and audit-log byte growth",
+        "marginal resource change per rule and project"
+      ],
+      "faults": {
+        "repetitions_each": 20,
+        "cases": [
+          "daemon absent at hook launch",
+          "daemon termination before and after acknowledgement",
+          "inference worker termination while idle and mid-inference",
+          "native inference timeout",
+          "SQLite transient lock or persistence failure",
+          "malformed and oversized payload",
+          "duplicate delivery within the documented window, after expiry, and across restart",
+          "deployment or compilation failure while an older revision is active"
+        ],
+        "outcomes": [
+          "fail-open hook exit code, stdout contract, and latency",
+          "current-event survival conditional on acknowledgement boundary",
+          "loss and duplication",
+          "time and events to healthy recovery",
+          "previous deployment continuity",
+          "orphan process count",
+          "persistent-state integrity",
+          "operator-visible incident record"
+        ]
+      },
+      "offline_probe": "after all required base and adapter files are prepared, run a fixed replay with outbound TCP/UDP connections denied while local Unix sockets remain available; compare prediction bytes with the online-prepared replay and state the exact enforcement boundary",
+      "soak": {
+        "events": 10000,
+        "projects": 8,
+        "rules": 8,
+        "report": [
+          "loss, duplication, and cross-project contamination",
+          "RSS slope and post-drain RSS",
+          "storage growth",
+          "history-query latency",
+          "restart persistence"
+        ]
+      },
+      "claim_limit": "query-visible evaluation latency excludes Codex asynchronous scheduling, rendered UI latency, and human perception"
+    },
+    "usability": {
+      "status": "materials may be prepared, but no participant recruitment or data collection is authorized by this protocol alone",
+      "start_gate": "obtain and record the required Waterloo/Harvard human-subjects determination before recruitment",
+      "planned_participants": "12 to 16 coding-agent users",
+      "design": "counterbalanced within-subject review tasks comparing raw event/rule records with RAP Findings and Inspector, plus authoring/refinement tasks with hidden cases",
+      "metrics": [
+        "task completion",
+        "time",
+        "violation decision accuracy",
+        "exact field and revision localization",
+        "regression-free refinement",
+        "hidden-case accuracy",
+        "UMUX-Lite or SUS",
+        "workload"
+      ],
+      "claim_limit": "an authors-only pilot is interface debugging, not usability evidence"
+    }
+  },
+  "claim_gates": {
+    "matched_compilation_gain": "say a PAW compiler improves over the matched base only if the preregistered paired 95% interval excludes zero in the positive direction",
+    "repository_uniform_coverage": "report the exact screening yield regardless of magnitude; use broad or substantial only if the Wilson lower 95% bound is at least 0.25",
+    "repository_uniform_accuracy": "use accurate only for a system with macro positive-class F1 at least 0.80 and hierarchical-bootstrap lower bound at least 0.75",
+    "public_replay_recall": "make a recall claim only when the complete fixed study contains at least 20 positive resolvable fields",
+    "scaling_reliability": "say lossless or isolated only for matrix cells with zero missing, duplicate, unexpected, and cross-project records across all declared repetitions",
+    "offline_runtime": "describe only the exact network-denial boundary actually enforced",
+    "usability": "make no human-usability claim without the recorded institutional determination and completed protocol"
+  },
+  "failure_and_rerun_policy": {
+    "hidden_data": "never tune, edit, exclude, or selectively rerun from hidden-case disagreements or predictions",
+    "model_runs": "run every prepared system once on the complete hidden set; the matched-base second run is the only predeclared prediction repeat",
+    "preparation_failure": "a compiler or model preparation failure marks that entire system unavailable until a dated amendment; no partial score",
+    "infrastructure": "retain every attempted formal cell/session; rerun a complete cell only for a harness failure identified independently of system output and record both attempts",
+    "bug_fix": "if a correctness bug changes data, prompts, parsing, expected accounting, or predictions, publish a dated protocol amendment before a new formal run and preserve superseded artifacts",
+    "missing_human_inputs": "report the affected study as not completed; do not replace required human judgments with agent output while retaining a human-independence claim",
+    "gpu_partition": "all formal watgpu jobs must request Slurm partition ALL and manifests must verify it"
+  },
+  "reporting": {
+    "publish": [
+      "protocol and amendments",
+      "selection and exclusion ledger",
+      "rule/specification/baseline/routing freeze",
+      "hidden-data SHA-256 commitment before scoring",
+      "all released cases and individual/adjudicated labels after scoring",
+      "runner source and environment manifests",
+      "every complete output including invalid predictions",
+      "analysis code and seeds",
+      "failed formal attempts and deviations"
+    ],
+    "paper_priority": [
+      "repository-uniform held-out result",
+      "public Codex field replay if complete",
+      "worst-case multi-rule/multi-project and fault result",
+      "matched-backbone control",
+      "protocol-v2 purposive and single-rule studies as supporting or appendix evidence"
+    ]
+  }
+}
