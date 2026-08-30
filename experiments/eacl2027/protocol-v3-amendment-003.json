@@ -1,0 +1,32 @@
+{
+  "amendment_id": "protocol-v3-amendment-003",
+  "created_utc": "2026-08-30T15:45:04Z",
+  "status": "frozen before inspecting any prediction in the affected output",
+  "affected_study": "matched_backbone",
+  "affected_attempt": {
+    "attempt_id": "matched-base-controlled-run1-dirty-scope",
+    "source_commit": "b492a871ab0038edaca2dd695ea89900809b8484",
+    "cases": 192,
+    "output_sha256": "88f85f1b845ef108105b949b05f0a6a144c9babdb0409b58576ac24bc31f6d7e",
+    "manifest_sha256": "94a10ef307f067dd097fcd52d3317fa4e6889e7adb27de473fddc00c4e621dac",
+    "manifest_git_dirty": true,
+    "predictions_inspected_before_decision": false
+  },
+  "decision": {
+    "use_as_formal_prediction_run": false,
+    "reason": "Parallel outcome-blind harness development left untracked files inside the experiment provenance scope, so the runner recorded git.dirty=true even though the committed matched runner itself was unchanged.",
+    "preservation": "Retain and publish the complete output and manifest under a superseded-attempt path; do not score or selectively inspect it.",
+    "replacement": "After all outcome-blind harness sources are reviewed and committed so the declared provenance scope is clean, run both preregistered fresh-process matched-base attempts from the same commit and require exact raw-output identity."
+  },
+  "unchanged": [
+    "dataset bytes and order",
+    "model bytes and SHA-256 pin",
+    "prompt construction",
+    "decoding and parser",
+    "repeat count",
+    "CPU layer setting",
+    "thread count",
+    "seed",
+    "analysis plan and claim gate"
+  ]
+}
