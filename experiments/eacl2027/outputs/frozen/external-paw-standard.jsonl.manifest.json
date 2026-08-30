@@ -1,0 +1,185 @@
+{
+  "cases": 160,
+  "compile_attempts": 3,
+  "compiler": "paw-4b-qwen3-0.6b",
+  "compiler_info": {
+    "3pcxewp5hggr1vsn": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "98z9wvr031840p4g": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "e3m4bdwj6gqcwpnn": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "g3b7damk0b5xgdj6": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "q88xgdmftag16dq9": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "qfh0h1cf4wt5aeg4": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "sr09vpkt60y74r0q": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    },
+    "xb24rc14cpcrsf4g": {
+      "available_interpreters": [
+        "qwen3-0.6b-q6_k"
+      ],
+      "compiler_kind": "mapper_lora",
+      "default": true,
+      "description": "Standard \u2014 best accuracy (Qwen3 0.6B, 594 MB base + 22 MB/program)",
+      "interpreter": "Qwen/Qwen3-0.6B",
+      "interpreter_base_mb": 594,
+      "interpreter_params": "Standard (0.6B)",
+      "latest_snapshot": "paw-4b-qwen3-0.6b-20260407",
+      "name": "paw-4b-qwen3-0.6b",
+      "program_mb": 22,
+      "pseudo_program_strategy": "vllm_generate",
+      "runtime_id": "qwen3-0.6b-q6_k",
+      "supports_browser_sdk": false,
+      "supports_local_sdk": true
+    }
+  },
+  "dataset": "experiments/eacl2027/data/public/external.jsonl",
+  "dataset_sha256": "111272280d28c8a7c5e42d8d7b202250ab115e32684715ebba06f1bdf2b6d0ae",
+  "elapsed_seconds": 10.468878,
+  "git": {
+    "commit": "9658dde232a3ff1bc39e29e2e73df11d0dbd0fca",
+    "dirty": false,
+    "scope": [
+      "rules_as_programs",
+      "experiments/eacl2027",
+      "pyproject.toml"
+    ]
+  },
+  "machine": "arm64",
+  "output_sha256": "08824e35c8466096ea1a205d7114128dd74cedb050a55b7b2fa4c4bd4710dedd",
+  "packages": {
+    "llama-cpp-python": "0.3.19",
+    "programasweights": "0.4.2",
+    "rules-as-programs": "0.1.0"
+  },
+  "pid": 6425,
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "program_ids": {
+    "3pcxewp5hggr1vsn": "f0bb1bb83ad9cada6c13",
+    "98z9wvr031840p4g": "f2d52144942832a6b646",
+    "e3m4bdwj6gqcwpnn": "2454ac90aad889bb688b",
+    "g3b7damk0b5xgdj6": "e354cdeaecf2531abc30",
+    "q88xgdmftag16dq9": "4d07513457c1255fb973",
+    "qfh0h1cf4wt5aeg4": "5cb1954086be89cc7e92",
+    "sr09vpkt60y74r0q": "80d7bfe07d14d4a98ded",
+    "xb24rc14cpcrsf4g": "c0dc04c1b2ed09161f7f"
+  },
+  "python": "3.12.10 | packaged by conda-forge | (main, Apr 10 2025, 22:19:24) [Clang 18.1.8 ]",
+  "schema_version": 1,
+  "system": "paw:paw-4b-qwen3-0.6b"
+}

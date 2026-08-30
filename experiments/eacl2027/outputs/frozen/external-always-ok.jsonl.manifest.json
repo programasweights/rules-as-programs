@@ -1,0 +1,31 @@
+{
+  "cases": 160,
+  "compile_attempts": 3,
+  "compiler": "",
+  "compiler_info": {},
+  "dataset": "experiments/eacl2027/data/public/external.jsonl",
+  "dataset_sha256": "111272280d28c8a7c5e42d8d7b202250ab115e32684715ebba06f1bdf2b6d0ae",
+  "elapsed_seconds": 0.001401,
+  "git": {
+    "commit": "9658dde232a3ff1bc39e29e2e73df11d0dbd0fca",
+    "dirty": false,
+    "scope": [
+      "rules_as_programs",
+      "experiments/eacl2027",
+      "pyproject.toml"
+    ]
+  },
+  "machine": "arm64",
+  "output_sha256": "6db2a8a46dca0d0067f026fa051d877573e664b2f57b69905d54d2b7010eac3a",
+  "packages": {
+    "llama-cpp-python": "0.3.19",
+    "programasweights": "0.4.2",
+    "rules-as-programs": "0.1.0"
+  },
+  "pid": 5840,
+  "platform": "macOS-26.5.2-arm64-arm-64bit",
+  "program_ids": {},
+  "python": "3.12.10 | packaged by conda-forge | (main, Apr 10 2025, 22:19:24) [Clang 18.1.8 ]",
+  "schema_version": 1,
+  "system": "always-ok"
+}

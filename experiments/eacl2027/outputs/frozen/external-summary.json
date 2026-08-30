@@ -1,0 +1,444 @@
+{
+  "runs": [
+    {
+      "bootstrap": {
+        "resampling": "stratified-rule-pair",
+        "samples": 5000,
+        "seed": 20270831
+      },
+      "cases": 160,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.5,
+          "low": 0.5
+        },
+        "macro_f1": {
+          "high": 0.0,
+          "low": 0.0
+        },
+        "precision": {
+          "high": 0.0,
+          "low": 0.0
+        },
+        "recall": {
+          "high": 0.0,
+          "low": 0.0
+        }
+      },
+      "exact_accuracy": 0.5,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 4.2e-05,
+        "p95": 8.4e-05,
+        "p99": 0.00030862999999999984
+      },
+      "macro_f1": 0.0,
+      "path": "experiments/eacl2027/outputs/frozen/external-always-ok.jsonl",
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.5,
+          "f1": 0.0,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "precision": 0.0,
+      "recall": 0.0,
+      "system": "always-ok"
+    },
+    {
+      "bootstrap": {
+        "resampling": "stratified-rule-pair",
+        "samples": 5000,
+        "seed": 20270831
+      },
+      "cases": 160,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 1.0,
+          "low": 0.98125
+        },
+        "macro_f1": {
+          "high": 1.0,
+          "low": 0.9779411764705882
+        },
+        "precision": {
+          "high": 1.0,
+          "low": 1.0
+        },
+        "recall": {
+          "high": 1.0,
+          "low": 0.9625
+        }
+      },
+      "exact_accuracy": 0.99375,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 0.0039165,
+        "p95": 0.05010449999999998,
+        "p99": 0.22271324999999983
+      },
+      "macro_f1": 0.993421052631579,
+      "path": "experiments/eacl2027/outputs/frozen/external-lexical.jsonl",
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.95,
+          "f1": 0.9473684210526316,
+          "precision": 1.0,
+          "recall": 0.9
+        }
+      },
+      "precision": 1.0,
+      "recall": 0.9875,
+      "system": "lexical"
+    },
+    {
+      "bootstrap": {
+        "resampling": "stratified-rule-pair",
+        "samples": 5000,
+        "seed": 20270831
+      },
+      "cases": 160,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.8875,
+          "low": 0.78125
+        },
+        "macro_f1": {
+          "high": 0.8903027749394605,
+          "low": 0.7787195086064382
+        },
+        "precision": {
+          "high": 0.8860759493670886,
+          "low": 0.7604166666666666
+        },
+        "recall": {
+          "high": 0.925,
+          "low": 0.7875
+        }
+      },
+      "exact_accuracy": 0.8375,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 58.3819995,
+        "p95": 115.65979309999993,
+        "p99": 173.67505852999992
+      },
+      "macro_f1": 0.8397933943010669,
+      "path": "experiments/eacl2027/outputs/frozen/external-paw-standard.jsonl",
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.8,
+          "f1": 0.7777777777777777,
+          "precision": 0.875,
+          "recall": 0.7
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8333333333333333,
+          "precision": 0.7142857142857143,
+          "recall": 1.0
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8181818181818182,
+          "precision": 0.75,
+          "recall": 0.9
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 0.85,
+          "f1": 0.8695652173913044,
+          "precision": 0.7692307692307693,
+          "recall": 1.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 0.8,
+          "f1": 0.7777777777777777,
+          "precision": 0.875,
+          "recall": 0.7
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.85,
+          "f1": 0.8235294117647058,
+          "precision": 1.0,
+          "recall": 0.7
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8181818181818182,
+          "precision": 0.75,
+          "recall": 0.9
+        }
+      },
+      "precision": 0.8214285714285714,
+      "recall": 0.8625,
+      "system": "paw:paw-4b-qwen3-0.6b"
+    },
+    {
+      "bootstrap": {
+        "resampling": "stratified-rule-pair",
+        "samples": 5000,
+        "seed": 20270831
+      },
+      "cases": 160,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.96875,
+          "low": 0.9125
+        },
+        "macro_f1": {
+          "high": 0.9728260869565217,
+          "low": 0.9101732456140351
+        },
+        "precision": {
+          "high": 0.9868421052631579,
+          "low": 0.9135802469135802
+        },
+        "recall": {
+          "high": 0.9875,
+          "low": 0.8875
+        }
+      },
+      "exact_accuracy": 0.94375,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 98.1654585,
+        "p95": 212.29200239999992,
+        "p99": 302.4710852799998
+      },
+      "macro_f1": 0.9457793033307907,
+      "path": "experiments/eacl2027/outputs/frozen/external-paw-finetuned.jsonl",
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.9,
+          "f1": 0.888888888888889,
+          "precision": 1.0,
+          "recall": 0.8
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.95,
+          "f1": 0.9473684210526316,
+          "precision": 1.0,
+          "recall": 0.9
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.95,
+          "f1": 0.9473684210526316,
+          "precision": 1.0,
+          "recall": 0.9
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.75,
+          "f1": 0.7826086956521738,
+          "precision": 0.6923076923076923,
+          "recall": 0.9
+        }
+      },
+      "precision": 0.9493670886075949,
+      "recall": 0.9375,
+      "system": "paw:paw-ft-bs48"
+    },
+    {
+      "bootstrap": {
+        "resampling": "stratified-rule-pair",
+        "samples": 5000,
+        "seed": 20270831
+      },
+      "cases": 160,
+      "confidence_95": {
+        "exact_accuracy": {
+          "high": 0.8625,
+          "low": 0.775
+        },
+        "macro_f1": {
+          "high": 0.8871404804404588,
+          "low": 0.7912594639304998
+        },
+        "precision": {
+          "high": 0.8390804597701149,
+          "low": 0.7525773195876289
+        },
+        "recall": {
+          "high": 0.9375,
+          "low": 0.8
+        }
+      },
+      "exact_accuracy": 0.81875,
+      "invalid_rate": 0.0,
+      "latency_ms": {
+        "median": 26.620312,
+        "p95": 30.06278899999991,
+        "p99": 161.802652
+      },
+      "macro_f1": 0.8445845004668534,
+      "path": "experiments/eacl2027/outputs/frozen/external-qwen3-4b.jsonl",
+      "per_rule": {
+        "3pcxewp5hggr1vsn": {
+          "exact_accuracy": 0.75,
+          "f1": 0.7058823529411764,
+          "precision": 0.8571428571428571,
+          "recall": 0.6
+        },
+        "98z9wvr031840p4g": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "e3m4bdwj6gqcwpnn": {
+          "exact_accuracy": 0.85,
+          "f1": 0.8571428571428572,
+          "precision": 0.8181818181818182,
+          "recall": 0.9
+        },
+        "g3b7damk0b5xgdj6": {
+          "exact_accuracy": 1.0,
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "q88xgdmftag16dq9": {
+          "exact_accuracy": 0.8,
+          "f1": 0.8333333333333333,
+          "precision": 0.7142857142857143,
+          "recall": 1.0
+        },
+        "qfh0h1cf4wt5aeg4": {
+          "exact_accuracy": 0.4,
+          "f1": 0.5714285714285714,
+          "precision": 0.4444444444444444,
+          "recall": 0.8
+        },
+        "sr09vpkt60y74r0q": {
+          "exact_accuracy": 0.85,
+          "f1": 0.9,
+          "precision": 0.9,
+          "recall": 0.9
+        },
+        "xb24rc14cpcrsf4g": {
+          "exact_accuracy": 0.9,
+          "f1": 0.888888888888889,
+          "precision": 1.0,
+          "recall": 0.8
+        }
+      },
+      "precision": 0.7954545454545454,
+      "recall": 0.875,
+      "system": "open-judge:Qwen/Qwen3-4B-Instruct-2507"
+    }
+  ]
+}
