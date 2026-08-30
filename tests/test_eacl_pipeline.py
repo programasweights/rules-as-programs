@@ -36,6 +36,56 @@ def test_controlled_dataset_matches_manifest_and_rule_sources():
     assert report["manifest_verified"]
 
 
+def test_external_transfer_dataset_matches_manifest_and_rule_sources():
+    dataset = EXPERIMENT_ROOT / "data" / "public" / "external.jsonl"
+    manifest = EXPERIMENT_ROOT / "data" / "public" / "external-manifest.json"
+
+    report = validate_dataset(dataset, manifest)
+
+    assert report["cases"] == 160
+    assert report["pairs"] == 80
+    assert len(report["rules"]) == 8
+    assert report["manifest_verified"]
+
+
+def test_external_manifest_sources_must_match_pinned_snapshot(tmp_path):
+    dataset = EXPERIMENT_ROOT / "data" / "public" / "external.jsonl"
+    source_manifest = EXPERIMENT_ROOT / "data" / "public" / "external-manifest.json"
+    manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+    first_rule = sorted(manifest["sources"])[0]
+    manifest["sources"][first_rule]["raw_record"]["text"] += " tampered"
+    tampered = tmp_path / "external-manifest.json"
+    tampered.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="sources differ"):
+        validate_dataset(dataset, tampered)
+
+
+def test_external_manifest_snapshot_hash_is_verified(tmp_path):
+    dataset = EXPERIMENT_ROOT / "data" / "public" / "external.jsonl"
+    source_manifest = EXPERIMENT_ROOT / "data" / "public" / "external-manifest.json"
+    manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+    manifest["source_snapshot"]["sha256"] = "0" * 64
+    tampered = tmp_path / "external-manifest.json"
+    tampered.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="snapshot hash mismatch"):
+        validate_dataset(dataset, tampered)
+
+
+def test_external_manifest_cannot_omit_source_provenance(tmp_path):
+    dataset = EXPERIMENT_ROOT / "data" / "public" / "external.jsonl"
+    source_manifest = EXPERIMENT_ROOT / "data" / "public" / "external-manifest.json"
+    manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+    for field in ("source_snapshot", "source_corpus", "sources"):
+        manifest.pop(field)
+    tampered = tmp_path / "external-manifest.json"
+    tampered.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="must include a verified source snapshot"):
+        validate_dataset(dataset, tampered)
+
+
 def test_validator_rejects_tampered_dataset_hash(tmp_path):
     dataset = EXPERIMENT_ROOT / "data" / "public" / "controlled.jsonl"
     manifest = EXPERIMENT_ROOT / "data" / "public" / "controlled-manifest.json"
@@ -48,6 +98,27 @@ def test_validator_rejects_tampered_dataset_hash(tmp_path):
 
     with pytest.raises(SystemExit, match="manifest mismatch"):
         validate_dataset(tampered, manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("rule_id", "not-a-rule-id", "invalid rule_id"),
+        ("hook", "BeforeShell", "invalid hook"),
+        ("split", "holdout", "invalid split"),
+        ("provenance", "external_instruction", "invalid provenance"),
+        ("source_hash", "not-a-sha", "invalid source_hash"),
+    ],
+)
+def test_validator_enforces_case_schema_fields(tmp_path, field, value, message):
+    source = EXPERIMENT_ROOT / "data" / "public" / "controlled.jsonl"
+    row = json.loads(source.read_text(encoding="utf-8").splitlines()[0])
+    row[field] = value
+    dataset = tmp_path / "invalid.jsonl"
+    dataset.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match=message):
+        validate_dataset(dataset)
 
 
 def test_private_export_inside_repo_must_be_untracked_and_ignored(tmp_path):
@@ -281,6 +352,51 @@ def test_bootstrap_resamples_whole_contrastive_pair_clusters():
         assert polarities["OK"] == polarities["WARNING"]
 
 
+def test_external_bootstrap_resamples_rules_then_complete_pairs():
+    rows = _summary_rows()
+
+    class PlannedRng:
+        def __init__(self):
+            self.calls = 0
+
+        def choices(self, population, k):
+            self.calls += 1
+            if self.calls == 1:
+                assert population == ["rule-a", "rule-b"]
+                assert k == 2
+                return ["rule-a", "rule-a"]
+            assert len(population) == 2
+            assert k == 2
+            return list(population)
+
+    sampled = summarize._resample_rule_then_pair_clusters(rows, PlannedRng())
+    instances = Counter(row["_bootstrap_rule_instance"] for row in sampled)
+
+    assert len(sampled) == len(rows)
+    assert instances == {"0:rule-a": 4, "1:rule-a": 4}
+    assert len(summarize._metrics(sampled)["per_rule"]) == 2
+
+
+def test_external_primary_bootstrap_keeps_every_selected_rule_fixed():
+    rows = _summary_rows()
+
+    class FirstPairRng:
+        @staticmethod
+        def choices(population, k):
+            return [population[0]] * k
+
+    sampled = summarize._resample_pairs_within_each_rule(rows, FirstPairRng())
+    by_rule = Counter(row["rule_id"] for row in sampled)
+    pairs_by_rule = {
+        rule_id: {row["pair_id"] for row in sampled if row["rule_id"] == rule_id}
+        for rule_id in by_rule
+    }
+
+    assert len(sampled) == len(rows)
+    assert by_rule == {"rule-a": 4, "rule-b": 4}
+    assert all(len(pair_ids) == 1 for pair_ids in pairs_by_rule.values())
+
+
 def test_summary_rejects_case_drift_and_inconsistent_correct_flag(tmp_path):
     rows = _summary_rows()
     _system, signatures = summarize._validate_run_rows(tmp_path / "first.jsonl", rows)
@@ -309,6 +425,20 @@ def test_open_judge_refuses_prompt_truncation():
         run_open_judge._require_exact_prompt_lengths(
             tokenizer, ["too long"], ["case-long"], 5
         )
+
+
+def test_open_judge_can_require_all_slurm_partition(monkeypatch):
+    monkeypatch.setenv("SLURM_JOB_ID", "123")
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "gpu001")
+
+    assert run_open_judge._require_slurm_partition("ALL") == {
+        "job_id": "123",
+        "partition": "ALL",
+        "node_list": "gpu001",
+    }
+    with pytest.raises(SystemExit, match="required Slurm partition 'other'"):
+        run_open_judge._require_slurm_partition("other")
 
 
 def test_existing_benchmark_manifests_match_outputs_when_present():

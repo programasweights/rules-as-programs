@@ -46,8 +46,13 @@ def _binary(rows: list[dict]) -> tuple[float, float, float]:
 
 def _metrics(rows: list[dict]) -> dict:
     per_rule = {}
-    for rule_id in sorted({row["rule_id"] for row in rows}):
-        subset = [row for row in rows if row["rule_id"] == rule_id]
+    group_field = (
+        "_bootstrap_rule_instance"
+        if any("_bootstrap_rule_instance" in row for row in rows)
+        else "rule_id"
+    )
+    for rule_id in sorted({row[group_field] for row in rows}):
+        subset = [row for row in rows if row[group_field] == rule_id]
         precision, recall, f1 = _binary(subset)
         per_rule[rule_id] = {
             "precision": precision,
@@ -87,13 +92,72 @@ def _resample_pair_clusters(rows: list[dict], rng: random.Random) -> list[dict]:
     return sampled
 
 
-def _bootstrap(rows: list[dict], samples: int, seed: int) -> dict:
+def _resample_rule_then_pair_clusters(
+    rows: list[dict], rng: random.Random
+) -> list[dict]:
+    """Resample rule/repository clusters, then complete pairs within each draw.
+
+    The synthetic external challenge set contains one rule per repository. A
+    private draw-instance key keeps repeated rule draws distinct when macro-F1
+    is recomputed; it is never written into benchmark rows.
+    """
+
+    by_rule = defaultdict(list)
+    for row in rows:
+        by_rule[row["rule_id"]].append(row)
+    rule_ids = sorted(by_rule)
+    sampled = []
+    for draw_index, rule_id in enumerate(rng.choices(rule_ids, k=len(rule_ids))):
+        by_pair = defaultdict(list)
+        for row in by_rule[rule_id]:
+            by_pair[row["pair_id"]].append(row)
+        pair_ids = sorted(by_pair)
+        for pair_id in rng.choices(pair_ids, k=len(pair_ids)):
+            for row in by_pair[pair_id]:
+                sampled.append(
+                    {
+                        **row,
+                        "_bootstrap_rule_instance": f"{draw_index}:{rule_id}",
+                    }
+                )
+    return sampled
+
+
+def _resample_pairs_within_each_rule(
+    rows: list[dict], rng: random.Random
+) -> list[dict]:
+    """Keep the selected rules fixed and resample complete pairs per rule."""
+
+    by_rule = defaultdict(list)
+    for row in rows:
+        by_rule[row["rule_id"]].append(row)
+    sampled = []
+    for rule_id in sorted(by_rule):
+        by_pair = defaultdict(list)
+        for row in by_rule[rule_id]:
+            by_pair[row["pair_id"]].append(row)
+        pair_ids = sorted(by_pair)
+        for pair_id in rng.choices(pair_ids, k=len(pair_ids)):
+            sampled.extend(by_pair[pair_id])
+    return sampled
+
+
+def _bootstrap(
+    rows: list[dict], samples: int, seed: int, resampling: str = "pair"
+) -> dict:
     if samples < 1:
         raise ValueError("bootstrap samples must be positive")
+    samplers = {
+        "pair": _resample_pair_clusters,
+        "stratified-rule-pair": _resample_pairs_within_each_rule,
+        "hierarchical-rule-pair": _resample_rule_then_pair_clusters,
+    }
+    if resampling not in samplers:
+        raise ValueError(f"unknown bootstrap resampling scheme: {resampling}")
     rng = random.Random(seed)
     draws = defaultdict(list)
     for _ in range(samples):
-        sampled = _resample_pair_clusters(rows, rng)
+        sampled = samplers[resampling](rows, rng)
         metrics = _metrics(sampled)
         for name in ("precision", "recall", "macro_f1", "exact_accuracy"):
             draws[name].append(metrics[name])
@@ -194,6 +258,11 @@ def main() -> int:
     parser.add_argument("--latex", required=True, type=Path)
     parser.add_argument("--bootstrap-samples", type=int, default=5000)
     parser.add_argument("--seed", type=int, default=20270830)
+    parser.add_argument(
+        "--resampling",
+        choices=("pair", "stratified-rule-pair", "hierarchical-rule-pair"),
+        default="pair",
+    )
     args = parser.parse_args()
     if args.bootstrap_samples < 1:
         raise SystemExit("--bootstrap-samples must be at least 1")
@@ -216,7 +285,17 @@ def main() -> int:
                 "path": str(path),
                 "cases": len(rows),
                 **metrics,
-                "confidence_95": _bootstrap(rows, args.bootstrap_samples, args.seed),
+                "confidence_95": _bootstrap(
+                    rows,
+                    args.bootstrap_samples,
+                    args.seed,
+                    args.resampling,
+                ),
+                "bootstrap": {
+                    "samples": args.bootstrap_samples,
+                    "seed": args.seed,
+                    "resampling": args.resampling,
+                },
             }
         )
 

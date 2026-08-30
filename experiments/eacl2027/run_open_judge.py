@@ -71,6 +71,24 @@ def _package_version(name: str) -> str:
         return "not-installed"
 
 
+def _slurm_metadata() -> dict[str, str]:
+    return {
+        "job_id": os.environ.get("SLURM_JOB_ID", ""),
+        "partition": os.environ.get("SLURM_JOB_PARTITION", ""),
+        "node_list": os.environ.get("SLURM_JOB_NODELIST", ""),
+    }
+
+
+def _require_slurm_partition(required: str) -> dict[str, str]:
+    metadata = _slurm_metadata()
+    if required and metadata["partition"] != required:
+        raise SystemExit(
+            f"required Slurm partition {required!r}, observed "
+            f"{metadata['partition'] or '(not running under Slurm)'!r}"
+        )
+    return metadata
+
+
 def _require_exact_prompt_lengths(
     tokenizer,
     prompts: list[str],
@@ -112,6 +130,11 @@ def main() -> int:
     parser.add_argument("--max-input-tokens", type=int, default=2048)
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument("--local-files-only", action="store_true")
+    parser.add_argument(
+        "--require-slurm-partition",
+        default="",
+        help="fail unless SLURM_JOB_PARTITION exactly matches this value",
+    )
     args = parser.parse_args()
     if args.batch_size < 1:
         raise SystemExit("--batch-size must be at least 1")
@@ -119,6 +142,7 @@ def main() -> int:
         raise SystemExit("token limits must be at least 1")
     if not re.fullmatch(r"[0-9a-fA-F]{40,64}", args.revision):
         raise SystemExit("--revision must be an immutable hexadecimal commit")
+    slurm = _require_slurm_partition(args.require_slurm_partition)
 
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -267,6 +291,7 @@ def main() -> int:
             "torch": _package_version("torch"),
             "transformers": _package_version("transformers"),
         },
+        "slurm": slurm,
     }
     sidecar = args.output.with_suffix(args.output.suffix + ".manifest.json")
     sidecar.write_text(

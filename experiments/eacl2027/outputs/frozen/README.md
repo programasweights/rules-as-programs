@@ -23,6 +23,18 @@ truncation, and zero invalid outputs or runtime errors. It ran as Slurm job
 `1523653` on partition `ALL` with an NVIDIA L40S, PyTorch 2.9.1+cu130, and
 Transformers 4.57.6.
 
+`paired-comparisons-v1.json` is a separately marked post-hoc analysis of these
+already frozen predictions. Relative to Qwen3-4B, finetuned PAW is +0.1224
+macro-F1 (paired 95% interval [0.0858, 0.1585]) and +0.1615 exact accuracy
+([0.1042, 0.2135]); the exact-label cluster randomization test has Holm-adjusted
+$p=4.20\times10^{-7}$. Relative to the lexical diagnostic, the corresponding
+deltas are +0.0982 ([0.0426, 0.1692]) and +0.0781 ([0.0260, 0.1302]), with
+Holm-adjusted $p=.00813$. The tests swap system labels only within complete
+two-case contrast pairs. `paired-disagreements-v1.jsonl` inventories every
+public case with a prediction disagreement or exact-label error. These analyses
+condition on the fixed author-constructed cases and do not represent
+author-sampling uncertainty.
+
 `operational.json` contains synthetic hook/IPC, unavailable-daemon, and ingress
 deduplication probes. It was produced from clean source revision `0b21e08` and
 has SHA-256

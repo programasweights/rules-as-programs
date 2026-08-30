@@ -8,12 +8,17 @@ The submission core uses evidence that can be reproduced without private
 traces or human-subject claims:
 
 1. a controlled contrastive benchmark with labels fixed by construction;
-2. strict local PAW and deterministic-baseline scoring;
-3. native-Codex trace inventory and duplicate analysis, with private text kept
+2. a narrow challenge set built from eight purposively selected, externally
+   sourced instruction atoms and synthetic contrastive events;
+3. strict local PAW, deterministic, and independently prompted open-model
+   scoring;
+4. paired comparisons over the frozen controlled predictions;
+5. an installed-hook-to-query-visible-finding integration experiment;
+6. native-Codex trace inventory and duplicate analysis, with private text kept
    outside Git;
-4. explicitly bounded hook-process, IPC, fail-open, and ingress-dedup probes;
+7. explicitly bounded hook-process, IPC, fail-open, and ingress-dedup probes;
    and
-5. a deterministic finding-to-revision provenance workflow.
+8. a deterministic finding-to-revision provenance workflow.
 
 The controlled benchmark is not presented as a naturally distributed corpus
 or as human annotation.  Native events may be used only after manual privacy
@@ -40,6 +45,49 @@ $PY experiments/eacl2027/run_benchmark.py \
   --system lexical \
   --output experiments/eacl2027/outputs/lexical.jsonl
 ```
+
+Build and validate the selected external-instruction challenge set separately:
+
+```bash
+$PY experiments/eacl2027/build_external_dataset.py
+$PY experiments/eacl2027/validate_dataset.py \
+  experiments/eacl2027/data/public/external.jsonl
+
+$PY experiments/eacl2027/run_benchmark.py \
+  --dataset experiments/eacl2027/data/public/external.jsonl \
+  --system always-ok \
+  --output experiments/eacl2027/outputs/external-always-ok.jsonl
+
+$PY experiments/eacl2027/run_benchmark.py \
+  --dataset experiments/eacl2027/data/public/external.jsonl \
+  --system lexical \
+  --output experiments/eacl2027/outputs/external-lexical.jsonl
+```
+
+The instruction source is `reporails/30k-corpus` at commit
+`00272e946b95765654ef06fe1e7f8ae7aa7e0535`, licensed CC BY 4.0. The checked-in
+eight-record snapshot retains the exact corpus fields, raw source paths, and
+physical CSV line endpoints; normalized repository paths are separate. The
+events and labels are new synthetic adaptations, and several records are
+explicitly narrowed to one observable sub-rule. This is neither a random nor
+representative corpus sample. Specifications and cases were co-designed; the
+validator forbids exact reuse of embedded specification examples, not broader
+lexical overlap.
+
+After obtaining that commit's `validation_key.csv`, verify the snapshot against
+the complete pinned file without regenerating anything:
+
+```bash
+$PY experiments/eacl2027/build_external_dataset.py \
+  --verify-source-csv /path/to/validation_key.csv \
+  --verify-only
+```
+
+Source: <https://github.com/reporails/30k-corpus/tree/00272e946b95765654ef06fe1e7f8ae7aa7e0535>.
+License: <https://creativecommons.org/licenses/by/4.0/>. RAP changes the source
+records by extracting one observable instruction atom when necessary and by
+authoring new synthetic event pairs and executable rule specifications; it does
+not redistribute the source corpus as an unchanged benchmark.
 
 The deterministic provenance workflow uses a synthetic `Stop` event and fixed
 fixture judgments to exercise exact-input storage, finding and evaluation
@@ -70,13 +118,37 @@ $PY experiments/eacl2027/run_open_judge.py \
   --output experiments/eacl2027/outputs/qwen3-4b.jsonl
 ```
 
-Summaries are generated only from versioned run files:
+Substitute `data/public/external.jsonl` and an `external-qwen3-4b.jsonl` output
+for the selected-rule study. On `watgpu`, every study submission must declare
+`#SBATCH --partition=ALL`; the frozen manifest and Slurm record must confirm
+that partition. Pass `--require-slurm-partition ALL` so the runner fails rather
+than silently accepting a job on another partition.
+
+Controlled summaries use complete contrast-pair resampling. External primary
+summaries keep all eight purposively selected rules fixed and resample complete
+pairs within each rule. Hierarchical rule-then-pair resampling is exploratory
+only; it must not be interpreted as population-level uncertainty. Summaries
+are generated only from versioned run files:
 
 ```bash
 $PY experiments/eacl2027/summarize.py \
   experiments/eacl2027/outputs/*.jsonl \
   --json experiments/eacl2027/outputs/summary.json \
   --latex experiments/eacl2027/outputs/quality-table.tex
+
+$PY experiments/eacl2027/summarize.py \
+  experiments/eacl2027/outputs/external-*.jsonl \
+  --resampling stratified-rule-pair \
+  --seed 20270831 \
+  --json experiments/eacl2027/outputs/external-summary.json \
+  --latex experiments/eacl2027/outputs/external-quality-table.tex
+```
+
+The post-hoc paired controlled comparison is independently reproducible and
+byte-checks its versioned artifacts:
+
+```bash
+$PY experiments/eacl2027/analyze_paired.py
 ```
 
 The publication snapshot is checked in under `outputs/frozen/`. Its
@@ -87,6 +159,21 @@ the NVIDIA L40S and software versions. Root-level output files remain ignored
 scratch space so reruns cannot silently replace the frozen evidence.
 
 ## Local operational probes
+
+The integrated experiment crosses the installed project hook wrapper, real
+Unix socket, production daemon and rule loader, frozen local PAW artifact,
+ledger, SQLite finding store, and verdict query API. It uses only isolated
+synthetic state. Its timer begins immediately before the parent launches the
+hook process and ends at the first successful query returning the exact input;
+it is not Codex turn latency or rendered interface latency. Reproduce a scratch
+run, or intentionally create the frozen artifact, with:
+
+```bash
+$PY experiments/eacl2027/run_integrated.py \
+  --output experiments/eacl2027/outputs/integrated-scratch.json
+
+$PY experiments/eacl2027/run_integrated.py --write-frozen
+```
 
 The operational harness uses synthetic events and a temporary
 `RAP_STATE_DIR`; it does not read native traces or contact PAW. Run it from the
@@ -130,9 +217,12 @@ candidate file to a tracked or normally stageable path inside this repository.
 
 ## Frozen protocol
 
-`protocol.json` is the frozen analysis contract. Version 1.1.0 documents the
+`protocol.json` is the analysis contract. Version 1.1.0 documents the
 post-smoke-test measurement-scope amendment and the addition of the independent
 Qwen3-4B-Instruct-2507 baseline before the final clean-commit run. The rule
 sources, inputs, labels, existing systems, primary metric, and bootstrap
-procedure were unchanged. Any later change to those elements requires a new
-protocol version and an explicit deviation note.
+procedure were unchanged. Version 2.0.0 freezes the selected external-rule and
+integrated-runtime studies before their first scored/final runs; it does not
+retroactively describe the completed controlled study as pre-scoring. Any later
+change to a frozen study element requires a new protocol version and an
+explicit deviation note.

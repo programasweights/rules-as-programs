@@ -23,9 +23,14 @@
     "expected": {"enum": ["OK", "INFO", "WARNING", "CRITICAL"]},
     "split": {"enum": ["development", "test"]},
     "provenance": {
-      "enum": ["synthetic", "native_codex", "legacy_cursor"]
+      "enum": [
+        "synthetic",
+        "synthetic_for_external_instruction",
+        "native_codex",
+        "legacy_cursor"
+      ]
     },
-    "source_hash": {"type": "string"},
+    "source_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "note": {"type": "string"}
   }
 }

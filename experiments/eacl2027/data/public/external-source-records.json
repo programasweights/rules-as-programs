@@ -1,0 +1,237 @@
+{
+  "records": [
+    {
+      "adaptation": {
+        "coverage": "full_instruction",
+        "covered_clause": "Use pnpm instead of npm or yarn for package-management commands.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": ".cursor/rules/use-pnpm.mdc",
+        "instruction_line": 355,
+        "repository": "thesysdev/openui",
+        "repository_license": "MIT"
+      },
+      "physical_line_end": 1127,
+      "raw_record": {
+        "agent": "cursor",
+        "file_path": "/home/cleverhoods/Projects/ai/reporails/researcher/data/corpus/thesysdev/openui/.cursor/rules/use-pnpm.mdc",
+        "id": "1111",
+        "line": "355",
+        "project": "openui",
+        "text": "Remember: Always use pnpm, never npm or yarn for any package management tasks in this project.",
+        "tool_charge": "DIRECTIVE",
+        "tool_modality": "absolute",
+        "tool_specificity": "named"
+      },
+      "record_id": 1111,
+      "rule_id": "98z9wvr031840p4g"
+    },
+    {
+      "adaptation": {
+        "coverage": "full_instruction",
+        "covered_clause": "Do not credit an AI system in an executed commit message.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": "src/v2.x/claude.md",
+        "instruction_line": 8,
+        "repository": "CopilotKit/CopilotKit",
+        "repository_license": "MIT"
+      },
+      "physical_line_end": 198,
+      "raw_record": {
+        "agent": "claude",
+        "file_path": "src/v2.x/claude.md",
+        "id": "188",
+        "line": "8",
+        "project": "CopilotKit",
+        "text": "NEVER credit yourself in commit messages (no \"Generated with Claude Code\" or similar)",
+        "tool_charge": "CONSTRAINT",
+        "tool_modality": "absolute",
+        "tool_specificity": "abstract"
+      },
+      "record_id": 188,
+      "rule_id": "g3b7damk0b5xgdj6"
+    },
+    {
+      "adaptation": {
+        "coverage": "extracted_sub_rule",
+        "covered_clause": "Do not execute destructive Git operations.",
+        "excluded_clause": "Git configuration changes are outside this one-field benchmark sub-rule.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": "agents.md",
+        "instruction_line": 25,
+        "repository": "MetaMask/metamask-extension",
+        "repository_license": "NOASSERTION"
+      },
+      "physical_line_end": 424,
+      "raw_record": {
+        "agent": "cursor",
+        "file_path": "agents.md",
+        "id": "411",
+        "line": "25",
+        "project": "metamask-extension",
+        "text": "NEVER modify git config or run destructive git operations",
+        "tool_charge": "CONSTRAINT",
+        "tool_modality": "absolute",
+        "tool_specificity": "named"
+      },
+      "record_id": 411,
+      "rule_id": "3pcxewp5hggr1vsn"
+    },
+    {
+      "adaptation": {
+        "coverage": "full_instruction",
+        "covered_clause": "Do not write, edit, or delete generated outputs or lockfiles.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": "AGENTS.md",
+        "instruction_line": 31,
+        "repository": "onlook-dev/onlook",
+        "repository_license": "Apache-2.0"
+      },
+      "physical_line_end": 134,
+      "raw_record": {
+        "agent": "cursor",
+        "file_path": "AGENTS.md",
+        "id": "130",
+        "line": "31",
+        "project": "onlook",
+        "text": "Do not modify build outputs, generated files, or lockfiles.",
+        "tool_charge": "CONSTRAINT",
+        "tool_modality": "direct",
+        "tool_specificity": "abstract"
+      },
+      "record_id": 130,
+      "rule_id": "xb24rc14cpcrsf4g"
+    },
+    {
+      "adaptation": {
+        "coverage": "full_instruction",
+        "covered_clause": "Keep untrusted GitHub expressions out of shell run blocks.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": ".github/workflows/agents.md",
+        "instruction_line": 22,
+        "repository": "streamlit/streamlit",
+        "repository_license": "Apache-2.0"
+      },
+      "physical_line_end": 321,
+      "raw_record": {
+        "agent": "gemini",
+        "file_path": ".github/workflows/agents.md",
+        "id": "308",
+        "line": "22",
+        "project": "streamlit",
+        "text": "Never interpolate ${{ }} expressions directly in run: blocks when the value could originate from user input. This includes inputs.*, steps.*.outputs.*, github.head_ref, github.event.*.body, github.event.*.title, and any value derived from PR/issue content, branch names, or commit messages.",
+        "tool_charge": "CONSTRAINT",
+        "tool_modality": "absolute",
+        "tool_specificity": "named"
+      },
+      "record_id": 308,
+      "rule_id": "q88xgdmftag16dq9"
+    },
+    {
+      "adaptation": {
+        "coverage": "full_instruction",
+        "covered_clause": "End source-page YAML frontmatter titles with Source.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": "agents.md",
+        "instruction_line": 188,
+        "repository": "googleapis/mcp-toolbox",
+        "repository_license": "Apache-2.0"
+      },
+      "physical_line_end": 371,
+      "raw_record": {
+        "agent": "codex",
+        "file_path": "agents.md",
+        "id": "358",
+        "line": "188",
+        "project": "mcp-toolbox",
+        "text": "Title Convention: The YAML frontmatter title must always end with \"Source\" (e.g., title: \"Postgres Source\").",
+        "tool_charge": "DIRECTIVE",
+        "tool_modality": "absolute",
+        "tool_specificity": "named"
+      },
+      "record_id": 358,
+      "rule_id": "qfh0h1cf4wt5aeg4"
+    },
+    {
+      "adaptation": {
+        "coverage": "full_instruction",
+        "covered_clause": "Use extensionless routes for internal documentation page links.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": "agents.md",
+        "instruction_line": 104,
+        "repository": "cloudflare/cloudflare-docs",
+        "repository_license": "CC-BY-4.0"
+      },
+      "physical_line_end": 1356,
+      "raw_record": {
+        "agent": "gemini",
+        "file_path": "/home/cleverhoods/Projects/ai/reporails/researcher/data/corpus/cloudflare/cloudflare-docs/agents.md",
+        "id": "1337",
+        "line": "104",
+        "project": "cloudflare-docs",
+        "text": "No file extensions in links: /workers/get-started/ not /workers/get-started.mdx/",
+        "tool_charge": "CONSTRAINT",
+        "tool_modality": "direct",
+        "tool_specificity": "named"
+      },
+      "record_id": 1337,
+      "rule_id": "e3m4bdwj6gqcwpnn"
+    },
+    {
+      "adaptation": {
+        "coverage": "extracted_sub_rule",
+        "covered_clause": "Create C# and C++ source and test files with the standard license header, and do not remove that header.",
+        "excluded_clause": "Porting provenance and THIRD-PARTY-NOTICES.TXT updates require cross-event context and are outside this one-field benchmark sub-rule.",
+        "input_field": "/tool_input",
+        "trigger": "PreToolUse"
+      },
+      "normalized_source": {
+        "file_path": ".github/skills/code-review/skill.md",
+        "instruction_line": 619,
+        "repository": "dotnet/roslyn",
+        "repository_license": "MIT"
+      },
+      "physical_line_end": 764,
+      "raw_record": {
+        "agent": "copilot",
+        "file_path": ".github/skills/code-review/skill.md",
+        "id": "748",
+        "line": "619",
+        "project": "roslyn",
+        "text": "Retain copyright headers and license information. All C# and C++ source files must include the standard license header, including test files. When porting from other projects, retain original copyright and update THIRD-PARTY-NOTICES.TXT.",
+        "tool_charge": "DIRECTIVE",
+        "tool_modality": "absolute",
+        "tool_specificity": "abstract"
+      },
+      "record_id": 748,
+      "rule_id": "sr09vpkt60y74r0q"
+    }
+  ],
+  "source_corpus": {
+    "commit": "00272e946b95765654ef06fe1e7f8ae7aa7e0535",
+    "file": "validation_key.csv",
+    "file_sha256": "82dd3d2f1c02ae3e4045f4312e4c0b39c5d8f92b427b9e9da842a3e075676130",
+    "license": "CC-BY-4.0",
+    "repository": "reporails/30k-corpus"
+  }
+}

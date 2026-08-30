@@ -65,11 +65,155 @@ def _load_rules(rule_ids: set[str]) -> dict[str, LoadedRule]:
 
 
 def _remote_command(text: str) -> str:
+    value = _json_object(text)
+    return str(value.get("command") or "")
+
+
+def _json_object(text: str) -> dict:
     try:
         value = json.loads(text)
     except json.JSONDecodeError:
-        return ""
-    return str(value.get("command") or "") if isinstance(value, dict) else ""
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _is_generated_or_lock_path(value: str) -> bool:
+    path = value.strip("'\" ").replace("\\", "/").lower()
+    segments = [segment for segment in path.split("/") if segment not in {"", "."}]
+    name = segments[-1] if segments else ""
+    lock_names = {
+        "bun.lock",
+        "bun.lockb",
+        "cargo.lock",
+        "composer.lock",
+        "gemfile.lock",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "uv.lock",
+        "yarn.lock",
+    }
+    generated_directories = {
+        ".next",
+        ".nuxt",
+        "build",
+        "coverage",
+        "dist",
+        "generated",
+        "out",
+    }
+    return (
+        name in lock_names
+        or name.endswith(".generated.json")
+        or name.endswith(".generated.py")
+        or any(segment in generated_directories for segment in segments[:-1])
+    )
+
+
+def _actions_run_fragments(payload: str) -> list[str]:
+    """Return shell fragments located in YAML ``run`` values or blocks."""
+    fragments: list[str] = []
+    lines = payload.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        normalized = re.sub(r"^(\s*)[+-]\s?", r"\1", line)
+        match = re.match(r"^(\s*)run\s*:\s*(.*)$", normalized)
+        if not match:
+            index += 1
+            continue
+        indentation = len(match.group(1))
+        value = match.group(2)
+        if value not in {"|", ">", "|-", ">-", "|+", ">+"}:
+            fragments.append(value)
+            index += 1
+            continue
+        block: list[str] = []
+        index += 1
+        while index < len(lines):
+            candidate = re.sub(r"^(\s*)[+-]\s?", r"\1", lines[index])
+            if (
+                candidate.strip()
+                and len(candidate) - len(candidate.lstrip()) <= indentation
+            ):
+                break
+            block.append(candidate)
+            index += 1
+        fragments.append("\n".join(block))
+    return fragments
+
+
+def _contains_untrusted_actions_expression(value: str) -> bool:
+    expression = re.compile(
+        r"\$\{\{\s*(?:"
+        r"inputs\.\w+|"
+        r"steps\.\w+\.outputs\.\w+|"
+        r"github\.head_ref|"
+        r"github\.ref_name|"
+        r"github\.event\.head_commit\.message|"
+        r"github\.event\.(?:issue|pull_request)\.(?:body|title)|"
+        r"github\.event\.pull_request\.head\.(?:ref|label)"
+        r")\s*\}\}",
+        re.IGNORECASE,
+    )
+    return bool(expression.search(value))
+
+
+def _markdown_link_targets(value: str) -> list[str]:
+    return re.findall(r"(?<!!)\[[^\]]+\]\(\s*<?([^\s)>]+)>?", value)
+
+
+def _is_source_code_path(value: str) -> bool:
+    return Path(value).suffix.lower() in {".c", ".cc", ".cpp", ".cs", ".cxx", ".h"}
+
+
+def _has_license_header(value: str) -> bool:
+    header = "\n".join(value.splitlines()[:20]).lower()
+    return bool(
+        re.search(r"\bcopyright\b|\blicensed under\b|spdx-license-identifier", header)
+    )
+
+
+def _is_destructive_git_command(command: str) -> bool:
+    if not re.search(r"(?:^|[;&|()'\"]\s*)git\s+", command):
+        return False
+
+    clean = re.search(r"\bgit\s+clean\b([^;&|]*)", command)
+    if clean:
+        options = re.findall(r"(?:^|\s)(--[a-z-]+|-[a-z]+)", clean.group(1))
+        forced = "--force" in options or any(
+            option.startswith("-") and not option.startswith("--") and "f" in option
+            for option in options
+        )
+        dry_run = "--dry-run" in options or any(
+            option.startswith("-") and not option.startswith("--") and "n" in option
+            for option in options
+        )
+        if forced and not dry_run:
+            return True
+
+    restore = re.search(r"\bgit\s+restore\b([^;&|]*)", command)
+    if restore:
+        arguments = restore.group(1)
+        if "--worktree" in arguments or "--staged" not in arguments:
+            return True
+
+    return bool(
+        re.search(
+            r"\bgit\s+(?:"
+            r"reset\b[^;&|]*--hard|"
+            r"push\b[^;&|]*(?:--force(?:-with-lease)?\b|-f\b|"
+            r"--delete\b|\s:[^\s]+)|"
+            r"branch\b[^;&|]*(?:-d\b|--delete\b)|"
+            r"checkout\b[^;&|]*(?:--force\b|-f\b|--\s+\S+)|"
+            r"filter-(?:branch|repo)\b|"
+            r"reflog\s+expire\b|"
+            r"stash\s+(?:drop|clear)\b|"
+            r"update-ref\s+-d\b"
+            r")",
+            command,
+        )
+    )
 
 
 def _lexical(rule_id: str, text: str) -> str:
@@ -135,6 +279,106 @@ def _lexical(rule_id: str, text: str) -> str:
             command,
         )
         return "WARNING" if transfer and source and not non_source else "OK"
+    if rule_id == "98z9wvr031840p4g":
+        command = _remote_command(text).lower()
+        disallowed = re.search(
+            r"(?:^|[;&|()'\"]|\b(?:corepack|env|exec|sudo)\s+)\s*"
+            r"(?:npm|yarn)(?=\s|$)",
+            command,
+        )
+        return "WARNING" if disallowed else "OK"
+    if rule_id == "g3b7damk0b5xgdj6":
+        command = _remote_command(text).lower()
+        commit = re.search(r"\bgit\s+commit\b", command)
+        ai_name = r"(?:ai\b|chatgpt|claude(?:\s+code)?|copilot|gemini)"
+        attribution = (
+            rf"(?:assisted[- ]by|authored[- ]by|co-authored[- ]by|generated|"
+            rf"produced|written|contribution)[^'\"\n]{{0,36}}{ai_name}|"
+            rf"{ai_name}[^'\"\n]{{0,36}}(?:assisted|authored|generated|produced|"
+            rf"written|contribution)"
+        )
+        return "WARNING" if commit and re.search(attribution, command) else "OK"
+    if rule_id == "3pcxewp5hggr1vsn":
+        command = _remote_command(text).lower()
+        return "WARNING" if _is_destructive_git_command(command) else "OK"
+    if rule_id == "xb24rc14cpcrsf4g":
+        value = _json_object(text)
+        file_path = str(value.get("file_path") or "")
+        if file_path and _is_generated_or_lock_path(file_path):
+            if "content" in value or "patch" in value:
+                return "WARNING"
+        command = str(value.get("command") or "")
+        generated_target = any(
+            _is_generated_or_lock_path(token)
+            for token in re.findall(r"[^\s;&|]+", command)
+        )
+        mutation = re.search(
+            r"(?:^|[;&|]\s*)(?:git\s+add|rm|mv|cp|install|touch|truncate|"
+            r"sed\s+[^;&|]*-i\b|perl\s+[^;&|]*-i\b)",
+            command,
+            re.IGNORECASE,
+        )
+        return "WARNING" if generated_target and mutation else "OK"
+    if rule_id == "q88xgdmftag16dq9":
+        value = _json_object(text)
+        file_path = str(value.get("file_path") or "").replace("\\", "/").lower()
+        if ".github/workflows/" not in f"/{file_path.lstrip('/')}":
+            return "OK"
+        payload = str(value.get("patch") or value.get("content") or "")
+        unsafe = any(
+            _contains_untrusted_actions_expression(fragment)
+            for fragment in _actions_run_fragments(payload)
+        )
+        return "WARNING" if unsafe else "OK"
+    if rule_id == "qfh0h1cf4wt5aeg4":
+        value = _json_object(text)
+        file_path = str(value.get("file_path") or "")
+        if Path(file_path).suffix.lower() not in {".md", ".mdx"}:
+            return "OK"
+        payload = str(value.get("content") or value.get("patch") or "")
+        added_titles: list[str] = []
+        for line in payload.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("-") and not stripped.startswith("---"):
+                continue
+            normalized = stripped[1:].lstrip() if stripped.startswith("+") else stripped
+            match = re.match(r"title\s*:\s*(.*?)\s*$", normalized, re.IGNORECASE)
+            if match:
+                added_titles.append(match.group(1).strip("'\" "))
+        violates = any(
+            not re.search(r"(?:^|\s)source$", title, re.IGNORECASE)
+            for title in added_titles
+        )
+        return "WARNING" if violates else "OK"
+    if rule_id == "e3m4bdwj6gqcwpnn":
+        value = _json_object(text)
+        payload = str(value.get("patch") or value.get("content") or "")
+        for target in _markdown_link_targets(payload):
+            lowered_target = target.lower()
+            if re.match(r"(?:[a-z][a-z0-9+.-]*:|//|#)", lowered_target):
+                continue
+            page_path = re.split(r"[?#]", lowered_target, maxsplit=1)[0].rstrip("/")
+            if page_path.endswith((".md", ".mdx", ".markdown")):
+                return "WARNING"
+        return "OK"
+    if rule_id == "sr09vpkt60y74r0q":
+        value = _json_object(text)
+        file_path = str(value.get("file_path") or "")
+        if not _is_source_code_path(file_path):
+            return "OK"
+        if "content" in value:
+            return "OK" if _has_license_header(str(value["content"])) else "WARNING"
+        patch = str(value.get("patch") or "")
+        removed_header = any(
+            line.lstrip().startswith("-")
+            and re.search(
+                r"\bcopyright\b|\blicensed under\b|spdx-license-identifier",
+                line,
+                re.IGNORECASE,
+            )
+            for line in patch.splitlines()
+        )
+        return "WARNING" if removed_header else "OK"
     raise ValueError(f"no lexical baseline for {rule_id}")
 
 

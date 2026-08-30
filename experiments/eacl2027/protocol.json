@@ -1,85 +1,185 @@
 {
-  "protocol_version": "1.1.0",
-  "frozen_before_model_scoring": true,
+  "protocol_version": "2.0.0",
+  "study_freeze_status": {
+    "controlled": "completed under protocol 1.1.0 before protocol 2.0.0 was written",
+    "external_selected_rules": "frozen under protocol 2.0.0 before any model scoring",
+    "integrated_runtime": "frozen under protocol 2.0.0 before the final clean-commit run"
+  },
+  "history": [
+    {
+      "version": "1.1.0",
+      "date": "2026-08-30",
+      "status": "completed",
+      "scope": "controlled contrastive quality, bounded operational probes, and deterministic provenance workflow"
+    },
+    {
+      "version": "2.0.0",
+      "date": "2026-08-30",
+      "status": "frozen before scoring the new external selected-rule set or running the integrated production-path experiment",
+      "scope": "adds a selected external-instruction challenge set, paired system contrasts, and installed-hook-to-query-visible-finding measurements"
+    }
+  ],
   "amendments": [
     {
       "date": "2026-08-30",
-      "stage": "after preliminary scoring and before the final clean-commit run",
+      "stage": "after preliminary controlled scoring and before the final clean-commit run",
       "changes": [
         "Use paired contrastive cases rather than claiming every pair is a minimal textual edit.",
         "Report direct warmed judge-call latency and hook-process/IPC probes as separate boundaries.",
-        "Treat the originally planned event-to-outcome, resource, and matched Codex-turn measurements as not evaluated; they support no paper claim."
+        "Treat the originally planned event-to-outcome, resource, and matched Codex-turn measurements as not evaluated by protocol 1.1.0; they support no claim from that study."
       ],
       "unchanged": [
-        "rule sources",
-        "case inputs",
-        "case labels",
-        "systems",
+        "controlled rule sources",
+        "controlled case inputs",
+        "controlled case labels",
+        "controlled systems",
         "primary quality metric",
         "bootstrap procedure"
       ],
-      "reason": "The synthetic harness can identify process and IPC boundaries but cannot validly infer user-visible Codex latency or production resource behavior."
+      "reason": "The original synthetic harness identifies process and IPC boundaries but cannot infer user-visible Codex latency or production resource behavior."
     },
     {
       "date": "2026-08-30",
-      "stage": "after preliminary local scoring and before the final clean-commit run",
+      "stage": "after preliminary local scoring and before the final controlled clean-commit run",
       "changes": [
-        "Add one independently prompted open-model judge baseline (Qwen3-4B-Instruct-2507) using deterministic decoding and the same strict output parser."
+        "Add one separately prompted open-model judge baseline (Qwen3-4B-Instruct-2507) using deterministic decoding and the same strict output parser."
       ],
       "unchanged": [
-        "rule sources",
-        "case inputs",
-        "case labels",
+        "controlled rule sources",
+        "controlled case inputs",
+        "controlled case labels",
         "existing systems and outputs",
         "primary quality metric",
         "bootstrap procedure"
       ],
       "reason": "User-provided ALL-partition GPU capacity made a reproducible larger-model calibration baseline feasible."
+    },
+    {
+      "date": "2026-08-30",
+      "stage": "before scoring the external selected-rule set and before running the integrated experiment",
+      "changes": [
+        "Add an eight-rule selected-instruction challenge set whose rule intent comes from a pinned CC-BY-4.0 public instruction corpus and whose balanced inputs and labels are synthetic by construction.",
+        "Add paired PAW-minus-baseline contrasts over the already frozen controlled outputs; report this as a transparent post-hoc inferential analysis anchored to protocol 1.1.0.",
+        "Add an isolated full production-path experiment using the installed Codex wrapper, Unix socket, daemon, deployed rule revision, frozen PAW artifact, SQLite store, and verdict query API.",
+        "Measure query-visible findings, not rendered menu-bar latency or Codex turn latency."
+      ],
+      "unchanged": [
+        "protocol-1.1.0 controlled rule sources, inputs, labels, predictions, and manifests",
+        "protocol-1.1.0 operational and provenance outputs"
+      ],
+      "reason": "The paper needs evidence beyond the four controlled rules and direct integrated-runtime measurements while preserving the original measurement boundaries."
     }
   ],
   "research_questions": {
     "rq1": "How reliably do local compiled rules classify controlled, paired-contrast coding-agent events?",
     "rq2": "What direct-judge latency and ingress reliability behavior can be established at explicitly instrumented local boundaries?",
-    "rq3": "Does RAP preserve the exact managed-rule input and revision provenance needed for a deterministic inspect-and-refine workflow?"
+    "rq3": "Does RAP preserve the exact managed-rule input and revision provenance needed for a deterministic inspect-and-refine workflow?",
+    "rq4": "How well do the systems classify synthetic contrastive events for eight purposively selected, externally sourced instruction atoms?",
+    "rq5": "Across the installed hook-to-store path, what query-visible finding latency, loss, duplication, burst-drain behavior, resource use, and isolated recovery behavior are observed?"
   },
-  "dataset": {
-    "name": "rap-controlled-contrastive-v1",
-    "provenance": "synthetic_label_by_construction",
-    "rules": 4,
-    "pairs_per_rule": 24,
-    "cases_per_rule": 48,
-    "total_cases": 192,
-    "primary_split": "test",
-    "spec_examples_excluded": true,
-    "exact_duplicates_forbidden": true
+  "datasets": {
+    "controlled": {
+      "name": "rap-controlled-contrastive-v1",
+      "provenance": "synthetic_label_by_construction",
+      "rules": 4,
+      "pairs_per_rule": 24,
+      "cases_per_rule": 48,
+      "total_cases": 192,
+      "primary_split": "test",
+      "exact_spec_example_reuse_forbidden": true,
+      "exact_duplicates_forbidden": true
+    },
+    "external_selected_rules": {
+      "name": "rap-external-selected-rules-v1",
+      "source": "reporails/30k-corpus validation_key.csv",
+      "source_commit": "00272e946b95765654ef06fe1e7f8ae7aa7e0535",
+      "source_file_sha256": "82dd3d2f1c02ae3e4045f4312e4c0b39c5d8f92b427b9e9da842a3e075676130",
+      "source_license": "CC-BY-4.0",
+      "selection": "purposive eligibility screen for one-event, one-field observability plus behavior diversity; one extracted instruction atom per repository",
+      "selection_limit": "not a random, representative, or prevalence sample; no claim about the fraction of public instructions expressible by RAP or performance outside these selected rules",
+      "rules": 8,
+      "pairs_per_rule": 10,
+      "cases_per_rule": 20,
+      "total_cases": 160,
+      "primary_split": "test",
+      "instruction_provenance": "external public corpus, with an explicitly documented one-field sub-rule when the source record contains multiple obligations",
+      "input_provenance": "synthetic contrastive pairs with labels fixed by construction",
+      "case_authorship": "rule specifications and synthetic cases were co-designed; only exact reuse of specification examples is forbidden",
+      "exact_spec_example_reuse_forbidden": true,
+      "exact_duplicates_forbidden": true
+    }
   },
   "labels": {
     "negative": "OK",
-    "positive": ["INFO", "WARNING", "CRITICAL"],
+    "positive": [
+      "INFO",
+      "WARNING",
+      "CRITICAL"
+    ],
     "primary_task": "OK versus any non-OK result",
     "secondary_task": "exact output label"
   },
-  "primary_metric": "mean across rules of positive-class F1",
+  "primary_metrics": {
+    "controlled": "mean across rules of positive-class F1",
+    "external_selected_rules": "mean across the eight selected rules of positive-class F1"
+  },
   "secondary_metrics": [
     "pooled positive-class precision",
     "pooled positive-class recall",
     "per-rule positive-class precision/recall/F1",
     "exact-label accuracy",
     "invalid-output rate",
-    "paired-cluster bootstrap 95% confidence intervals"
+    "controlled pair-cluster bootstrap 95% confidence intervals",
+    "external fixed-rule, within-rule pair bootstrap 95% confidence intervals",
+    "paired exact correctness tests with Holm adjustment where multiple baseline contrasts are reported"
   ],
   "bootstrap": {
-    "samples": 5000,
-    "seed": 20270830,
-    "cluster": "pair_id"
+    "controlled_samples": 5000,
+    "controlled_seed": 20270830,
+    "external_samples": 5000,
+    "external_seed": 20270831,
+    "controlled_cluster": "pair_id",
+    "external_primary_resampling": "keep all eight purposively selected rules fixed and, within each rule, sample ten complete contrastive pairs with replacement",
+    "external_exploratory_sensitivity": "hierarchical rule-then-pair resampling, reported only as a sensitivity analysis and not as population-level uncertainty"
   },
-  "systems": [
-    "always-ok",
-    "rule-specific lexical baseline",
-    "PAW standard mapper",
-    "PAW finetuned compiler",
-    "Qwen3-4B-Instruct-2507 independent prompted judge"
-  ],
+  "systems": {
+    "controlled": [
+      "always-ok",
+      "rule-specific lexical baseline",
+      "PAW standard mapper",
+      "PAW finetuned compiler",
+      "Qwen3-4B-Instruct-2507 separately prompted judge"
+    ],
+    "external_selected_rules": [
+      "always-ok",
+      "rule-specific lexical baseline",
+      "PAW standard mapper",
+      "PAW finetuned compiler",
+      "Qwen3-4B-Instruct-2507 separately prompted judge"
+    ]
+  },
+  "integrated_experiment": {
+    "synthetic_inputs": true,
+    "rule_id": "78v34vpkzm2jp4rx",
+    "compiler": "paw-ft-bs48",
+    "compiler_snapshot": "paw-ft-bs48-20260530",
+    "warmups_excluded": 3,
+    "sequential_repetitions": 30,
+    "burst_size": 24,
+    "per_finding_timeout_seconds": 20,
+    "duplicate_deliveries": 2,
+    "failure_injections": [
+      "terminate the isolated PAW worker after warm measurements and require the next event to produce a finding",
+      "gracefully stop and restart the isolated daemon and require the next event to produce a finding"
+    ],
+    "start_boundary": "parent immediately before launching the installed project hook wrapper",
+    "end_boundary": "first successful daemon verdict query returning the exact evaluated input",
+    "excluded": [
+      "Codex scheduling of its asynchronous hook",
+      "rendering or human perception of the macOS menu-bar UI",
+      "remote compilation because the deployed PAW artifact is already frozen"
+    ]
+  },
   "exclusions": [
     "empty inputs",
     "inputs exceeding the rule byte limit",
@@ -87,9 +187,20 @@
     "any native event not manually approved for release"
   ],
   "claim_gates": {
-    "accurate": "macro positive-class F1 >= 0.80",
-    "high_precision": "pooled precision >= 0.85",
-    "timely": "warm p95 event-to-outcome latency <= 3.0 seconds (not evaluated; no claim)",
-    "low_handoff_overhead": "p95 hook handoff <= 0.250 seconds (not met in the preliminary process-boundary probe; no claim)"
+    "controlled_accurate": "macro positive-class F1 >= 0.80",
+    "controlled_high_precision": "pooled precision >= 0.85",
+    "external_selected_rules_accurate": "macro positive-class F1 >= 0.80 on the complete frozen eight-rule selected-instruction challenge set",
+    "integrated_sequential_reliable": "zero missing findings and zero duplicate findings",
+    "integrated_sequential_timely": "p95 query-visible finding latency <= 3.0 seconds",
+    "integrated_burst_reliable": "zero missing findings at burst size 24",
+    "integrated_burst_timely": "p95 query-visible finding latency <= 15.0 seconds",
+    "integrated_recovery": "both isolated worker replacement and daemon restart yield a query-visible finding within 20 seconds",
+    "rendered_ui_latency": "not measured; no claim",
+    "codex_turn_latency": "not measured; no claim"
+  },
+  "failure_policy": {
+    "external_selected_rules": "retain every frozen case and every per-case invalid output or runtime error after system preparation succeeds; a compiler or model preparation failure marks that complete system run unavailable and supports no partial score; do not drop a hard rule or selectively rerun cases",
+    "integrated": "the canonical run either completes every declared invariant and writes one result or is reported as a failed study run with no performance claim; do not selectively rerun a failed canonical execution without a dated protocol amendment",
+    "deviations": "record any protocol change with stage, reason, and unchanged elements before using the affected result"
   }
 }

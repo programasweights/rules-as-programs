@@ -1,0 +1,325 @@
+{
+  "analysis_id": "eacl2027-paired-comparisons-v1",
+  "comparisons": {
+    "lexical": {
+      "binary_detection_correctness": {
+        "case_discordance": {
+          "both_correct": 162,
+          "both_incorrect": 1,
+          "comparator_only_correct": 7,
+          "focal_only_correct": 22
+        },
+        "definition": "OK versus any non-OK prediction; INVALID is incorrect",
+        "exact_paired_test": {
+          "cluster": "pair_id",
+          "exact_fraction": {
+            "effective_assignments": "536870912",
+            "extreme_assignments": "4364792"
+          },
+          "holm_adjusted_p_value": 0.008130058646202087,
+          "holm_family": [
+            "lexical",
+            "qwen3_4b"
+          ],
+          "method": "two-sided exact paired cluster randomization",
+          "nonzero_pair_contributions": 29,
+          "null": "exchangeable system labels within each complete contrast pair",
+          "observed_correct_case_difference": 15,
+          "p_value": 0.008130058646202087,
+          "pair_correct_count_difference_histogram": {
+            "-1": 7,
+            "0": 67,
+            "1": 22
+          },
+          "pairs": 96,
+          "reject_at_0.05_after_holm": true
+        }
+      },
+      "comparator_system": "lexical",
+      "exact_label_correctness": {
+        "case_discordance": {
+          "both_correct": 162,
+          "both_incorrect": 1,
+          "comparator_only_correct": 7,
+          "focal_only_correct": 22
+        },
+        "exact_paired_test": {
+          "cluster": "pair_id",
+          "exact_fraction": {
+            "effective_assignments": "536870912",
+            "extreme_assignments": "4364792"
+          },
+          "holm_adjusted_p_value": 0.008130058646202087,
+          "holm_family": [
+            "lexical",
+            "qwen3_4b"
+          ],
+          "method": "two-sided exact paired cluster randomization",
+          "nonzero_pair_contributions": 29,
+          "null": "exchangeable system labels within each complete contrast pair",
+          "observed_correct_case_difference": 15,
+          "p_value": 0.008130058646202087,
+          "pair_correct_count_difference_histogram": {
+            "-1": 7,
+            "0": 67,
+            "1": 22
+          },
+          "pairs": 96,
+          "reject_at_0.05_after_holm": true
+        }
+      },
+      "focal_system": "paw:paw-ft-bs48",
+      "macro_f1_exact_test": {
+        "reason": "macro-F1 is non-additive; the paired cluster-bootstrap interval is reported without a case-level McNemar test",
+        "status": "not_run"
+      },
+      "paired_cluster_bootstrap_95": {
+        "exact_accuracy_delta": {
+          "high": 0.13020833333333337,
+          "low": 0.02604166666666663
+        },
+        "macro_f1_delta": {
+          "high": 0.16916580143028995,
+          "low": 0.04256330347370469
+        }
+      },
+      "point_estimates": {
+        "comparator": {
+          "exact_accuracy": 0.8802083333333334,
+          "macro_f1": 0.8627184746497183
+        },
+        "delta_focal_minus_comparator": {
+          "exact_accuracy": 0.078125,
+          "macro_f1": 0.09824283295024472
+        },
+        "focal": {
+          "exact_accuracy": 0.9583333333333334,
+          "macro_f1": 0.960961307599963
+        }
+      }
+    },
+    "qwen3_4b": {
+      "binary_detection_correctness": {
+        "case_discordance": {
+          "both_correct": 150,
+          "both_incorrect": 5,
+          "comparator_only_correct": 3,
+          "focal_only_correct": 34
+        },
+        "definition": "OK versus any non-OK prediction; INVALID is incorrect",
+        "exact_paired_test": {
+          "cluster": "pair_id",
+          "exact_fraction": {
+            "effective_assignments": "68719476736",
+            "extreme_assignments": "14424"
+          },
+          "holm_adjusted_p_value": 4.1979365050792694e-07,
+          "holm_family": [
+            "lexical",
+            "qwen3_4b"
+          ],
+          "method": "two-sided exact paired cluster randomization",
+          "nonzero_pair_contributions": 36,
+          "null": "exchangeable system labels within each complete contrast pair",
+          "observed_correct_case_difference": 31,
+          "p_value": 2.0989682525396347e-07,
+          "pair_correct_count_difference_histogram": {
+            "-1": 3,
+            "0": 60,
+            "1": 32,
+            "2": 1
+          },
+          "pairs": 96,
+          "reject_at_0.05_after_holm": true
+        }
+      },
+      "comparator_system": "open-judge:Qwen/Qwen3-4B-Instruct-2507",
+      "exact_label_correctness": {
+        "case_discordance": {
+          "both_correct": 150,
+          "both_incorrect": 5,
+          "comparator_only_correct": 3,
+          "focal_only_correct": 34
+        },
+        "exact_paired_test": {
+          "cluster": "pair_id",
+          "exact_fraction": {
+            "effective_assignments": "68719476736",
+            "extreme_assignments": "14424"
+          },
+          "holm_adjusted_p_value": 4.1979365050792694e-07,
+          "holm_family": [
+            "lexical",
+            "qwen3_4b"
+          ],
+          "method": "two-sided exact paired cluster randomization",
+          "nonzero_pair_contributions": 36,
+          "null": "exchangeable system labels within each complete contrast pair",
+          "observed_correct_case_difference": 31,
+          "p_value": 2.0989682525396347e-07,
+          "pair_correct_count_difference_histogram": {
+            "-1": 3,
+            "0": 60,
+            "1": 32,
+            "2": 1
+          },
+          "pairs": 96,
+          "reject_at_0.05_after_holm": true
+        }
+      },
+      "focal_system": "paw:paw-ft-bs48",
+      "macro_f1_exact_test": {
+        "reason": "macro-F1 is non-additive; the paired cluster-bootstrap interval is reported without a case-level McNemar test",
+        "status": "not_run"
+      },
+      "paired_cluster_bootstrap_95": {
+        "exact_accuracy_delta": {
+          "high": 0.21354166666666674,
+          "low": 0.10416666666666674
+        },
+        "macro_f1_delta": {
+          "high": 0.15846310163044505,
+          "low": 0.08577354544666063
+        }
+      },
+      "point_estimates": {
+        "comparator": {
+          "exact_accuracy": 0.796875,
+          "macro_f1": 0.8385397169620536
+        },
+        "delta_focal_minus_comparator": {
+          "exact_accuracy": 0.16145833333333337,
+          "macro_f1": 0.12242159063790936
+        },
+        "focal": {
+          "exact_accuracy": 0.9583333333333334,
+          "macro_f1": 0.960961307599963
+        }
+      }
+    }
+  },
+  "frozen_predictions_changed": false,
+  "interpretation_limits": [
+    "This comparison was added after protocol 1.1.0 and all predictions were frozen.",
+    "Intervals condition on the fixed author-constructed cases and do not capture author-sampling uncertainty.",
+    "Exact tests concern paired correctness, not the non-additive macro-F1 metric.",
+    "Exact-test p-values use Holm correction across the two declared comparator analyses."
+  ],
+  "inventory": {
+    "exact_errors_by_system": {
+      "lexical": 23,
+      "paw_finetuned": 8,
+      "qwen3_4b": 39
+    },
+    "path": "experiments/eacl2027/outputs/frozen/paired-disagreements-v1.jsonl",
+    "prediction_disagreements": 62,
+    "rows": 63,
+    "rows_with_any_binary_error": 63,
+    "rows_with_any_exact_error": 63,
+    "selection": "all cases with any focal/comparator prediction disagreement or any exact-label error",
+    "sha256": "b89213dfcbee79fc4270d4fae58476447433b57cd5a7dcbda6c900b33e997bc4"
+  },
+  "method": {
+    "bootstrap": {
+      "cluster": "pair_id",
+      "confidence": 0.95,
+      "interval": "percentile",
+      "paired_system_draws": true,
+      "samples": 5000,
+      "seed": 20270830
+    },
+    "comparators": [
+      "open-judge:Qwen/Qwen3-4B-Instruct-2507",
+      "lexical"
+    ],
+    "deltas": "focal minus comparator",
+    "exact_test": "two-sided exact sign-flip randomization of system labels within each complete contrast-pair cluster",
+    "focal_system": "paw:paw-ft-bs48",
+    "multiplicity": "Holm adjustment across the two declared comparators, applied separately to exact-label and binary-detection correctness"
+  },
+  "provenance": {
+    "analysis_script_path": "experiments/eacl2027/analyze_paired.py",
+    "analysis_script_sha256": "3098ff96cb832c59719ceb9819e278fa45b909123db8e9e31fad5ca020247ee7",
+    "dataset_cases": 192,
+    "dataset_manifest_path": "experiments/eacl2027/data/public/controlled-manifest.json",
+    "dataset_manifest_sha256": "a6ad03793d85bb5bb53e407cb3e08794950627436f06214a61c1a83e0fca5554",
+    "dataset_path": "experiments/eacl2027/data/public/controlled.jsonl",
+    "dataset_sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561",
+    "input_run_source_commit": "91dbb03d6d332678e717bf8f0640110ae1f40402",
+    "inputs": {
+      "lexical": {
+        "cases": 192,
+        "key": "lexical",
+        "manifest_path": "experiments/eacl2027/outputs/frozen/lexical.jsonl.manifest.json",
+        "manifest_sha256": "0528b057babbc1d9ccb8d02f40f41b4bd8797642010b9bba3ece67f8c8c999ea",
+        "output_sha256": "6577297215dbb2dfac3e120a5460332ff0204e94d8dec9d9f94b7d38b9ac2462",
+        "path": "experiments/eacl2027/outputs/frozen/lexical.jsonl",
+        "source_commit": "91dbb03d6d332678e717bf8f0640110ae1f40402",
+        "system": "lexical"
+      },
+      "paw_finetuned": {
+        "cases": 192,
+        "compiler": "paw-ft-bs48",
+        "compiler_snapshots": {
+          "78v34vpkzm2jp4rx": "paw-ft-bs48-20260530",
+          "fdg0z9837mz4v0ka": "paw-ft-bs48-20260530",
+          "gn3xtat6av4fy690": "paw-ft-bs48-20260530",
+          "hrmhr6hr13ffv8nb": "paw-ft-bs48-20260530"
+        },
+        "key": "paw_finetuned",
+        "manifest_path": "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl.manifest.json",
+        "manifest_sha256": "1fc6c24eb9e494d14848a1c0d569683bbe43c273463c0659bb873b400047fbf6",
+        "output_sha256": "249c427ac65d531f2db390a2c1f957fdf2b7df15e49b15cf776eab582d4d24f2",
+        "path": "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl",
+        "program_ids": {
+          "78v34vpkzm2jp4rx": "b619825b8bc23bab4c07",
+          "fdg0z9837mz4v0ka": "3db9a70d1472e94ffc7f",
+          "gn3xtat6av4fy690": "551b62ad8213566b5114",
+          "hrmhr6hr13ffv8nb": "e62ef279de8b51c5505f"
+        },
+        "source_commit": "91dbb03d6d332678e717bf8f0640110ae1f40402",
+        "system": "paw:paw-ft-bs48"
+      },
+      "qwen3_4b": {
+        "cases": 192,
+        "key": "qwen3_4b",
+        "manifest_path": "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl.manifest.json",
+        "manifest_sha256": "e5072ac15c1d22f73a8b22519fbae024505aa214d308a6333da5e0153af71e6a",
+        "model": "Qwen/Qwen3-4B-Instruct-2507",
+        "model_commit": "cdbee75f17c01a7cc42f958dc650907174af0554",
+        "output_sha256": "cc51d5b364c1a098676af53d500199634acc31a34d8ab48a0ed2f0df4989cf9d",
+        "path": "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl",
+        "source_commit": "91dbb03d6d332678e717bf8f0640110ae1f40402",
+        "system": "open-judge:Qwen/Qwen3-4B-Instruct-2507"
+      }
+    },
+    "source_protocol": {
+      "artifact_commit": "543dd90991a3848a6d6a53011f36106cdead9ad2",
+      "historical_path": "experiments/eacl2027/protocol.json",
+      "required_to_match_current_checkout": false,
+      "sha256_at_artifact_commit": "01c6ebc1c597f1b59242fd7cdee92e53398f7d5cbe8151ef9fc1e8106e5445fb",
+      "version": "1.1.0"
+    },
+    "tracked_inputs": [
+      "experiments/eacl2027/data/public/controlled-manifest.json",
+      "experiments/eacl2027/data/public/controlled.jsonl",
+      "experiments/eacl2027/outputs/frozen/lexical.jsonl",
+      "experiments/eacl2027/outputs/frozen/lexical.jsonl.manifest.json",
+      "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl",
+      "experiments/eacl2027/outputs/frozen/paw-finetuned.jsonl.manifest.json",
+      "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl",
+      "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl.manifest.json"
+    ],
+    "validation": {
+      "all_run_git_states_clean": true,
+      "all_runs_share_source_commit": true,
+      "controlled_dataset_manifest": true,
+      "run_case_signatures_match_dataset": true,
+      "run_manifest_hashes_recorded": true,
+      "run_output_hashes": true,
+      "tracked_inputs_match_head": true
+    }
+  },
+  "schema_version": 1,
+  "status": "post_hoc_comparison_of_previously_frozen_predictions"
+}
