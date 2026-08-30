@@ -6,6 +6,7 @@ as background hooks and the hook client always returns an empty JSON object.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -32,6 +33,41 @@ from ..base import Adapter
 # One lightweight client observes every event that can carry a rule input or
 # useful session context. These names are the public Codex hook names.
 SUBSCRIBED_HOOKS = tuple(definition.hook for definition in ORDERED_TRIGGERS)
+
+
+def event_identity(event: Event) -> str:
+    """Return a stable identity for duplicate deliveries of one Codex hook.
+
+    Codex can invoke both a global and a project-local RAP handler for the same
+    lifecycle event.  Normalization intentionally gives each in-memory Event a
+    fresh id and timestamp, so neither field belongs in the ingress identity.
+    The normalized kind remains part of the key because one raw hook can emit
+    multiple meaningful events (for example, Stop emits a message and a
+    session checkpoint).
+    """
+    raw = event.raw_payload
+    if not isinstance(raw, dict) or not raw:
+        return ""
+    session_id = str(raw.get("session_id") or event.conversation_id)
+    turn_id = str(raw.get("turn_id") or event.generation_id)
+    hook_name = str(raw.get("hook_event_name") or event.hook_name)
+    if not hook_name:
+        return ""
+    tool_use_id = str(raw.get("tool_use_id") or "")
+    if tool_use_id:
+        source_identity = f"tool:{tool_use_id}"
+    else:
+        canonical = json.dumps(
+            event.payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        source_identity = (
+            "payload:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        )
+    return "\x00".join((session_id, turn_id, hook_name, event.kind, source_identity))
 
 
 def _project_root(raw: dict[str, Any]) -> str:
@@ -120,25 +156,41 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
     if name == "PreToolUse":
         tool_name = str(raw.get("tool_name") or "")
         tool_input = raw.get("tool_input")
-        events = [event(TOOL_USE, {
-            "tool_name": tool_name,
-            "tool_input": tool_input,
-            "tool_use_id": raw.get("tool_use_id", ""),
-        })]
+        events = [
+            event(
+                TOOL_USE,
+                {
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                    "tool_use_id": raw.get("tool_use_id", ""),
+                },
+            )
+        ]
         normalized_name = "".join(char for char in tool_name.lower() if char.isalnum())
         if "askquestion" in normalized_name or "requestuserinput" in normalized_name:
-            events.append(event(QUESTION_REQUEST, {
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "question": _question_text(tool_input),
-            }, hook_name=""))
+            events.append(
+                event(
+                    QUESTION_REQUEST,
+                    {
+                        "tool_name": tool_name,
+                        "tool_input": tool_input,
+                        "question": _question_text(tool_input),
+                    },
+                    hook_name="",
+                )
+            )
         return events
 
     if name == "PermissionRequest":
-        return [event("permission_request", {
-            "tool_name": raw.get("tool_name", ""),
-            "tool_input": raw.get("tool_input"),
-        })]
+        return [
+            event(
+                "permission_request",
+                {
+                    "tool_name": raw.get("tool_name", ""),
+                    "tool_input": raw.get("tool_input"),
+                },
+            )
+        ]
 
     if name == "PostToolUse":
         tool_name = str(raw.get("tool_name") or "")
@@ -161,10 +213,14 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
         # no hook name, so Stop rules evaluate exactly once.
         return [
             event(MESSAGE, {"text": raw.get("last_assistant_message")}),
-            event(SESSION_STOP, {
-                "status": "completed",
-                "stop_hook_active": bool(raw.get("stop_hook_active")),
-            }, hook_name=""),
+            event(
+                SESSION_STOP,
+                {
+                    "status": "completed",
+                    "stop_hook_active": bool(raw.get("stop_hook_active")),
+                },
+                hook_name="",
+            ),
         ]
 
     if name == "SessionStart":
@@ -172,16 +228,26 @@ def normalize(raw: dict[str, Any]) -> list[Event]:
     if name == "SessionEnd":
         return [event("session_end", {"reason": raw.get("reason", "")})]
     if name == "SubagentStart":
-        return [event("subagent_start", {
-            "agent_id": raw.get("agent_id", ""),
-            "agent_type": raw.get("agent_type", ""),
-        })]
+        return [
+            event(
+                "subagent_start",
+                {
+                    "agent_id": raw.get("agent_id", ""),
+                    "agent_type": raw.get("agent_type", ""),
+                },
+            )
+        ]
     if name == "SubagentStop":
-        return [event("subagent_stop", {
-            "agent_id": raw.get("agent_id", ""),
-            "agent_type": raw.get("agent_type", ""),
-            "summary": raw.get("last_assistant_message"),
-        })]
+        return [
+            event(
+                "subagent_stop",
+                {
+                    "agent_id": raw.get("agent_id", ""),
+                    "agent_type": raw.get("agent_type", ""),
+                    "summary": raw.get("last_assistant_message"),
+                },
+            )
+        ]
     if name == "PreCompact":
         return [event("pre_compact", {"trigger": raw.get("trigger", "")})]
     if name == "PostCompact":
@@ -207,13 +273,11 @@ def _write_wrapper(scope: str, project_root: str | None) -> Path:
         "#!/bin/sh\n"
         "# Auto-generated by `rap init`. Feeds Codex lifecycle events to the\n"
         "# Rules-as-Programs daemon. Observation-only and fail-open.\n"
-        f'exec {shlex.quote(sys.executable)} '
+        f"exec {shlex.quote(sys.executable)} "
         '-m rules_as_programs.adapters.codex.hook_client "$@"\n'
     )
     wrapper.write_text(body, encoding="utf-8")
-    wrapper.chmod(
-        wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-    )
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return wrapper
 
 
@@ -230,31 +294,47 @@ def _handler(command: str, hook_name: str) -> dict[str, Any]:
     return handler
 
 
-def _upgrade_group_command(
-    group: Any,
-    command: str,
-    hook_name: str,
-) -> bool:
-    """Refresh an existing RAP handler to the current Codex semantics."""
-    if not isinstance(group, dict):
-        return False
-    handlers = group.get("hooks")
-    if not isinstance(handlers, list):
-        return False
+def _is_rap_handler(item: Any) -> bool:
+    """Recognize current and legacy spellings of the installed RAP wrapper."""
+    return isinstance(item, dict) and _WRAPPER_NAME in str(item.get("command", ""))
+
+
+def _consolidate_rap_handlers(
+    groups: list[Any], command: str, hook_name: str
+) -> tuple[list[Any], bool]:
+    """Keep exactly one upgraded RAP handler while preserving other hooks."""
     found = False
-    for index, item in enumerate(handlers):
-        if not isinstance(item, dict) or item.get("command") != command:
+    consolidated: list[Any] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            consolidated.append(group)
             continue
-        # Preserve harmless display metadata on an existing entry, but always
-        # replace execution fields so pre-migration synchronous handlers become
-        # background hooks. SessionEnd is the documented synchronous exception.
-        updated = dict(item)
-        updated.pop("async", None)
-        updated.pop("timeout", None)
-        updated.update(_handler(command, hook_name))
-        handlers[index] = updated
-        found = True
-    return found
+        handlers = group.get("hooks")
+        if not isinstance(handlers, list):
+            consolidated.append(group)
+            continue
+        kept_handlers: list[Any] = []
+        for item in handlers:
+            if not _is_rap_handler(item):
+                kept_handlers.append(item)
+                continue
+            if found:
+                continue
+            # Preserve harmless display metadata on the first existing entry,
+            # but replace execution fields and command quoting.  Older builds
+            # sometimes stored an extra quoted absolute path, which otherwise
+            # evades exact-string matching and creates duplicate deliveries.
+            updated = dict(item)
+            updated.pop("async", None)
+            updated.pop("timeout", None)
+            updated.update(_handler(command, hook_name))
+            kept_handlers.append(updated)
+            found = True
+        if kept_handlers:
+            updated_group = dict(group)
+            updated_group["hooks"] = kept_handlers
+            consolidated.append(updated_group)
+    return consolidated, found
 
 
 def _merge_hooks_json(path: Path, command: str) -> None:
@@ -274,12 +354,10 @@ def _merge_hooks_json(path: Path, command: str) -> None:
         groups = hooks.setdefault(hook_name, [])
         if not isinstance(groups, list):
             groups = []
-            hooks[hook_name] = groups
-        if not any(
-            _upgrade_group_command(group, command, hook_name)
-            for group in groups
-        ):
+        groups, found = _consolidate_rap_handlers(groups, command, hook_name)
+        if not found:
             groups.append({"hooks": [_handler(command, hook_name)]})
+        hooks[hook_name] = groups
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
@@ -309,13 +387,7 @@ def remove_installed_hooks(path: Path) -> bool:
             if not isinstance(handlers, list):
                 kept_groups.append(group)
                 continue
-            kept_handlers = [
-                item for item in handlers
-                if not (
-                    isinstance(item, dict)
-                    and _WRAPPER_NAME in str(item.get("command", ""))
-                )
-            ]
+            kept_handlers = [item for item in handlers if not (_is_rap_handler(item))]
             if len(kept_handlers) != len(handlers):
                 changed = True
             if kept_handlers:

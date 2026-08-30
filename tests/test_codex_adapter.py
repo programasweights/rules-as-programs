@@ -8,15 +8,15 @@ from rules_as_programs.adapters.codex import projects
 from rules_as_programs.adapters.codex.adapter import (
     CodexAdapter,
     SUBSCRIBED_HOOKS,
+    event_identity,
+    normalize,
     remove_installed_hooks,
 )
 from rules_as_programs.core.rule import new_rule_id
 from rules_as_programs import rules_api
 
 
-def test_codex_hook_install_is_nested_async_and_idempotent(
-    monkeypatch, tmp_path
-):
+def test_codex_hook_install_is_nested_async_and_idempotent(monkeypatch, tmp_path):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "home"))
     project = tmp_path / "project"
     project.mkdir()
@@ -24,25 +24,31 @@ def test_codex_hook_install_is_nested_async_and_idempotent(
     hooks_path = config.codex_hooks_path("project", project)
     hooks_path.parent.mkdir(parents=True)
     rap_command = '"$(git rev-parse --show-toplevel)/.codex/hooks/rap-hook.sh"'
-    hooks_path.write_text(json.dumps({
-        "description": "keep me",
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "matcher": "Bash",
-                    "hooks": [{"type": "command", "command": "other-hook"}],
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "description": "keep me",
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{"type": "command", "command": "other-hook"}],
+                        },
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": rap_command,
+                                    "timeout": 30,
+                                    "statusMessage": "Existing RAP hook",
+                                }
+                            ],
+                        },
+                    ],
                 },
-                {
-                    "hooks": [{
-                        "type": "command",
-                        "command": rap_command,
-                        "timeout": 30,
-                        "statusMessage": "Existing RAP hook",
-                    }],
-                },
-            ],
-        },
-    }))
+            }
+        )
+    )
 
     adapter = CodexAdapter()
     adapter.install("project", str(project))
@@ -82,11 +88,99 @@ def test_codex_hook_install_is_nested_async_and_idempotent(
     assert remove_installed_hooks(hooks_path)
     cleaned = json.loads(hooks_path.read_text())
     assert cleaned["hooks"] == {
-        "PreToolUse": [{
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "other-hook"}],
-        }],
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": "other-hook"}],
+            }
+        ],
     }
+
+
+def test_global_install_collapses_legacy_quoted_rap_handlers(monkeypatch, tmp_path):
+    codex_home = tmp_path / "home"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    hooks_path = config.codex_hooks_path("global")
+    hooks_path.parent.mkdir(parents=True)
+    wrapper = codex_home / "hooks" / "rap-hook.sh"
+    legacy_command = repr(str(wrapper))
+    hooks_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": legacy_command,
+                                    "statusMessage": "Legacy RAP hook",
+                                }
+                            ]
+                        },
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": str(wrapper),
+                                    "async": True,
+                                    "timeout": 5,
+                                }
+                            ]
+                        },
+                    ],
+                },
+            }
+        )
+    )
+
+    CodexAdapter().install("global")
+
+    data = json.loads(hooks_path.read_text())
+    handlers = [
+        handler
+        for group in data["hooks"]["PreToolUse"]
+        for handler in group.get("hooks", [])
+        if "rap-hook.sh" in str(handler.get("command", ""))
+    ]
+    assert len(handlers) == 1
+    assert handlers[0]["command"] == str(wrapper)
+    assert handlers[0]["async"] is True
+    assert handlers[0]["timeout"] == 5
+    assert handlers[0]["statusMessage"] == "Legacy RAP hook"
+
+
+def test_codex_event_identity_is_stable_across_duplicate_deliveries(tmp_path):
+    raw = {
+        "session_id": "session",
+        "turn_id": "turn",
+        "hook_event_name": "PreToolUse",
+        "cwd": str(tmp_path),
+        "tool_name": "Bash",
+        "tool_use_id": "tool-1",
+        "tool_input": {"command": "pytest -q"},
+    }
+    first = normalize(raw)[0]
+    second = normalize(dict(raw))[0]
+
+    assert first.id != second.id
+    assert event_identity(first) == event_identity(second)
+
+    distinct = normalize({**raw, "tool_use_id": "tool-2"})[0]
+    assert event_identity(first) != event_identity(distinct)
+
+
+def test_codex_event_identity_keeps_stop_events_distinct(tmp_path):
+    raw = {
+        "session_id": "session",
+        "turn_id": "turn",
+        "hook_event_name": "Stop",
+        "cwd": str(tmp_path),
+        "last_assistant_message": "Done.",
+    }
+    message, checkpoint = normalize(raw)
+
+    assert event_identity(message) != event_identity(checkpoint)
 
 
 def test_project_discovery_reads_codex_state_database(monkeypatch, tmp_path):
@@ -125,9 +219,7 @@ def test_project_discovery_reads_codex_state_database(monkeypatch, tmp_path):
     assert [item["name"] for item in discovered] == ["Second", "First"]
 
 
-def test_legacy_cursor_state_is_copied_without_overwriting_codex(
-    monkeypatch, tmp_path
-):
+def test_legacy_cursor_state_is_copied_without_overwriting_codex(monkeypatch, tmp_path):
     project = tmp_path / "project"
     legacy = project / ".cursor" / "rules-as-programs"
     target = project / ".codex" / "rules-as-programs"

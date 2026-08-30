@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from collections import OrderedDict
 
 from rules_as_programs import rules_api
+from rules_as_programs.adapters.codex.adapter import normalize
 from rules_as_programs.core import audit, evaluation_log
 from rules_as_programs.core import revisions
 from rules_as_programs.core.attention import AttentionStore
 from rules_as_programs.core.engine import Engine, RuleContext
-from rules_as_programs.core.events import Event, MESSAGE, SESSION_STOP
+from rules_as_programs.core.events import Event, MESSAGE
 from rules_as_programs.core.ledger import Ledger
 from rules_as_programs.core.rule import LoadedRule, new_rule_id
 from rules_as_programs.core.store import Verdict, VerdictStore
@@ -29,8 +31,7 @@ class FakeRuntime:
         return {
             "name": name or "future-standard",
             "description": name or "Future Standard",
-            "compiler_kind": (
-                "finetune_lora" if name else "mapper_lora"),
+            "compiler_kind": ("finetune_lora" if name else "mapper_lora"),
             "supports_local_sdk": True,
             "latest_snapshot": "snapshot",
         }
@@ -45,12 +46,126 @@ class FakeRuntime:
         return self.output
 
 
+def _ingress_test_daemon():
+    daemon = Daemon.__new__(Daemon)
+    daemon._ingress_seen = OrderedDict()
+    daemon._ingress_dedup_lock = threading.Lock()
+    daemon._ingress_duplicate_count = 0
+    return daemon
+
+
+def test_ingress_dedup_cache_rejects_duplicates_then_expires():
+    daemon = _ingress_test_daemon()
+    event = Event(
+        kind=MESSAGE,
+        conversation_id="session",
+        generation_id="turn",
+        project_root="/project",
+        hook_name="Stop",
+        raw_payload={
+            "session_id": "session",
+            "turn_id": "turn",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "Done.",
+        },
+        payload={"text": "Done."},
+    )
+
+    assert daemon._admit_ingress_event(event, now=10.0)
+    assert not daemon._admit_ingress_event(event, now=10.1)
+    assert daemon._ingress_duplicate_count == 1
+    assert daemon._admit_ingress_event(
+        event, now=10.1 + daemon.INGRESS_DEDUP_TTL_SECONDS + 0.1
+    )
+
+
+def test_ingress_dedup_keeps_distinct_tool_calls():
+    daemon = _ingress_test_daemon()
+
+    def tool_event(tool_use_id):
+        return Event(
+            kind="tool_use",
+            conversation_id="session",
+            generation_id="turn",
+            project_root="/project",
+            hook_name="PreToolUse",
+            raw_payload={
+                "session_id": "session",
+                "turn_id": "turn",
+                "hook_event_name": "PreToolUse",
+                "tool_use_id": tool_use_id,
+                "tool_name": "Bash",
+                "tool_input": {"command": "pytest -q"},
+            },
+            payload={"tool_name": "Bash"},
+        )
+
+    assert daemon._admit_ingress_event(tool_event("one"), now=10.0)
+    assert daemon._admit_ingress_event(tool_event("two"), now=10.1)
+
+
+def test_ingress_dedup_is_atomic_under_concurrent_delivery():
+    daemon = _ingress_test_daemon()
+    event = Event(
+        kind="tool_use",
+        conversation_id="session",
+        generation_id="turn",
+        project_root="/project",
+        hook_name="PreToolUse",
+        raw_payload={
+            "session_id": "session",
+            "turn_id": "turn",
+            "hook_event_name": "PreToolUse",
+            "tool_use_id": "tool",
+        },
+        payload={"tool_name": "Bash", "tool_input": {"command": "pytest -q"}},
+    )
+    barrier = threading.Barrier(16)
+    admitted = []
+    admitted_lock = threading.Lock()
+
+    def deliver():
+        barrier.wait()
+        value = daemon._admit_ingress_event(event, now=10.0)
+        with admitted_lock:
+            admitted.append(value)
+
+    threads = [threading.Thread(target=deliver) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sum(admitted) == 1
+    assert daemon._ingress_duplicate_count == 15
+
+
+def test_ingress_dedup_admits_each_stop_projection_exactly_once(tmp_path):
+    daemon = _ingress_test_daemon()
+    raw = {
+        "session_id": "session",
+        "turn_id": "turn",
+        "hook_event_name": "Stop",
+        "cwd": str(tmp_path),
+        "last_assistant_message": "Done.",
+    }
+    first_delivery = normalize(raw)
+    second_delivery = normalize(dict(raw))
+
+    assert [
+        daemon._admit_ingress_event(event, now=10.0) for event in first_delivery
+    ] == [True, True]
+    assert [
+        daemon._admit_ingress_event(event, now=10.1) for event in second_delivery
+    ] == [False, False]
+
+
 def test_name_change_updates_display_without_staling_finding():
-    source = rules_api.draft_rule_source(
-        new_rule_id(), "Original rule name")
+    source = rules_api.draft_rule_source(new_rule_id(), "Original rule name")
     projection = rules_api.source_projection(source)
     ok, renamed, error = rules_api.patch_rule_identity(
-        source, projection["id"], "Current rule name")
+        source, projection["id"], "Current rule name"
+    )
     assert ok, error
     behavior = revisions.behavior_hash(source)
     group = {
@@ -60,20 +175,21 @@ def test_name_change_updates_display_without_staling_finding():
         "evaluation": {"rule": {"source": source}},
     }
 
-    stale = Daemon._decorate_finding_group(group, {
-        "name": "Current rule name",
-        "active_hash": revisions.hash_source(source),
-        "active_behavior_hash": revisions.behavior_hash(renamed),
-    })
+    stale = Daemon._decorate_finding_group(
+        group,
+        {
+            "name": "Current rule name",
+            "active_hash": revisions.hash_source(source),
+            "active_behavior_hash": revisions.behavior_hash(renamed),
+        },
+    )
 
     assert not stale
     assert group["rule_title"] == "Current rule name"
     assert group["recorded_rule_title"] == "Original rule name"
 
 
-def test_exact_evaluated_input_survives_audit_without_trace_cap(
-    monkeypatch, tmp_path
-):
+def test_exact_evaluated_input_survives_audit_without_trace_cap(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     project.mkdir()
@@ -120,10 +236,10 @@ def test_exact_evaluated_input_survives_audit_without_trace_cap(
     assert evaluated["pointer_source"] == "default"
     assert entry["evaluation"]["trigger"]["included_in_input"] is True
     assert entry["evaluation"]["trigger"]["event"]["raw_payload"] == {
-        "last_assistant_message": text}
+        "last_assistant_message": text
+    }
     assert "raw_payload" not in entry["evaluation"]["trigger"]
-    assert evaluated["sha256"] == hashlib.sha256(
-        evaluated["text"].encode()).hexdigest()
+    assert evaluated["sha256"] == hashlib.sha256(evaluated["text"].encode()).hexdigest()
     history = evaluation_log.history(str(project), rule_id=rule.id)
     assert history[0]["evaluation_id"] == entry["evaluation"]["evaluation_id"]
     assert history[0]["result"] == "WARNING"
@@ -138,12 +254,14 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
     project.mkdir()
     ledger = Ledger("frozen", str(project))
     for index in range(9):
-        ledger.append(Event(
-            kind="shell_exec",
-            conversation_id="frozen",
-            project_root=str(project),
-            payload={"command": f"echo {index}"},
-        ))
+        ledger.append(
+            Event(
+                kind="shell_exec",
+                conversation_id="frozen",
+                project_root=str(project),
+                payload={"command": f"echo {index}"},
+            )
+        )
     trigger = Event(
         kind=MESSAGE,
         conversation_id="frozen",
@@ -174,10 +292,17 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
         return ctx.result(ctx.paw("spec")(ctx.input))
 
     rule = LoadedRule(
-        id=new_rule_id(), title="Frozen", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
+        id=new_rule_id(),
+        title="Frozen",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
+        fn=evaluate,
+        spec="spec",
         trigger="Stop",
-        scope="project", source_path=str(rule_path))
+        scope="project",
+        source_path=str(rule_path),
+    )
     engine = Engine(
         FakeRuntime(output="WARNING"),
         VerdictStore(tmp_path / "verdicts.db"),
@@ -213,17 +338,27 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
     rule_path.write_text("# input kinds\n")
     store = VerdictStore(tmp_path / "verdicts.db")
     custom = LoadedRule(
-        id=new_rule_id(), title="Custom", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE],
+        id=new_rule_id(),
+        title="Custom",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
         trigger="Stop",
         fn=lambda ctx: ctx.result(ctx.paw("spec")(ctx.input)),
-        spec="spec", scope="project", source_path=str(rule_path))
+        spec="spec",
+        scope="project",
+        source_path=str(rule_path),
+    )
     engine = Engine(
-        FakeRuntime(output="WARNING"), store, lambda _project: [custom],
-        is_enabled=lambda *_args: True)
+        FakeRuntime(output="WARNING"),
+        store,
+        lambda _project: [custom],
+        is_enabled=lambda *_args: True,
+    )
     custom_verdict = engine.evaluate(custom, ledger, event)
-    custom_evaluation = audit.read_finding(
-        str(project), custom_verdict.id)["evaluation"]
+    custom_evaluation = audit.read_finding(str(project), custom_verdict.id)[
+        "evaluation"
+    ]
     assert custom_evaluation["input"]["text"] == "ledger text"
     assert custom_evaluation["trigger"]["included_in_input"] is True
 
@@ -231,44 +366,62 @@ def test_custom_and_deterministic_rules_use_strict_severity_results(
         return ctx.result("WARNING")
 
     deterministic = LoadedRule(
-        id=new_rule_id(), title="Deterministic", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE],
+        id=new_rule_id(),
+        title="Deterministic",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
         trigger="Stop",
         fn=deterministic_result,
-        scope="project", source_path=str(rule_path))
+        scope="project",
+        source_path=str(rule_path),
+    )
     deterministic_verdict = engine.evaluate(deterministic, ledger, event)
     deterministic_evaluation = audit.read_finding(
-        str(project), deterministic_verdict.id)["evaluation"]
+        str(project), deterministic_verdict.id
+    )["evaluation"]
     assert deterministic_evaluation["severity"] == "warn"
     assert "ledger text" in deterministic_evaluation["input"]["text"]
 
     ok_rule = LoadedRule(
-        id=new_rule_id(), title="OK rule", severity="warn",
-        on=[MESSAGE], trigger="Stop",
+        id=new_rule_id(),
+        title="OK rule",
+        severity="warn",
+        on=[MESSAGE],
+        trigger="Stop",
         fn=lambda ctx: ctx.result("OK"),
-        scope="project", source_path=str(rule_path))
+        scope="project",
+        source_path=str(rule_path),
+    )
     assert engine.evaluate(ok_rule, ledger, event) is None
-    assert evaluation_log.history(
-        str(project), rule_id=ok_rule.id)[0]["result"] == "OK"
+    assert evaluation_log.history(str(project), rule_id=ok_rule.id)[0]["result"] == "OK"
 
     invalid = LoadedRule(
-        id=new_rule_id(), title="Invalid", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE], fn=lambda _ctx: "warning",
-        scope="project", source_path=str(rule_path))
+        id=new_rule_id(),
+        title="Invalid",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
+        fn=lambda _ctx: "warning",
+        scope="project",
+        source_path=str(rule_path),
+    )
     assert engine.evaluate(invalid, ledger, event) is None
 
 
-def test_finding_result_links_to_its_specific_paw_call(
-    monkeypatch, tmp_path
-):
+def test_finding_result_links_to_its_specific_paw_call(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     project.mkdir()
     ledger = Ledger("multi-paw", str(project))
     event = Event(
-        kind=MESSAGE, conversation_id="multi-paw",
-        project_root=str(project), hook_name="Stop",
-        raw_payload={"last_assistant_message": "message"}, payload={"text": "message"})
+        kind=MESSAGE,
+        conversation_id="multi-paw",
+        project_root=str(project),
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "message"},
+        payload={"text": "message"},
+    )
     ledger.append(event)
     path = project / "rule.py"
     path.write_text("# multi\n")
@@ -279,14 +432,23 @@ def test_finding_result_links_to_its_specific_paw_call(
         return selected_result
 
     rule = LoadedRule(
-        id=new_rule_id(), title="Multi", severity="warn",
-        on=[MESSAGE], inputs=[MESSAGE], fn=evaluate, spec="spec",
+        id=new_rule_id(),
+        title="Multi",
+        severity="warn",
+        on=[MESSAGE],
+        inputs=[MESSAGE],
+        fn=evaluate,
+        spec="spec",
         trigger="Stop",
-        scope="project", source_path=str(path))
+        scope="project",
+        source_path=str(path),
+    )
     engine = Engine(
         FakeRuntime(output="WARNING"),
         VerdictStore(tmp_path / "verdicts.db"),
-        lambda _project: [rule], is_enabled=lambda *_args: True)
+        lambda _project: [rule],
+        is_enabled=lambda *_args: True,
+    )
     verdict = engine.evaluate(rule, ledger, event)
     evaluation = audit.read_finding(str(project), verdict.id)["evaluation"]
 
@@ -294,9 +456,7 @@ def test_finding_result_links_to_its_specific_paw_call(
     assert evaluation["severity"] == "warn"
 
 
-def test_oversized_trigger_input_is_rejected_without_paw_call(
-    monkeypatch, tmp_path
-):
+def test_oversized_trigger_input_is_rejected_without_paw_call(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = str(tmp_path)
     ledger = Ledger("oversized", project)
@@ -333,9 +493,7 @@ def test_oversized_trigger_input_is_rejected_without_paw_call(
     assert errors == ["input too large: 8 bytes exceeds 4"]
 
 
-def test_orphaned_findings_archive_but_fallback_findings_remain(
-    monkeypatch, tmp_path
-):
+def test_orphaned_findings_archive_but_fallback_findings_remain(monkeypatch, tmp_path):
     missing_project = str(tmp_path / "missing")
     fallback_project = str(tmp_path / "fallback")
     store = VerdictStore(tmp_path / "verdicts.db")
@@ -363,7 +521,8 @@ def test_orphaned_findings_archive_but_fallback_findings_remain(
                 "scope": "global",
                 "definition": {"source_hash": "fallback"},
             }
-            if project_root == fallback_project else None
+            if project_root == fallback_project
+            else None
         ),
     )
     daemon = Daemon.__new__(Daemon)
@@ -376,9 +535,7 @@ def test_orphaned_findings_archive_but_fallback_findings_remain(
     assert history[0]["review_reason"] == "rule_deleted"
 
 
-def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(
-    monkeypatch, tmp_path
-):
+def test_muted_rule_still_evaluates_and_logs_but_is_suppressed(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
     project = tmp_path / "project"
     project.mkdir()
@@ -559,23 +716,28 @@ def test_managed_fuzzy_severity_mapping_and_invalid_output(monkeypatch, tmp_path
         fn=lambda ctx: ctx.result("HIGH"),
     )
     engine = Engine(
-        FakeRuntime(), store, lambda _project: [invalid],
+        FakeRuntime(),
+        store,
+        lambda _project: [invalid],
         on_error=lambda rule, root, message: errors.append(message),
         is_enabled=lambda *_args: True,
     )
     event = Event(
-        kind=MESSAGE, conversation_id="conversation",
-        project_root=str(project), hook_name="Stop",
-        raw_payload={"last_assistant_message": "claim"}, payload={"text": "claim"})
+        kind=MESSAGE,
+        conversation_id="conversation",
+        project_root=str(project),
+        hook_name="Stop",
+        raw_payload={"last_assistant_message": "claim"},
+        payload={"text": "claim"},
+    )
     ledger.append(event)
     assert engine.on_event(event, ledger) == []
     assert "expected OK, INFO, WARNING, or CRITICAL" in errors[0]
 
 
-def test_active_rule_program_id_is_used_by_default_paw_calls(
-    monkeypatch, tmp_path
-):
+def test_active_rule_program_id_is_used_by_default_paw_calls(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(tmp_path / "state"))
+
     class TrackingRuntime(FakeRuntime):
         def __init__(self):
             super().__init__(output="WARNING")
