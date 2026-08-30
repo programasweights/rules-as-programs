@@ -1,0 +1,27 @@
+{
+  "counts": {
+    "PreToolUse_duplicates": 390,
+    "PreToolUse_raw": 10455,
+    "PreToolUse_unique": 10065,
+    "Stop_duplicates": 7,
+    "Stop_raw": 503,
+    "Stop_unique": 496,
+    "ledger_rows": 281192,
+    "retained": 10561,
+    "source_bytes": 2411108203,
+    "source_files": 684
+  },
+  "elapsed_seconds": 24.071,
+  "generated_at_unix": 1788073950.990714,
+  "max_input_bytes": 65536,
+  "output_bytes": 12470297,
+  "output_sha256": "d083b49be33a79ca98e2b9c3f48ff6a6fd2c17a2c7a42860f88cd6b53e610380",
+  "potentially_sensitive_retained_inputs": {
+    "email": 677,
+    "ipv4": 161,
+    "secret_marker": 66
+  },
+  "privacy_notice": "Output is private and unreviewed. Do not commit or release it. Every retained input requires manual privacy review.",
+  "provenance": "private_native_codex",
+  "schema_version": 1
+}

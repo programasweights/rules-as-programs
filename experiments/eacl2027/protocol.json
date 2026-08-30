@@ -1,0 +1,95 @@
+{
+  "protocol_version": "1.1.0",
+  "frozen_before_model_scoring": true,
+  "amendments": [
+    {
+      "date": "2026-08-30",
+      "stage": "after preliminary scoring and before the final clean-commit run",
+      "changes": [
+        "Use paired contrastive cases rather than claiming every pair is a minimal textual edit.",
+        "Report direct warmed judge-call latency and hook-process/IPC probes as separate boundaries.",
+        "Treat the originally planned event-to-outcome, resource, and matched Codex-turn measurements as not evaluated; they support no paper claim."
+      ],
+      "unchanged": [
+        "rule sources",
+        "case inputs",
+        "case labels",
+        "systems",
+        "primary quality metric",
+        "bootstrap procedure"
+      ],
+      "reason": "The synthetic harness can identify process and IPC boundaries but cannot validly infer user-visible Codex latency or production resource behavior."
+    },
+    {
+      "date": "2026-08-30",
+      "stage": "after preliminary local scoring and before the final clean-commit run",
+      "changes": [
+        "Add one independently prompted open-model judge baseline (Qwen3-4B-Instruct-2507) using deterministic decoding and the same strict output parser."
+      ],
+      "unchanged": [
+        "rule sources",
+        "case inputs",
+        "case labels",
+        "existing systems and outputs",
+        "primary quality metric",
+        "bootstrap procedure"
+      ],
+      "reason": "User-provided ALL-partition GPU capacity made a reproducible larger-model calibration baseline feasible."
+    }
+  ],
+  "research_questions": {
+    "rq1": "How reliably do local compiled rules classify controlled, paired-contrast coding-agent events?",
+    "rq2": "What direct-judge latency and ingress reliability behavior can be established at explicitly instrumented local boundaries?",
+    "rq3": "Does RAP preserve the exact managed-rule input and revision provenance needed for a deterministic inspect-and-refine workflow?"
+  },
+  "dataset": {
+    "name": "rap-controlled-contrastive-v1",
+    "provenance": "synthetic_label_by_construction",
+    "rules": 4,
+    "pairs_per_rule": 24,
+    "cases_per_rule": 48,
+    "total_cases": 192,
+    "primary_split": "test",
+    "spec_examples_excluded": true,
+    "exact_duplicates_forbidden": true
+  },
+  "labels": {
+    "negative": "OK",
+    "positive": ["INFO", "WARNING", "CRITICAL"],
+    "primary_task": "OK versus any non-OK result",
+    "secondary_task": "exact output label"
+  },
+  "primary_metric": "mean across rules of positive-class F1",
+  "secondary_metrics": [
+    "pooled positive-class precision",
+    "pooled positive-class recall",
+    "per-rule positive-class precision/recall/F1",
+    "exact-label accuracy",
+    "invalid-output rate",
+    "paired-cluster bootstrap 95% confidence intervals"
+  ],
+  "bootstrap": {
+    "samples": 5000,
+    "seed": 20270830,
+    "cluster": "pair_id"
+  },
+  "systems": [
+    "always-ok",
+    "rule-specific lexical baseline",
+    "PAW standard mapper",
+    "PAW finetuned compiler",
+    "Qwen3-4B-Instruct-2507 independent prompted judge"
+  ],
+  "exclusions": [
+    "empty inputs",
+    "inputs exceeding the rule byte limit",
+    "exact copies of examples embedded in the frozen specification",
+    "any native event not manually approved for release"
+  ],
+  "claim_gates": {
+    "accurate": "macro positive-class F1 >= 0.80",
+    "high_precision": "pooled precision >= 0.85",
+    "timely": "warm p95 event-to-outcome latency <= 3.0 seconds (not evaluated; no claim)",
+    "low_handoff_overhead": "p95 hook handoff <= 0.250 seconds (not met in the preliminary process-boundary probe; no claim)"
+  }
+}

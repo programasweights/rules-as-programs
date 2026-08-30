@@ -1,0 +1,17 @@
+{
+  "cases": 192,
+  "cases_per_rule": 48,
+  "name": "rap-controlled-contrastive-v1",
+  "pairs": 96,
+  "protocol_version": "1.1.0",
+  "provenance": "synthetic_label_by_construction",
+  "rule_source_sha256": {
+    "78v34vpkzm2jp4rx": "bee18825c3284f1d4a0a6f4a7ec86c0e5861c4572f85a40220ea9da90212301f",
+    "fdg0z9837mz4v0ka": "d0259a74ce977aee9773dcef13279363f1d0c44d7c8350cfffd563546f29e59f",
+    "gn3xtat6av4fy690": "67b8ed8a20add1cad1f671a27d9b0c094026bddf211aa9186121b369bbafe80e",
+    "hrmhr6hr13ffv8nb": "8c8b6b5626bb1dd4fb7ff48063b70a585e9de5a629fa26d0dfc2d81fa847da90"
+  },
+  "rules": 4,
+  "seed": 20270830,
+  "sha256": "ce72bb8ef5d8220c73a00974c2107117442c891694c06ecca970f8056f376561"
+}

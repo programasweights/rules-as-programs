@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/programasweights/rules-as-programs/experiments/eacl2027/schemas/case.schema.json",
+  "title": "RAP benchmark case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "case_id",
+    "pair_id",
+    "rule_id",
+    "hook",
+    "input",
+    "expected",
+    "split",
+    "provenance"
+  ],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 8},
+    "pair_id": {"type": "string", "minLength": 8},
+    "rule_id": {"type": "string", "pattern": "^[0-9a-hjkmnp-tv-z]{16}$"},
+    "hook": {"enum": ["Stop", "PreToolUse"]},
+    "input": {"type": "string", "minLength": 1},
+    "expected": {"enum": ["OK", "INFO", "WARNING", "CRITICAL"]},
+    "split": {"enum": ["development", "test"]},
+    "provenance": {
+      "enum": ["synthetic", "native_codex", "legacy_cursor"]
+    },
+    "source_hash": {"type": "string"},
+    "note": {"type": "string"}
+  }
+}

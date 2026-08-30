@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use Rules as Programs, please cite this software and its accompanying paper."
+title: "Rules as Programs"
+type: software
+version: 0.1.0
+license: MIT
+authors:
+  - family-names: Deng
+    given-names: Yuntian
+    affiliation: University of Waterloo
+  - family-names: Nie
+    given-names: Pengyu
+    affiliation: University of Waterloo
+  - family-names: Shieber
+    given-names: Stuart
+    affiliation: Harvard University
+repository-code: "https://github.com/programasweights/rules-as-programs"
+url: "https://github.com/programasweights/rules-as-programs"

@@ -1,0 +1,87 @@
+{
+  "all_passed": true,
+  "assertions": [
+    {
+      "id": "stop_input_mapping_exact",
+      "passed": true
+    },
+    {
+      "id": "input_text_and_bytes_exact",
+      "passed": true
+    },
+    {
+      "id": "input_sha256_exact",
+      "passed": true
+    },
+    {
+      "id": "event_linkage_exact",
+      "passed": true
+    },
+    {
+      "id": "evaluation_and_finding_linkage_exact",
+      "passed": true
+    },
+    {
+      "id": "save_as_test_copies_exact_input",
+      "passed": true
+    },
+    {
+      "id": "validation_case_is_separate_from_spec",
+      "passed": true
+    },
+    {
+      "id": "behavior_hash_changes_with_spec_revision",
+      "passed": true
+    },
+    {
+      "id": "initial_source_revision_retained",
+      "passed": true
+    },
+    {
+      "id": "initial_behavior_revision_retained",
+      "passed": true
+    },
+    {
+      "id": "compiler_snapshot_retained",
+      "passed": true
+    },
+    {
+      "id": "program_id_retained",
+      "passed": true
+    },
+    {
+      "id": "old_finding_marked_stale",
+      "passed": true
+    },
+    {
+      "id": "revised_replay_is_ok_without_new_finding",
+      "passed": true
+    },
+    {
+      "id": "old_finding_retrievable_after_replay",
+      "passed": true
+    }
+  ],
+  "assertions_passed": 15,
+  "assertions_total": 15,
+  "experiment": "rap-deterministic-provenance-workflow-v1",
+  "fixture": {
+    "initial_behavior_sha256": "9b141268ac49934c7f5d398056612747d419bec0d23df16bf4344f6998877546",
+    "initial_compiler": "fixture-compiler",
+    "initial_compiler_snapshot": "fixture-snapshot-v1",
+    "initial_program_id": "fixture-program-v1",
+    "initial_source_sha256": "4c47fe7ea57ed292c09928485919615de134e2374fb12a4c16eb392df1fad86b",
+    "input_byte_count": 82,
+    "input_char_count": 80,
+    "input_sha256": "05dfd51fcaa26cc30530a58d53389bf211df642938e586d6c3382fd2422cb1e5",
+    "json_pointer": "/last_assistant_message",
+    "revised_behavior_sha256": "28d141afeaf2031cde5285e0ad149edf02b61f42e597c56945fec494a4d7baa7",
+    "revised_compiler_snapshot": "fixture-snapshot-v2",
+    "revised_program_id": "fixture-program-v2",
+    "revised_source_sha256": "963cfdf6d236e80942cd0abeac02d23123a7b5cf6c201113f6764bc5ec7060a6",
+    "rule_id": "pr0v3nanc3w0rkf1",
+    "trigger": "Stop"
+  },
+  "schema_version": 1,
+  "scope": "Synthetic deterministic fixture testing record linkage and revision semantics; not judge quality or human usability."
+}

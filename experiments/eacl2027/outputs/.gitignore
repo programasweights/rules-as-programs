@@ -1,0 +1,7 @@
+*.jsonl
+*.json
+*.log
+*.tex
+*.tmp
+!frozen/
+!frozen/**
