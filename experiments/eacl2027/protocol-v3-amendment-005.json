@@ -1,0 +1,588 @@
+{
+  "amendment_id": "protocol-v3-amendment-005",
+  "created_utc": "2026-08-30T16:45:36Z",
+  "freeze_state": "frozen_outcome_blind",
+  "frozen_utc": "2026-08-31T04:21:34Z",
+  "freeze_gate": "Formal execution is forbidden unless freeze_state equals frozen_outcome_blind and frozen_utc is a non-null timezone-aware ISO-8601 timestamp. Draft bytes may be inspected and tested but cannot launch a formal attempt.",
+  "status": "prospectively frozen outcome-blind before execution; no protocol-v3 formal systems matrix, soak, paired offline replay, or fault outcome has run",
+  "affected_study": "scaling_fault_offline",
+  "reason": "The prospective systems harness did not yet bind every effective formal option, could lose a formal launch or a failing unit before writing an artifact, emitted heterogeneous fault records, and did not implement the preregistered online-versus-offline prediction comparison or a deterministic cross-repetition reducer. Embedding both the amendment hash in the runner and the repaired runner or containing commit hash in this amendment would also be circular. This outcome-blind amendment fixes those contracts before execution.",
+  "known_before_freeze": [
+    "protocol-v3 and amendments 001 through 004",
+    "the committed prospective runner and tests at implementation anchor e544a2b0350b6792deb974a44d4dd75e694fe639",
+    "the public experiment branch through d08fe8926582e50d5cee093aa13ea327ece55df9, before this amendment is frozen",
+    "source-level and synthetic-smoke behavior of the prospective harness",
+    "no protocol-v3 formal matrix, soak, paired offline, or fault outcome"
+  ],
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json"
+    ],
+    "conflict_rule": "A later amendment controls only the fields and study boundaries it explicitly changes; every unmentioned protocol-v3 requirement remains effective.",
+    "frozen_prefix": [
+      {
+        "path": "experiments/eacl2027/protocol-v3.json",
+        "sha256": "9509153c7afe3620c3ed847d9531554bf9111819d7dd4ec0612053d13333db62",
+        "introduced_commit": "6f9f7ae550d48931d934ee1166e97b1c7f471288"
+      },
+      {
+        "path": "experiments/eacl2027/protocol-v3-amendment-001.json",
+        "sha256": "c0b89366c7b9110f9443dea5f8d3455432ac92b9d622e9632ec7fead710340b2",
+        "introduced_commit": "a125fe22800b5de335e9156262cc23f4e62f6933"
+      },
+      {
+        "path": "experiments/eacl2027/protocol-v3-amendment-002.json",
+        "sha256": "999a26079fc08e0dc910f0407c82f9211fa3a789c66793167fef8fdd2e869f50",
+        "introduced_commit": "3d549fc42c1df59280748dab8cca21deb9dcbef7"
+      },
+      {
+        "path": "experiments/eacl2027/protocol-v3-amendment-003.json",
+        "sha256": "bb3241a7f347f000151dbc72831e22ba1f30125c7461033eec13bc4d8494e75e",
+        "introduced_commit": "6cc87ed2d4392d2c89d5424b27e82871d54f42ff"
+      },
+      {
+        "path": "experiments/eacl2027/protocol-v3-amendment-004.json",
+        "sha256": "94020b51609ded8be42158111a2bd1670bb292db004aca5875ddf78059c48d6b",
+        "introduced_commit": "e544a2b0350b6792deb974a44d4dd75e694fe639"
+      }
+    ],
+    "implementation_anchor": {
+      "commit": "e544a2b0350b6792deb974a44d4dd75e694fe639",
+      "runner_path": "experiments/eacl2027/run_scaling_faults.py",
+      "runner_sha256_at_anchor": "7847db438bce882dfc44eaf1a430c4e9e9d64bcab4041b40689432a88c680171",
+      "runner_git_blob_at_anchor": "0447b3eb319818cf4cbf58d799430ba8aa498a6d",
+      "meaning": "This identifies the reviewed pre-repair starting point, not the repaired formal runner."
+    },
+    "acyclic_formal_binding": {
+      "rule": "This amendment intentionally does not contain its own digest, the digest of a runner that embeds this amendment's digest, or the hash of the commit that contains both files.",
+      "runner_gate": "After this amendment is frozen, the repaired runner may pin its exact SHA-256. The amendment must not be rewritten to pin the repaired runner in return.",
+      "pre_outcome_binding": "Before starting a daemon or emitting the first measured event, each formal attempt must exclusively create a launch record binding the clean Git commit, the exact runner SHA-256 and Git blob, the SHA-256 of every effective protocol document including amendment 005, the canonical effective configuration, the deterministic plan digest, package and machine identity, and the requested attempt ID.",
+      "required_git_state": {
+        "protocol_commit_parent_must_equal": "d08fe8926582e50d5cee093aa13ea327ece55df9",
+        "protocol_commit_diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-005.json"
+        ],
+        "implementation_commit_parent_must_equal_protocol_commit": true,
+        "implementation_commit_diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "runtime_lock_commit_parent_must_equal_implementation_commit": true,
+        "runtime_lock_commit_diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v3.json"
+        ],
+        "head_must_equal_runtime_lock_commit": true,
+        "dirty_must_equal": false,
+        "dirty_scope": [
+          "rules_as_programs",
+          "experiments/eacl2027",
+          "pyproject.toml"
+        ],
+        "check": "git status --porcelain --untracked-files=normal -- <dirty_scope> must be empty immediately before launch-record creation"
+      },
+      "canonical_json": "UTF-8 JSON with object keys sorted, separators ',' and ':', ensure_ascii=false, no insignificant whitespace, and a trailing LF only for stored documents; identity SHA-256 is computed over the same encoding without the trailing LF.",
+      "launch_identity_sha256": "SHA-256 of the canonical identity subobject; the digest field itself is outside that subobject.",
+      "chronology_rule": "Freeze this amendment in a protocol-only commit whose parent is exactly the pinned pre-amendment commit. Create one implementation-only child commit whose changed paths are exactly the preregistered implementation allowlist, then one runtime-lock-only child commit whose sole changed path is the runtime lock built from that implementation. Formal launch HEAD must be exactly that third commit, not an arbitrary descendant. The launch record must exist before any formal outcome is observed. A later runner, protocol, runtime dependency, or raw-measurement change requires a dated amendment and a new raw attempt ID. A reducer-only correction uses a new analysis ID bound to the unchanged immutable raw attempt and does not authorize a new measurement attempt."
+    }
+  },
+  "formal_effective_config": {
+    "study_mode": "formal_protocol_v3_amendment_005",
+    "formal": true,
+    "rule_counts": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "project_counts": [
+      1,
+      4,
+      8
+    ],
+    "burst_sizes": [
+      24,
+      64
+    ],
+    "repeats": 4,
+    "sequential_events": 20,
+    "warmups_per_project": 1,
+    "timeout_seconds": 30.0,
+    "drain_timeout_seconds": 1200.0,
+    "hook_process_timeout_seconds": 5.0,
+    "burst_and_soak_batch_drain_timeout_seconds": 1200.0,
+    "soak_final_drain_timeout_seconds": 1200.0,
+    "final_drain_settle_seconds": 1.0,
+    "offline_socket_boundary_id": "cpython_socket_api_inet_v1",
+    "max_hook_workers": 24,
+    "traffic_patterns_in_order": [
+      "round_robin_across_projects",
+      "one_project_hotspot"
+    ],
+    "soak_events": 10000,
+    "soak_rule_count": 8,
+    "soak_project_count": 8,
+    "soak_batch_size": 64,
+    "fault_repetitions": 20,
+    "fault_names_in_order": [
+      "daemon_crash",
+      "worker_exit",
+      "worker_timeout",
+      "sqlite_lock",
+      "malformed_payload",
+      "duplicate_delivery",
+      "deployment_failure"
+    ],
+    "offline_probe": true,
+    "strict_accounting": true,
+    "continue_safe_isolated_units": true,
+    "orchestration_error_policy": "Strict accounting classifies an observed loss, timeout, mismatch, hook failure, or failed fault expectation as system_violation. It does not throw that measured outcome away or stop the plan. Catch and persist true harness/infrastructure errors, continue whenever the isolated next unit is safe, and otherwise mark every unstarted planned unit explicitly. The legacy --continue-on-error flag is not an effective formal option.",
+    "query_poll_interval_seconds": 0.25,
+    "matrix_history_duplicate_headroom": 64,
+    "soak_journal_poll_interval_seconds": 1.0,
+    "soak_history_checkpoint_retry_seconds": 1.0,
+    "soak_batch_settle_seconds": 1.0,
+    "resource_sample_interval_seconds": 1.0,
+    "evaluation_history_limit": 5000,
+    "evaluation_journal_rotation_bytes": 10485760,
+    "evaluation_journal_rotation_backups": 5,
+    "sqlite_busy_timeout_seconds": 5.0,
+    "slurm_partition": "ALL",
+    "partition_gate": "Every non-plan formal execution on watgpu must observe SLURM_JOB_PARTITION exactly equal to ALL and record the job ID, partition, and node list.",
+    "freshness": {
+      "matrix_condition": "fresh isolated RAP state, project roots, daemon, and supervised inference worker for every condition and repetition",
+      "soak": "one fresh isolated state and daemon",
+      "fault_repetition": "fresh isolated state and daemon for every fault repetition",
+      "warmups": "excluded from all measured samples and accounting denominators"
+    },
+    "deterministic_plan_checks": {
+      "matrix_conditions": 288,
+      "matrix_events": 10368,
+      "matrix_expected_evaluations": 38880,
+      "soak_expected_evaluations": 80000,
+      "fault_attempts": 140,
+      "top_level_units": 430,
+      "rule_order": [
+        "3pcxewp5hggr1vsn",
+        "98z9wvr031840p4g",
+        "e3m4bdwj6gqcwpnn",
+        "g3b7damk0b5xgdj6",
+        "q88xgdmftag16dq9",
+        "qfh0h1cf4wt5aeg4",
+        "sr09vpkt60y74r0q",
+        "xb24rc14cpcrsf4g"
+      ]
+    }
+  },
+  "formal_runtime_profile": {
+    "validation_basis": "The CPU-only PAW direct diagnostic and eight-program prewarm on watgpu108 used Slurm jobs 1523851 and 1523856 with eight allocated CPUs and 16 GiB. Outcome-blind resource diagnostic job 1523997 confirmed 128 host-visible logical CPUs, an eight-CPU scheduler affinity mask, and the pinned llama-cpp-python default thread derivation described below. Outcome-blind ALL-partition preflight job 1524024 confirmed watgpu108 with eight CPUs and 16 GiB, SLURM_TMPDIR unset, and executable /tmp on the root filesystem with 241 GiB available at the check; no formal systems outcome was run.",
+    "scheduler": {
+      "partition": "ALL",
+      "node_list": "watgpu108",
+      "cpus_per_task": 8,
+      "minimum_memory_mib": 16000,
+      "allocated_gpus": 0,
+      "minimum_time_limit_seconds": 604800,
+      "required_environment": [
+        "SLURM_JOB_ID",
+        "SLURM_JOB_PARTITION",
+        "SLURM_JOB_NODELIST",
+        "SLURM_CPUS_PER_TASK",
+        "SLURM_MEM_PER_NODE or SLURM_MEM_PER_CPU"
+      ],
+      "node_exclusivity": "No exclusive-node allocation is required or claimed. Record the complete named Slurm resource environment and disclose shared-node contention as an uncontrolled limitation in every launch receipt."
+    },
+    "python": {
+      "formal_venv_template": "/tmp/rap-eacl-systems-formal-v3-${SLURM_JOB_ID}/venv",
+      "invoked_executable_template": "/tmp/rap-eacl-systems-formal-v3-${SLURM_JOB_ID}/venv/bin/python",
+      "required_base_executable_resolved": "/usr/bin/python3.10",
+      "required_major_minor": [
+        3,
+        10
+      ],
+      "launch_binding": "Substitute the real numeric Slurm job ID into the pinned node-local template, then record sys.version without normalization, sys.implementation, sys.executable, sys._base_executable, both complete symlink chains, both fully resolved targets, and streaming SHA-256 values for the invocation and base executable targets. The base must fully resolve to /usr/bin/python3.10. The patch version and binary digests are launch-bound rather than recursively embedded in this amendment.",
+      "node_local_setup": "The launcher creates the venv inside the allocation and installs only from the exact hashed wheelhouse with network disabled before measurement preflight. /u4 cannot execute the pinned llama shared library, while /tmp is executable. Loss of this node-local setup after an independently evidenced node failure is infrastructure_error; raw attempt artifacts remain on /u4."
+    },
+    "cpu_and_inference": {
+      "host_logical_cpu_count": 128,
+      "multiprocessing_cpu_count": 128,
+      "affinity_cardinality": 8,
+      "affinity_ids": "Record the exact sorted scheduler-provided CPU IDs; do not select or rewrite the affinity mask in the harness.",
+      "paw_gpu_layers_environment": "0",
+      "paw_function_n_ctx": 2048,
+      "llama_cpp_n_threads": 64,
+      "llama_cpp_n_threads_batch": 128,
+      "thread_derivation": "The pinned ProgramAsWeights call supplies neither llama-cpp-python n_threads nor n_threads_batch. Pinned llama-cpp-python therefore derives 64 and 128 respectively from multiprocessing.cpu_count()==128, not from the eight-CPU affinity mask.",
+      "oversubscription_limit": "The formal study intentionally preserves the already validated production path. It therefore oversubscribes the eight-CPU cpuset by 8x for token generation and 16x for batch work. Record this limitation and do not reinterpret the result as an optimized CPU benchmark.",
+      "gpu_support_receipt": "Record whether the installed llama-cpp-python binary reports GPU-offload support, while requiring PAW_GPU_LAYERS=0 and no Slurm GPU allocation or CUDA-visible device. Binary capability is provenance only and cannot enable offload in this profile."
+    },
+    "thread_environment": {
+      "OMP_NUM_THREADS": "UNSET",
+      "OPENBLAS_NUM_THREADS": "UNSET",
+      "MKL_NUM_THREADS": "UNSET",
+      "VECLIB_MAXIMUM_THREADS": "UNSET",
+      "NUMEXPR_NUM_THREADS": "UNSET"
+    },
+    "cache_and_dependency_receipt": {
+      "formal_repository": "/u4/yuntian/rap-eacl-systems-formal-v3/repo",
+      "formal_cache_dir": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache",
+      "formal_wheelhouse": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse",
+      "formal_scheduler_dir": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler",
+      "formal_attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts",
+      "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v3.json",
+      "cache_path": "PAW_CACHE_DIR must equal the existing absolute path /u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache. Record its resolved path and symlink chain.",
+      "required_cache_inventory": "Before launch creation, recursively inventory and SHA-256 every file in each of the eight pinned program directories, the embedded and cached runtime manifests, and every referenced base-model GGUF. Require declared base-model size and SHA-256 when present to equal the local file.",
+      "package_provenance": "Before the formal runner starts, require the live complete sorted wheelhouse filename/size/SHA-256 inventory and initial complete PAW-cache receipt to equal experiments/eacl2027/formal-runtime-lock-v3.json byte-for-byte at the structured-receipt level. That clean tracked lock is created outcome-blind in a descendant commit after building the Rules as Programs wheel from the repaired harness commit; the launch Git identity binds it without circularly embedding the descendant commit here. Retain a setup receipt with the exact offline pip command and exit status and import preflight. Require its replacement_chain to equal identity.attempt_replacement exactly, and copy the exact durable setup receipt and setup log bytes into runtime/preflight/ inside the immutable attempt with identity-bound sizes and SHA-256 values. For rules-as-programs, programasweights, llama-cpp-python, and psutil, record installed version, distribution root, hashes of METADATA, RECORD, and direct_url.json when present, and the import-module origin hash. The Git and runner receipts remain authoritative for repository-owned source.",
+      "setup_capture": "The launcher exports RAP_EACL_SETUP_LOG and RAP_EACL_SETUP_RECEIPT to durable external files and RAP_EACL_LAUNCH_SCRIPT to the exact versioned launcher. The formal launch identity hashes all three files before measurement.",
+      "immutability_boundary": "The tracked runtime lock and launch receipt bind the pre-run wheelhouse and cache inventories. At attempt end, inventory the complete cache again, retain the full end receipt and diff, and copy every changed or new cache file into the external immutable raw attempt tree. A mutation is a system_violation and is not grounds to discard or rerun a performance failure."
+    },
+    "runtime_budget": {
+      "validated_seconds_per_serial_evaluation": 1.8,
+      "matrix_warmup_evaluations": 4680,
+      "soak_warmup_evaluations": 64,
+      "offline_measured_evaluations": 16,
+      "offline_warmup_evaluations": 8,
+      "conservative_fault_evaluation_allowance": 652,
+      "planned_evaluations_including_matrix_soak_all_warmups_offline_and_conservative_fault_allowance": 124300,
+      "projected_inference_seconds": 223740.0,
+      "projected_days": 2.589583,
+      "conservative_bounded_wait_envelope_seconds": 552000,
+      "conservative_bounded_wait_envelope_days": 6.388889,
+      "bounded_wait_reserve_seconds": 36533,
+      "bounded_wait_envelope_basis": "The envelope retains 37,440 seconds for all matrix warmup waits, 57,600 for all sequential-event waits, 230,400 for all burst drains, 190,027 for all soak warmups/batches/final drain/settle/restart, and a 36,533-second reserve for fixture startup, offline replay, all 140 fault probes, teardown, and bookkeeping. It is a conservative feasibility envelope rather than a latency prediction; the separately reported 1.8-second evaluation projection is the expected compute path.",
+      "seven_day_budget_seconds": 604800,
+      "preflight_gate": "Require a real Slurm job whose scheduler-reported time limit is at least seven days. Both the preregistered expected-compute estimate and conservative bounded-wait envelope are below that limit; retain elapsed time and every partial terminal record if either estimate is wrong."
+    }
+  },
+  "formal_attempt_retention": {
+    "raw_attempt_id": "A caller-supplied unique slug matching ^[a-z0-9][a-z0-9._-]{0,63}$ and ending in the exact two-digit suffix -rNN is required for every raw formal launch. NN ranges from 01 through 05, identifies a revision in one fixed outcome-blind chain, and may never be reused. The fixed five-attempt ceiling bounds recursive self-contained replacement retention.",
+    "analysis_id": "Every reducer execution has a separate versioned analysis ID and binds the raw attempt ID, raw result SHA-256, analysis code SHA-256, protocol hashes, and reducer configuration. Correcting analysis never authorizes rerunning or replacing raw measurements.",
+    "artifact_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/<raw_attempt_id>/; it must resolve outside the Git worktree and be created exclusively. The recorder first constructs and recursively fsyncs all fallible prelaunch artifacts and every newly created directory in a sibling same-filesystem staging root outside the attempt ledger, writes launch.json last, establishes descriptor capture, and atomically publishes the complete staged tree with an OS no-replace rename before measurement. A staging/publication failure removes only the unpublished partial tree and never claims or overwrites a raw attempt ID. If post-publication parent-directory fsync reports a storage failure, the runner immediately finalizes a positively classified incomplete_infrastructure_error without starting measured work.",
+    "exclusive_creation": true,
+    "required_incremental_artifacts": [
+      "launch.json created before any measured work",
+      "plan.json containing every planned unit and its SHA-256",
+      "units.jsonl append-only with one entry for each immutably written terminal payload; a started unit interrupted before terminal write is classified only in result.json's unit index",
+      "result.json containing a terminal attempt summary when the Python process can reach finalization",
+      "stdout.log and stderr.log captured by descriptor redirection from immediately after launch creation through process exit, plus streams.json; after finalization stdout contains only compact status, exit code, result.json path, and SHA-256 rather than a third full result copy",
+      "soak-event-samples.jsonl, soak-journal-progress.jsonl, soak-history-checkpoints.jsonl, and soak-resource-samples.jsonl flushed incrementally with terminal path/count/byte/SHA-256 receipts in the soak unit payload",
+      "every soak batch, event sample, History-checkpoint attempt, and checkpoint summary binds the unique deterministic batch ID plus SHA-256 of its canonical complete expected-key set",
+      "the exact canonical pre-restart and post-restart evaluation/finding projection bytes retained as immutable attempt-relative files with byte/SHA-256 receipts"
+    ],
+    "unit_statuses": [
+      "completed",
+      "system_violation",
+      "harness_error",
+      "infrastructure_error",
+      "unclassified_failure",
+      "not_started_after_abort",
+      "not_applicable"
+    ],
+    "record_rule": "A unit terminal payload is written immutably and units.jsonl appends a compact status/path/SHA-256 index entry, each flushed and fsynced. Partial samples, exceptions, hook stdout/stderr, and exact accounting details are retained. result.json enumerates every plan unit exactly once. A started unit interrupted before its terminal write inherits the positively evidenced abort class in the result index; only a unit never started is not_started_after_abort.",
+    "complete_plan": "plan.json contains exactly 430 top-level units in formal mode: 288 matrix conditions, one soak, one paired offline unit, and each of 140 named fault repetitions. Every record uses one canonical status from unit_statuses.",
+    "immutability": "Never overwrite, truncate, delete, or silently replace an attempt directory. A rerun uses a new attempt ID and cross-references the prior attempt.",
+    "rerun_eligibility": "A whole-attempt replacement is allowed only for a harness or infrastructure failure identified independently of measured system performance. The reason and affected boundary must be recorded before launching the replacement. System loss, duplication, latency, resource use, offline mismatch, or a fault-boundary failure is an outcome, not rerun eligibility.",
+    "replacement_chain": {
+      "attempt_id_contract": "Every ID in one chain shares the prefix before its final -rNN. r01 is the initial attempt. r02 through r05 name only the immediate successor of the preceding numeric revision; skipped revisions and chains longer than five attempts are invalid.",
+      "max_raw_attempt_ordinal": 5,
+      "initial_attempt": "r01 requires RAP_EACL_REPLACEMENT_RECEIPT to be absent or empty. The single shared Python validator records kind=initial_attempt, raw_attempt_ordinal=1, the successor ID, null predecessor/adjudication fields, and empty artifact/tree/evidence lists identically in the durable setup receipt and launch identity.",
+      "replacement_attempt": "r02+ requires RAP_EACL_REPLACEMENT_RECEIPT to name an already existing regular non-symlink file whose basename is replacement.json. The launcher and runner both call the same versioned Python validator before the successor attempt directory is created or any measured work begins. The setup receipt retains the resulting replacement chain, and the runtime gate requires exact structured equality with identity.attempt_replacement. The receipt binds the exact complete predecessor file tree, including core records, process streams, every terminal unit payload, and all incremental/runtime evidence. The runner streams one bounded-memory copy of every tree file plus the exact replacement receipt and external evidence into replacement/ beneath unpublished staging; identity.replacement_retention binds each in-attempt path, byte count, and SHA-256 so a published successor is self-contained. Analysis revalidates the live predecessor tree against the binding and requires every result-present predecessor to remain independently analyzable before authorizing its edge; missing-result replacements retain the complete present-file tree and require positive external scheduler adjudication.",
+      "replacement_receipt_schema": {
+        "schema_version": 1,
+        "exact_top_level_fields": [
+          "schema_version",
+          "created_utc",
+          "successor_raw_attempt_id",
+          "predecessor_raw_attempt_id",
+          "classification",
+          "original_status",
+          "reason",
+          "affected_boundary",
+          "predecessor_artifacts",
+          "predecessor_tree",
+          "evidence_receipts",
+          "scheduler_adjudication"
+        ],
+        "identity_fields": "successor_raw_attempt_id must equal the launch ID; predecessor_raw_attempt_id must be the same prefix with the immediately preceding two-digit revision. created_utc must be a timezone-aware ISO-8601 timestamp no later than validation. reason and affected_boundary are nonempty strings.",
+        "classification_allowlist": [
+          "harness_error",
+          "infrastructure_error"
+        ],
+        "predecessor_artifacts": {
+          "exact_fields": [
+            "launch.json",
+            "plan.json",
+            "result.json",
+            "stderr.log",
+            "stdout.log",
+            "streams.json",
+            "units.jsonl"
+          ],
+          "present_receipt_exact_fields": [
+            "path",
+            "bytes",
+            "sha256"
+          ],
+          "rule": "Each path must name the exact artifact beneath the immediate predecessor attempt directory and its bytes and SHA-256 must match the regular non-symlink file. Only result.json may be null, and only if that exact path is actually absent; every other core/stream artifact is required."
+        },
+        "predecessor_tree": {
+          "type": "ordered list",
+          "max_entries": 250000,
+          "max_regular_file_bytes": 8589934592,
+          "min_staging_free_reserve_bytes": 1073741824,
+          "item_exact_fields": [
+            "relative_path",
+            "type",
+            "mode",
+            "bytes",
+            "sha256"
+          ],
+          "rule": "The list must equal a fresh lexicographically ordered recursive inventory of every entry beneath the immediate predecessor attempt directory. Symlinks are forbidden. Each item binds an attempt-relative path, entry type, and permission mode. Regular files additionally bind byte count and streaming SHA-256 and are streamed into one verified successor copy before its launch tree is published. Directories and interrupted-runtime special entries such as Unix sockets bind null bytes/SHA-256 as topology metadata and are not recreated. Replacement is forbidden when the tree exceeds 250000 entries or 8 GiB of regular-file bytes. Before staging, require enough free bytes for every bound copy plus a fixed 1-GiB reserve; failure leaves the raw attempt ID unclaimed. Together with the r05 ceiling this bounds recursive retained-tree growth."
+        },
+        "evidence_receipts": {
+          "nonempty": true,
+          "item_exact_fields": [
+            "kind",
+            "path",
+            "bytes",
+            "sha256"
+          ],
+          "rule": "Every item uses a path string exactly equal to the evidence file's resolved absolute path, names a pre-existing regular non-symlink evidence file, supplies a nonempty kind, and binds its exact byte count and SHA-256. Relative, normalized-but-not-exact, and symlinked paths are rejected so retained raw and normalized launch identities agree. Evidence receipts preserve the adjudication record but cannot relabel an incomplete_unclassified_failure as a harness failure."
+        },
+        "status_eligibility": {
+          "direct": "A retained result with original_status incomplete_harness_error may map only to harness_error; incomplete_infrastructure_error may map only to infrastructure_error.",
+          "unclassified": "incomplete_unclassified_failure may map only to infrastructure_error with the complete scheduler adjudication and evidence contract below; it cannot map to harness_error because unstructured evidence bytes cannot independently establish that semantic class.",
+          "missing": "When result.json is actually absent, original_status must equal missing and replacement is allowed only as infrastructure_error with the complete scheduler adjudication and evidence contract below.",
+          "prohibited": "completed, completed_with_system_violations, every system-interrupted or differently classified result, fixed-resource OOM, Slurm TIMEOUT, and user cancellation are not replacement-eligible. They may not be relabeled harness_error or infrastructure_error."
+        },
+        "scheduler_adjudication": {
+          "required_when": "classification is infrastructure_error and original_status is missing or incomplete_unclassified_failure",
+          "otherwise": null,
+          "exact_fields": [
+            "scheduler_job_id",
+            "state",
+            "reason",
+            "exit_code"
+          ],
+          "field_contract": "scheduler_job_id is the predecessor's numeric Slurm job ID, reason is nonempty, and exit_code is exact Slurm N:N text.",
+          "allowed_external_states": [
+            "PREEMPTED",
+            "NODE_FAIL",
+            "BOOT_FAIL"
+          ],
+          "required_evidence_kinds_exactly_once": [
+            "scheduler_sacct",
+            "scheduler_scontrol",
+            "scheduler_stdout",
+            "scheduler_stderr"
+          ],
+          "scheduler_evidence_content_gate": "The bound UTF-8 scheduler_sacct and scheduler_scontrol files must each contain the exact adjudicated scheduler_job_id and one allowed external state. TIMEOUT, OUT_OF_MEMORY/OOM, CANCELLED, and every synthesized cancellation label are excluded."
+        }
+      }
+    },
+    "primary_attempt_rule": "The earliest launch-ordered attempt that passed preflight and executed the complete fixed plan without a harness or infrastructure error is the primary numeric attempt. System violations do not make an attempt ineligible. All earlier, later, incomplete, and superseded attempts remain in the main reporting ledger.",
+    "no_primary_attempt": "If no attempt satisfies the primary-attempt rule, report the formal study incomplete and do not promote a partial or favorable attempt.",
+    "classification": {
+      "system_violation": "Measured wrapper, daemon, worker, evaluation, persistence, accounting, latency/drain, fixed-resource OOM, Slurm walltime exhaustion, online/offline mismatch, or failed fault expectation. This is a system outcome even when it prevents later units and is never rerun-eligible by itself.",
+      "harness_error": "A runner, schema, reducer-interface, assertion, or plan defect positively demonstrated independently of measured RAP performance. Mere surprise, timeout, exception text, or a failed expectation is insufficient.",
+      "infrastructure_error": "Positive external evidence of scheduler preemption/cancellation, node failure, or storage/service failure outside the measured RAP system. Record the scheduler/storage evidence and exact boundary.",
+      "unclassified_failure": "Any failure not positively attributable under the preceding rules. It is incomplete and not rerun-eligible until an outcome-blind adjudication records evidence and classification; it must never default to harness or infrastructure.",
+      "not_started_after_abort": "A planned unit not started after a terminal process/host abort; inherit the attempt-level abort cause for eligibility but retain this unit status explicitly.",
+      "not_applicable": "Only a protocol-declared conditional measurement whose prerequisite objectively failed, such as restart persistence after an incomplete soak drain; it cannot hide an expected top-level formal unit."
+    },
+    "terminal_attempt_status": "completed means all 430 units are terminal with no system violation; completed_with_system_violations means all 430 are terminal and at least one measured system violation occurred; incomplete_harness_error, incomplete_infrastructure_error, or incomplete_unclassified_failure identify why a valid complete numeric attempt was not obtained. A complete attempt with system violations uses a distinct process exit code from every incomplete class.",
+    "process_exit_codes": {
+      "0": "completed or plan_only",
+      "3": "completed_with_system_violations (valid complete non-censored system result)",
+      "2": "incomplete_harness_error or preflight/contract error",
+      "4": "incomplete_infrastructure_error",
+      "5": "incomplete_unclassified_failure"
+    },
+    "publication": "Raw attempt trees remain outside Git. Preserve every tree immutably, including the in-attempt replacement/ copies that make any r02+ adjudication independently auditable; publish a tar.zst receipt containing raw attempt ID, SHA-256, byte size, and durable URI (for example a GitHub Release asset), and commit only the reduced JSON plus an attempt/publication index. Publication is post-run archival and cannot alter primary-attempt eligibility.",
+    "non_censoring": [
+      "retain all per-event latency samples, including timeouts and invalid or failed evaluations",
+      "retain every accounting detail for missing, duplicate, unexpected, failed, running, provenance-mismatched, and cross-project rows",
+      "retain all 20 repetitions of every measured fault, including harness errors",
+      "retain both arms of the paired offline comparison even when either arm fails",
+      "do not exclude a repetition, cell, rule, project, event, or fault after inspecting its value",
+      "publish a machine-readable index of every formal attempt and its eligibility decision"
+    ]
+  },
+  "measurement_and_metrics": {
+    "unit_of_accounting": "One expected tuple of exact project root, exact normalized input SHA-256, and rule ID. OK, finding, invalid, and failed terminal outcomes all count.",
+    "clock": "time.perf_counter_ns from the parent harness process; retain integer nanoseconds and derive milliseconds only for reporting",
+    "latency_boundaries": {
+      "submission": "For every event, call time.perf_counter_ns immediately before executor.submit in burst mode or immediately before direct wrapper invocation in sequential mode. This submission timestamp is the event-latency origin.",
+      "executor_queue": "Installed-wrapper process pre-launch timestamp minus submission timestamp, reported separately per event. It is expected to be near zero for sequential traffic and can be positive when burst submissions wait for a hook-worker slot.",
+      "hook_exit": "installed-wrapper process pre-launch timestamp through wrapper process exit",
+      "submission_to_hook_exit": "submission timestamp through installed-wrapper process exit",
+      "event_to_first_query_visible_evaluation": "submission timestamp through the first successful Evaluation History poll containing any terminal expected tuple for that event",
+      "event_to_all_query_visible_evaluations": "submission timestamp through the first successful Evaluation History poll containing every terminal expected tuple for that event",
+      "soak_event_to_batch_checkpoint": "For soak only, submission timestamp through the bounded batch's post-quiescence capped History checkpoint. Its one-second journal polling and batch-level checkpoint resolution are explicit; it is not promoted as precise per-event API visibility latency.",
+      "burst_queue_drain": "the first poll containing all expected tuples for the burst minus the latest installed-wrapper exit in that burst; clamp only negative poll-resolution artifacts to zero",
+      "workload_wall": "earliest event submission timestamp through the first poll containing every terminal expected tuple for the workload"
+    },
+    "drain_deadlines": "The 30-second timeout applies to single-event, daemon-readiness, and fault waits. Every burst and soak batch uses the separate fixed 1200-second drain deadline, and an observation completing after that monotonic deadline is retained diagnostically but remains right-censored/system_violation. Matrix progress uses the same rotation-safe persistent-descriptor journal tailer at 0.25-second resolution. A first-terminal or all-rules-terminal journal transition triggers an owner-project History query, coalesced by project and tick; that endpoint is timestamped only when the bounded response actually contains the keys and finishes within deadline. The exact per-project limit is baseline rows plus all current-condition expected rows plus a fixed 64-row duplicate headroom, capped at 5,000; saturation/overflow is measurement uncertainty and system_violation. A fixed 0.25-second journal quiescence poll is a separate integrity gate and cannot retroactively censor already confirmed endpoint timestamps. Full cross-project accounting uses the final retained journals. Soak does not repeatedly reparse the growing History endpoint: its tailer polls every 1.0 second, holds opened inodes across rename/unlink, and requires every expected terminal ID plus one fixed 1.0-second quiescence poll with no in-flight starts. It then makes one capped History checkpoint per project; only an actual mismatch is retried every 1.0 second within the same deadline. Each soak batch contains at most 512 evaluations total and must complete that checkpoint before any next batch starts. The 10 MiB/five-backup journal rotation constants and exact bytes/records observed per batch are retained diagnostically; missing expected progress is a system_violation, never a censored rerun. A timed-out soak batch may not advance: retain the timeout, submit no later batch, and use the separate 1200-second final-drain boundary only for that unresolved bounded batch. The History endpoint is capped at 5,000 rows per project and cannot prove the 80,000-tuple soak union; cumulative bounded-batch checkpoints plus the persistent tailer's complete expected-key union supply final performance/accounting proof. Restart persistence additionally requires every discovered journal inode to remain reachable in the current plus five named rotations so exact pre/post projections are defensible; otherwise it is not_applicable and the attempt records system_violation rather than claiming persistence. Restart only after all 10,000 events were submitted, every batch proof completed within deadline, a final one-second quiescence poll completed, and all applicable accounting is clean and terminal.",
+    "raw_matrix_metrics": [
+      "hook-exit latency per event",
+      "event-to-first and event-to-all query-visible latency per event",
+      "burst queue-drain seconds",
+      "event and expected-evaluation throughput",
+      "all exact accounting counts and detail records",
+      "per-active-project p95 event-to-all latency",
+      "recursive daemon/worker RSS, CPU seconds, process count, and file descriptors",
+      "separate ledger, database, WAL, audit/evaluation-log, and total byte growth"
+    ],
+    "soak_additions": {
+      "rss_slope": "Ordinary least squares slope in bytes per second over every 1.0-second recursive-RSS sample from the first measured event through true final drain; report sample count and R-squared and do not delete spikes. Samples are flushed incrementally to immutable JSONL; result.json retains its receipt and compact slope/peak/count rather than duplicating every sample.",
+      "post_drain_rss": "After the final terminal observation, wait exactly one second, perform the quiescence tail poll, and immediately take a timestamped recursive process-tree snapshot before inode reachability, full-journal parsing, or global-accounting work. This snapshot supplies claim-bearing post-drain RSS, RSS change, and CPU delta together with actual settle/snapshot timestamps. RSS change per event divides only by the retained actual events_submitted count (and is null at zero), never by unsubmitted planned events. A later post-scan snapshot is diagnostic only; journal-scan time is excluded from the RSS-slope window and resource deltas.",
+      "history_query_latency": "Retain every bounded-batch History checkpoint query and the explicit post-restart query incrementally. Normal soak progress comes from the one-second journal tailer; History is queried once per project only after journal completion and quiescence, then retried only on mismatch. Report exact sample count and integer-nanosecond nearest-rank p50, p95, p99, and maximum without selecting a favorable window.",
+      "restart_persistence": "Immediately before restart, canonically project every non-baseline soak evaluation and finding from all projects. Restart the daemon against the same state, project the same records again, compare exact canonical bytes and SHA-256, then require one post-restart event whose installed wrapper preserves the exact hook contract and whose evaluation/finding accounting is clean.",
+      "storage": "Report pre/post and delta bytes separately for ledger, verdict database, WAL/SHM, audit/evaluations logs, and total runtime state."
+    },
+    "quantiles": "Nearest-rank: sort all values ascending and select rank max(1, ceil(q*n)); do not interpolate.",
+    "precision": "Retain submission, hook start/exit, first-visible, all-visible, and censor-deadline monotonic timestamps and every derived latency as integer nanoseconds. All selection and reduction uses those unrounded nanoseconds, integer counts, bytes, and floating-point ratios. Milliseconds rounded to three decimals are display-only fields.",
+    "claim_gate": "Lossless or isolated may be used only when loss, duplicate, unexpected, cross-project contamination, failed, running, and provenance-mismatch counts are all zero across every declared repetition of the claimed scope."
+  },
+  "paired_offline_comparison": {
+    "design": "After all eight frozen base/adapter programs are prepared online, run one online reference replay, stop that daemon, start a fresh daemon against the same prepared state under the declared network control, and run an offline replay whose normalized declared input bytes are identical. Envelope IDs may differ only to avoid duplicate-admission suppression. If the offline daemon cannot start under the socket boundary, classify it as a structured system_violation and retain the completed online arm, exact intended inputs/envelopes, per-rule unavailable offline records, blocker log, and offline diagnostics; dependent latency fields are explicitly unavailable rather than throwing away the unit.",
+    "rules": 8,
+    "projects": 1,
+    "events_per_arm": 1,
+    "mode": "sequential",
+    "input_identity_gate": "Record the exact extracted UTF-8 input bytes losslessly as hexadecimal plus SHA-256 for both arms. Input-byte or input-hash inequality makes the overall comparison unequal before prediction comparison and yields system_violation.",
+    "network_control": {
+      "boundary_id": "cpython_socket_api_inet_v1",
+      "enforced": [
+        "sitecustomize replaces Python socket.socket.connect for AF_INET and AF_INET6",
+        "sitecustomize replaces Python socket.socket.connect_ex for AF_INET and AF_INET6",
+        "sitecustomize replaces Python socket.socket.send for AF_INET and AF_INET6",
+        "sitecustomize replaces Python socket.socket.sendall for AF_INET and AF_INET6",
+        "sitecustomize replaces Python socket.socket.sendto for AF_INET and AF_INET6",
+        "sitecustomize replaces Python socket.socket.sendmsg for AF_INET and AF_INET6 when that API is available",
+        "sitecustomize replaces Python socket.create_connection",
+        "HF_HUB_OFFLINE=1 and TRANSFORMERS_OFFLINE=1 in the offline daemon environment",
+        "AF_UNIX local sockets remain available"
+      ],
+      "not_enforced": [
+        "an OS network namespace or packet filter",
+        "native-library syscalls that bypass Python socket methods",
+        "non-Python descendants that do not load sitecustomize",
+        "proof that code outside the named CPython socket-API boundary cannot emit Internet traffic"
+      ],
+      "required_label": "after-prepare replay under cpython_socket_api_inet_v1 and model-hub offline flags",
+      "blocked_attempt_log": "Retain every intercepted attempt with timestamp, PID, address family, and destination representation. Zero blocked attempts is an observed value, not proof that no uninstrumented network path was used."
+    },
+    "prediction_projection": "For each rule in frozen order, require exactly one completed terminal row, persisted_prediction_utf8_present=true, and record terminal status, terminal-row count, error code, and the exact UTF-8 bytes and SHA-256 of the persisted result label. A missing, duplicate, failed, or completed-without-result row has explicit status and a null persisted byte value and cannot pass by matching the same absence in the other arm.",
+    "comparison": "First require both installed wrappers to preserve the exact hook contract. Then compare the complete per-rule persisted-prediction records exactly between arms, including terminal status, terminal row count, error code, byte-presence flag, persisted_prediction_utf8 bytes, and SHA-256. Report every rule-level mismatch and one deterministic first_difference naming the lexicographically first rule and its differing fields. Also report offline minus online event-to-all latency in integer nanoseconds when both arms are observed. This compares persisted prediction labels, because the evaluation journal does not expose raw decoder token bytes.",
+    "reported_outcomes": [
+      "exact prediction-projection equality",
+      "first differing rule and fields when unequal",
+      "exact accounting for each arm",
+      "per-arm and paired latency without an online-versus-offline speed claim",
+      "blocked-attempt records and the exact enforcement limitation"
+    ],
+    "claim_limit": "A match supports only this exact prepared replay under cpython_socket_api_inet_v1; it does not establish general air-gapped or first-run offline operation."
+  },
+  "standardized_fault_outcomes": {
+    "attempt_schema": {
+      "required_fields": [
+        "fault",
+        "repetition",
+        "status",
+        "passed",
+        "started_utc",
+        "finished_utc",
+        "duration_ms",
+        "duration_ns",
+        "standardized_outcomes",
+        "probe_specific",
+        "error"
+      ],
+      "status_values": [
+        "completed",
+        "system_violation",
+        "harness_error",
+        "infrastructure_error",
+        "unclassified_failure"
+      ],
+      "error_rule": "A caught exception is classified by stage and positive cause evidence under formal_attempt_retention.classification, with passed=false and a full type/message/traceback record. An exception during or after measured delivery is system_violation when it is a named measured boundary, unclassified_failure when cause is unknown, and harness_error only when an independent runner/schema/assertion defect is established. Continue to the next safe independent repetition."
+    },
+    "standardized_outcomes_schema": {
+      "schema_version": 1,
+      "required_fields": [
+        "injected_boundary",
+        "fail_open_hook_contract_and_latency",
+        "current_event_survival",
+        "loss_and_duplication",
+        "healthy_recovery",
+        "previous_deployment_continuity",
+        "orphan_process_count",
+        "orphan_process_count_status",
+        "post_shutdown_process_cleanup",
+        "persistent_state_integrity",
+        "operator_visible_incident_records"
+      ],
+      "null_rule": "Use explicit null or an empty collection when a standardized dimension is not applicable or is not observable at the injected boundary; preserve every probe-specific raw field separately and never coerce unknown to success."
+    },
+    "hook_contract": "Exit code zero, stdout exactly the two bytes {}, empty stderr, and wrapper exit within the fixed five-second process bound. Retain raw stdout/stderr and integer-nanosecond start, exit, and latency for every attempt.",
+    "expectations": {
+      "daemon_crash": "Confirm the old daemon is dead before delivery; record rather than assume current-event survival, require the wrapper to preserve its fail-open contract and respawn, and require the first next event to have clean exact accounting with a new daemon PID.",
+      "worker_exit": "Confirm termination of the idle supervised worker; the first next event must have clean exact accounting and a replacement worker PID.",
+      "worker_timeout": "After SIGSTOP, poll and retain process-status observations with exact monotonic signal/confirmation/deadline timestamps; dispatch only after the idle worker is positively observed stopped within the fixed confirmation bound. The faulting evaluation must reach terminal failed status with error_code invalid_output (the current production engine's retained code when the supervised native timeout returns an empty PAW decision), the old worker must be absent, a replacement PID must be present, and the first next event must have clean exact accounting. Disclose that invalid_output is not a timeout-specific public code.",
+      "sqlite_lock": "Confirm BEGIN EXCLUSIVE is held beyond the production five-second busy timeout; record the current-event and operator-visible incident state without assuming either, preserve the fail-open hook contract, and require the first event after lock release to have clean exact accounting.",
+      "malformed_payload": "Invalid JSON must preserve the hook contract and add no evaluation; the early 0.2-second History delta is diagnostic only. After the identifiable 2048-byte input_too_large event and first valid recovery event are terminal, use a fixed one-second quiescence interval and require the exact final non-baseline projection to contain only those two input hashes with no running or extra record. The recovery event must have clean exact accounting.",
+      "duplicate_delivery": "Two byte-identical concurrent deliveries in one live admission window must preserve both hook contracts, yield exactly one evaluation and one finding, and increment the ingress duplicate counter by exactly one.",
+      "deployment_failure": "A stale prepared token must be rejected after the draft changes; the prior active source hash must remain effective and the first next event must have clean exact accounting and matching provenance."
+    },
+    "classification_rule": "passed is true only when the named fault's applicable expectation, persistent_state_integrity.ok, and measured zero-orphan cleanup all hold. After fixture shutdown, poll processes whose RAP_STATE_DIR identifies the retained fixture every query_poll_interval_seconds through the fixed single-event timeout; retain exact monotonic query timestamps and matching PID/command observations, and require an empty observation completed no later than that deadline. This bounded settle covers an auto-respawned daemon whose shutdown acknowledgement can precede process exit; an empty observation first completed after the deadline is not passing. A harness error, unknown required observation, or failed expectation is not passing. Current-event survival and operator-incident visibility are descriptive unless the named expectation explicitly makes them a gate.",
+    "aggregation": "For each fault retain all 20 attempt records and report repetitions completed, passed, system-failed, and harness-error. Do not replace failures with a success rate alone."
+  },
+  "preregistered_reducer_and_worst_case": {
+    "matrix_cell_key": [
+      "rule_count",
+      "project_count",
+      "schedule",
+      "mode",
+      "event_count"
+    ],
+    "repeat_reduction": {
+      "plan_accounting": "Match terminal records to every planned condition ID. Report missing, duplicate-terminal, and unexpected IDs; a missing or duplicate terminal is represented in its planned cell as status missing_or_duplicate_terminal with no samples rather than being dropped.",
+      "latency": "Concatenate every raw per-event sample from all four planned repetitions of the exact cell and reduce event_to_all_query_visible_evaluations_ns as exact integers by nearest rank. Derive rounded milliseconds only after selection for display.",
+      "censoring": "A timed-out event remains right-censored and enters latency percentile lower bounds at its exact recorded latency_censored_at_ns, computed as censor_deadline_monotonic_ns minus that event's submission timestamp. Report observed count, right-censored count, and total count separately.",
+      "accounting": "Sum loss, duplicate, unexpected, cross-project contamination, failed, running, and provenance-mismatch counts over all planned repetitions. Separately sum finding loss, duplicate, unexpected, wrong-project, finding-ID-mismatch, and evaluation-ID-mismatch counts.",
+      "status": "Report the exact status histogram and the count of attempts whose status is not completed. Descriptive latency over retained samples does not turn an incomplete cell into a complete cell."
+    },
+    "marginal_contrasts": "Within the same repetition, traffic schedule, mode, and event count, compare each observed rule count with the immediately smaller observed rule count and each project count with the immediately smaller observed project count. Select and subtract the exact integer-nanosecond event-to-all p95 values, report the nanosecond change divided by added rules or projects, and derive rounded milliseconds only afterward for display; do not extrapolate a scaling model.",
+    "worst_case_selection": {
+      "single_preregistered_key": "Choose max over the ordered tuple [has_missing_or_error_attempt, has_any_evaluation_or_finding_accounting_violation, has_any_right_censoring, right_censored_count, pooled_event_to_all_p95_lower_bound_ns, pooled_event_to_all_maximum_lower_bound_ns, lexical_cell_id].",
+      "boolean_encoding": "false=0 and true=1, so incomplete/error, accounting-violating, and censored cells outrank otherwise numeric cells in that order.",
+      "latency_rule": "Use integer -1 ns for an unavailable p95 or maximum only after the categorical failure and censoring fields have been computed; never assign a successful zero latency to missing data. Rounded milliseconds are display-only and never enter selection.",
+      "tie_break": "The final lexical_cell_id component is compared in ordinary ascending string order inside max, so the lexicographically greatest cell ID wins an otherwise exact tie.",
+      "disclosure": "Publish the ordered key components, all reduced cells, and full plan accounting; the selected cell never replaces endpoint-specific raw metrics elsewhere in the attempt."
+    },
+    "fault_worst_case": "For each named fault retain all completed, system_violation, harness_error, infrastructure_error, and unclassified_failure repetitions and their passed boolean. Report the exact counts and repetition records; no successful repetition replaces a failed one.",
+    "offline_reducer": "The primary offline endpoint is exact equality of every per-rule persisted_prediction_utf8 record and terminal status. Any missing row, duplicate row, failed-status mismatch, input mismatch, or persisted-byte mismatch is unequal; report rule-level differences rather than reducing them away.",
+    "soak_reducer": "The soak is one fixed run. Report every bounded batch's incremental-journal drain/quiescence and capped History-checkpoint proof, the final complete-journal union accounting, all accounting totals, integer-nanosecond summary latency, OLS RSS slope/R-squared, the one-second-settle post-drain RSS, RSS change per actual submitted-event denominator, storage growth, immutable incremental JSONL receipts, exact pre/post-restart persisted projection equality, and post-restart hook/accounting gates. Raw soak journal-progress, query, event, and resource samples remain in their lossless JSONL artifacts rather than being duplicated into result.json; never query the capped History endpoint for the impossible 80,000-tuple union or select a subset/favorable window.",
+    "attempt_reducer": "Apply all reducers only to the primary numeric attempt selected by the outcome-independent attempt rule. Report the same fixed summaries for any other complete attempt as sensitivity results, never as replacements chosen by performance."
+  },
+  "claim_limits": [
+    "Treat each fault only as evidence for its exact injected boundary in amendment 004 and this amendment.",
+    "Do not call the Python-connect-denial probe general offline, air-gapped, or network-isolated execution.",
+    "Do not omit incomplete cells or failed attempts from the worst-case systems result.",
+    "Query-visible evaluation latency excludes Codex asynchronous scheduling, rendered UI latency, and human perception.",
+    "No comprehensive fault-tolerance claim is authorized by the measured subset."
+  ]
+}
