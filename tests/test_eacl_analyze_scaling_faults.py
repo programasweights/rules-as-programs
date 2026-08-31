@@ -1,4 +1,6 @@
+import errno
 import json
+import os
 from hashlib import sha256
 from pathlib import Path
 
@@ -6,6 +8,14 @@ import pytest
 
 from experiments.eacl2027 import analyze_scaling_faults as analyzer
 from experiments.eacl2027.scaling_faults_attempts import AttemptRecorder
+
+
+_LINUX_UNSUPPORTED_ERRNOS = {
+    "EINVAL": 22,
+    "ENOSYS": 38,
+    "ENOTSUP": 95,
+    "EOPNOTSUPP": 95,
+}
 
 
 def _canonical(value):
@@ -22,6 +32,36 @@ def _protocol_documents():
         }
         for relative in analyzer.PROTOCOL_PATHS
     ]
+
+
+def _force_fallback_publication(root: Path, *, error_name="EINVAL") -> Path:
+    publication_path = root / "publication.json"
+    claim_path = analyzer._expected_publication_claim_path(root)
+    claim_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if claim_path.exists() or claim_path.is_symlink():
+        claim_path.unlink()
+    os.link(root / "launch.json", claim_path)
+    launch_bytes = (root / "launch.json").read_bytes()
+    receipt = {
+        "schema_version": 1,
+        "destination": str(root),
+        "method": "hardlink_claim_then_posix_rename",
+        "native_primitive": analyzer._FORMAL_NATIVE_PUBLICATION_PRIMITIVE,
+        "native_unsupported": {
+            "errno": _LINUX_UNSUPPORTED_ERRNOS[error_name],
+            "name": error_name,
+        },
+        "claim": {
+            "path": str(claim_path),
+            "artifact": "launch.json",
+            "bytes": len(launch_bytes),
+            "sha256": sha256(launch_bytes).hexdigest(),
+        },
+    }
+    publication_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    )
+    return claim_path
 
 
 def _cache_outcome(launch_cache, *, status="completed"):
@@ -300,6 +340,17 @@ def _make_attempt(
         "plan": plan,
     }
     recorder = AttemptRecorder(parent / attempt_id, manifest)
+    # The synthetic attempt models the pinned Linux formal runtime even when
+    # the reducer tests themselves run on macOS.
+    publication_path = recorder.root / "publication.json"
+    publication = json.loads(publication_path.read_text(encoding="utf-8"))
+    publication["native_primitive"] = (
+        analyzer._FORMAL_NATIVE_PUBLICATION_PRIMITIVE
+    )
+    publication_path.write_text(
+        json.dumps(publication, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     if component == "faults" and value is not None:
         (recorder.root / "runtime" / "faults" / unit_id).mkdir(parents=True)
     if started:
@@ -339,7 +390,7 @@ def _make_attempt(
         "schema_version": 2,
         "status": status,
         "primary_numeric_eligible": eligible,
-        "protocol_status": "formal_protocol_v3_amendment_005",
+        "protocol_status": "formal_protocol_v3_amendment_006",
         "study_mode": "formal",
         "git": {
             "start": git_start,
@@ -365,9 +416,155 @@ def test_compact_journal_pointer_and_sha_are_authoritative(tmp_path):
     root = _make_attempt(tmp_path, "attempt-a")
     report = analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
     assert report["eligible"] is True
+    assert report["publication"]["method"] == "native_no_replace"
+    assert "publication.json" in report["input_hashes"]
+    assert analyzer._loose_hashes(root)["publication.json"] == sha256(
+        (root / "publication.json").read_bytes()
+    ).hexdigest()
     terminal = next((root / "faults").glob("*.terminal.json"))
     terminal.write_text(terminal.read_text() + " ")
     with pytest.raises(analyzer.AnalysisValidationError, match="receipt mismatch"):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_publication_receipt_is_required(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-missing-publication")
+    (root / "publication.json").unlink()
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="publication.json is missing",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_fallback_publication_requires_exact_live_launch_hardlink(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-fallback")
+    claim_path = _force_fallback_publication(root)
+
+    report = analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+    assert report["publication"]["method"] == (
+        "hardlink_claim_then_posix_rename"
+    )
+    assert claim_path.read_bytes() == (root / "launch.json").read_bytes()
+    assert claim_path.stat().st_ino == (root / "launch.json").stat().st_ino
+
+
+def test_fallback_publication_uses_linux_errno_mapping_on_any_reducer_host(
+    tmp_path,
+):
+    root = _make_attempt(tmp_path, "attempt-linux-enosys")
+    _force_fallback_publication(root, error_name="ENOSYS")
+
+    report = analyzer.validate_attempt(
+        root, _expected_component_counts={"faults": 1}
+    )
+
+    assert report["publication"]["native_unsupported"] == {
+        "errno": 38,
+        "name": "ENOSYS",
+    }
+
+
+def test_formal_publication_rejects_non_linux_native_primitive(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-macos-primitive")
+    publication_path = root / "publication.json"
+    publication = json.loads(publication_path.read_text())
+    publication["native_primitive"] = "renamex_np_RENAME_EXCL"
+    publication_path.write_text(json.dumps(publication) + "\n")
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="pinned Linux renameat2 primitive",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_fallback_publication_rejects_noncanonical_claim_path(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-wrong-claim-path")
+    _force_fallback_publication(root)
+    publication_path = root / "publication.json"
+    publication = json.loads(publication_path.read_text())
+    publication["claim"]["path"] = str(
+        analyzer._expected_publication_claim_path(root).with_name("other.json")
+    )
+    publication_path.write_text(json.dumps(publication) + "\n")
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="differs from the derived path",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_fallback_publication_rejects_symlink_claim(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-symlink-claim")
+    claim_path = _force_fallback_publication(root)
+    claim_path.unlink()
+    claim_path.symlink_to(root / "launch.json")
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="claim path contains a symlink",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_fallback_publication_rejects_equal_bytes_without_same_inode(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-copied-claim")
+    claim_path = _force_fallback_publication(root)
+    launch_bytes = (root / "launch.json").read_bytes()
+    claim_path.unlink()
+    claim_path.write_bytes(launch_bytes)
+    assert claim_path.stat().st_ino != (root / "launch.json").stat().st_ino
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="not a hard link",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_publication_method_and_fallback_fields_cannot_be_mixed(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-mixed-publication")
+    publication_path = root / "publication.json"
+    publication = json.loads(publication_path.read_text())
+    publication["native_unsupported"] = {
+        "errno": errno.EINVAL,
+        "name": "EINVAL",
+    }
+    publication_path.write_text(json.dumps(publication) + "\n")
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="native publication must not declare fallback evidence",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_native_publication_rejects_unexpected_fallback_claim(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-native-with-claim")
+    claim_path = analyzer._expected_publication_claim_path(root)
+    claim_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.link(root / "launch.json", claim_path)
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="unexpected fallback claim",
+    ):
+        analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
+
+
+def test_fallback_publication_requires_owner_exclusive_claim_namespace(tmp_path):
+    root = _make_attempt(tmp_path, "attempt-publication-mode")
+    claim_path = _force_fallback_publication(root)
+    claim_path.parent.chmod(0o755)
+
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="owner-exclusive mode 0700",
+    ):
         analyzer.validate_attempt(root, _expected_component_counts={"faults": 1})
 
 

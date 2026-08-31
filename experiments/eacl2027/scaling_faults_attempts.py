@@ -51,6 +51,7 @@ _MIN_STAGING_FREE_RESERVE_BYTES = 1024**3
 _PREDECESSOR_ARTIFACT_NAMES = (
     "launch.json",
     "plan.json",
+    "publication.json",
     "result.json",
     "stderr.log",
     "stdout.log",
@@ -651,18 +652,38 @@ def _fsync_created_directory_chain(missing: list[Path]) -> None:
         _fsync_directory(missing[-1].parent)
 
 
-def _rename_directory_noreplace(source: Path, destination: Path) -> None:
-    """Atomically publish a staged directory without replacing any destination."""
+class _NativeNoReplaceUnsupported(RuntimeError):
+    """The host or filesystem does not implement the native no-replace primitive."""
+
+    def __init__(self, primitive: str, error: int):
+        super().__init__(primitive, error)
+        self.primitive = primitive
+        self.error = error
+
+
+_NATIVE_NOREPLACE_UNSUPPORTED_ERRNOS = frozenset(
+    {
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+        errno.EOPNOTSUPP,
+    }
+)
+
+
+def _native_rename_directory_noreplace(
+    source: Path, destination: Path
+) -> str:
+    """Use the platform's atomic no-replace rename and return its primitive."""
 
     library = ctypes.CDLL(None, use_errno=True)
     source_bytes = os.fsencode(source)
     destination_bytes = os.fsencode(destination)
     if sys.platform.startswith("linux"):
+        primitive = "renameat2_RENAME_NOREPLACE"
         renameat2 = getattr(library, "renameat2", None)
         if renameat2 is None:
-            raise SystemsHarnessError(
-                "atomic no-replace directory publication requires renameat2"
-            )
+            raise _NativeNoReplaceUnsupported(primitive, errno.ENOSYS)
         renameat2.argtypes = [
             ctypes.c_int,
             ctypes.c_char_p,
@@ -671,6 +692,7 @@ def _rename_directory_noreplace(source: Path, destination: Path) -> None:
             ctypes.c_uint,
         ]
         renameat2.restype = ctypes.c_int
+        ctypes.set_errno(0)
         status = renameat2(
             -100,
             source_bytes,
@@ -679,27 +701,189 @@ def _rename_directory_noreplace(source: Path, destination: Path) -> None:
             1,
         )
     elif sys.platform == "darwin":
+        primitive = "renamex_np_RENAME_EXCL"
         renamex_np = getattr(library, "renamex_np", None)
         if renamex_np is None:
-            raise SystemsHarnessError(
-                "atomic no-replace directory publication requires renamex_np"
-            )
+            raise _NativeNoReplaceUnsupported(primitive, errno.ENOSYS)
         renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
         renamex_np.restype = ctypes.c_int
+        ctypes.set_errno(0)
         status = renamex_np(source_bytes, destination_bytes, 0x00000004)
     else:
-        raise SystemsHarnessError(
-            "atomic no-replace directory publication is unsupported on this platform"
-        )
+        raise _NativeNoReplaceUnsupported("unsupported_platform", errno.ENOSYS)
     if status != 0:
         error = ctypes.get_errno()
         if error in {errno.EEXIST, errno.ENOTEMPTY}:
             raise SystemsHarnessError(
                 f"attempt directory already exists and is immutable: {destination}"
             )
+        if error in _NATIVE_NOREPLACE_UNSUPPORTED_ERRNOS:
+            raise _NativeNoReplaceUnsupported(primitive, error)
         raise SystemsHarnessError(
             f"could not atomically publish attempt directory: {os.strerror(error)}"
         )
+    return primitive
+
+
+def _publication_claim_path(destination: Path) -> Path:
+    staging_parent = destination.parent.with_name(
+        f".{destination.parent.name}.staging"
+    )
+    return (
+        staging_parent
+        / ".publication-claims"
+        / f"{destination.name}.launch.json"
+    )
+
+
+def _require_private_owned_directory(path: Path, *, label: str) -> None:
+    if path.is_symlink() or not path.is_dir():
+        raise SystemsHarnessError(f"{label} is not a regular directory: {path}")
+    observed = path.stat(follow_symlinks=False)
+    effective_uid = getattr(os, "geteuid", lambda: observed.st_uid)()
+    if observed.st_uid != effective_uid or stat.S_IMODE(observed.st_mode) != 0o700:
+        raise SystemsHarnessError(
+            f"{label} must be owned by the launcher with mode 0700: {path}"
+        )
+
+
+def _hardlink_claim_then_posix_rename(
+    source: Path,
+    destination: Path,
+    *,
+    native_primitive: str,
+    native_error: int,
+) -> dict[str, Any]:
+    """Publish through one persistent, exclusive claim among compliant writers."""
+
+    claim_path = _publication_claim_path(destination)
+    staging_parent = claim_path.parent.parent
+    claims_root = claim_path.parent
+    _require_private_owned_directory(
+        staging_parent, label="attempt staging root"
+    )
+    if claims_root.is_symlink():
+        raise SystemsHarnessError(
+            f"attempt publication claims root must not be a symlink: {claims_root}"
+        )
+    try:
+        claims_root.mkdir(mode=0o700)
+    except FileExistsError:
+        if not claims_root.is_dir() or claims_root.is_symlink():
+            raise SystemsHarnessError(
+                f"attempt publication claims root is not a directory: {claims_root}"
+            )
+    else:
+        _fsync_directory(claims_root)
+        _fsync_directory(staging_parent)
+    _require_private_owned_directory(
+        claims_root, label="attempt publication claims root"
+    )
+
+    launch_path = source / "launch.json"
+    if launch_path.is_symlink() or not launch_path.is_file():
+        raise SystemsHarnessError(
+            f"staged attempt launch is not a regular file: {launch_path}"
+        )
+    try:
+        os.link(launch_path, claim_path, follow_symlinks=False)
+    except FileExistsError as exc:
+        raise SystemsHarnessError(
+            f"attempt publication claim already exists and is immutable: {claim_path}"
+        ) from exc
+    except OSError as exc:
+        raise SystemsHarnessError(
+            f"could not exclusively claim attempt publication: {exc}"
+        ) from exc
+
+    # The claim is the compliant-writer linearization point.  It is never
+    # removed, including when the later rename fails or the process crashes.
+    _fsync_directory(claims_root)
+    launch_stat = launch_path.stat(follow_symlinks=False)
+    claim_stat = claim_path.stat(follow_symlinks=False)
+    launch_receipt = _file_receipt(launch_path)
+    claim_receipt = _file_receipt(claim_path)
+    if (
+        not stat.S_ISREG(claim_stat.st_mode)
+        or (launch_stat.st_dev, launch_stat.st_ino)
+        != (claim_stat.st_dev, claim_stat.st_ino)
+        or launch_stat.st_size != claim_stat.st_size
+        or launch_receipt["bytes"] != claim_receipt["bytes"]
+        or launch_receipt["sha256"] != claim_receipt["sha256"]
+    ):
+        raise SystemsHarnessError(
+            "attempt publication claim is not the staged launch hard link"
+        )
+    if destination.exists() or destination.is_symlink():
+        raise SystemsHarnessError(
+            f"attempt directory already exists and is immutable: {destination}"
+        )
+    try:
+        os.rename(source, destination)
+    except OSError as exc:
+        raise SystemsHarnessError(
+            f"could not atomically publish claimed attempt directory: {exc}"
+        ) from exc
+
+    published_launch = destination / "launch.json"
+    published_stat = published_launch.stat(follow_symlinks=False)
+    if (
+        not stat.S_ISREG(published_stat.st_mode)
+        or (published_stat.st_dev, published_stat.st_ino)
+        != (claim_stat.st_dev, claim_stat.st_ino)
+    ):
+        raise SystemsHarnessError(
+            "published launch does not match the persistent attempt claim"
+        )
+    return {
+        "schema_version": 1,
+        "destination": str(destination),
+        "method": "hardlink_claim_then_posix_rename",
+        "native_primitive": native_primitive,
+        "native_unsupported": {
+            "errno": native_error,
+            "name": errno.errorcode.get(native_error, f"ERRNO_{native_error}"),
+        },
+        "claim": {
+            "path": str(claim_path),
+            "artifact": "launch.json",
+            "bytes": claim_receipt["bytes"],
+            "sha256": claim_receipt["sha256"],
+        },
+    }
+
+
+def _rename_directory_noreplace(
+    source: Path, destination: Path
+) -> dict[str, Any]:
+    """Atomically publish a staged tree and return the exact method receipt."""
+
+    claim_path = _publication_claim_path(destination)
+    if claim_path.parent.is_symlink():
+        raise SystemsHarnessError(
+            f"attempt publication claims root must not be a symlink: {claim_path.parent}"
+        )
+    if claim_path.exists() or claim_path.is_symlink():
+        raise SystemsHarnessError(
+            f"attempt publication claim already exists and is immutable: {claim_path}"
+        )
+    try:
+        primitive = _native_rename_directory_noreplace(source, destination)
+    except _NativeNoReplaceUnsupported as unsupported:
+        return _hardlink_claim_then_posix_rename(
+            source,
+            destination,
+            native_primitive=unsupported.primitive,
+            native_error=unsupported.error,
+        )
+    return {
+        "schema_version": 1,
+        "destination": str(destination),
+        "method": "native_no_replace",
+        "native_primitive": primitive,
+        "native_unsupported": None,
+        "claim": None,
+    }
 
 
 def _exclusive_empty(path: Path) -> None:
@@ -809,6 +993,7 @@ class AttemptRecorder:
         reserved_paths = {
             Path("launch.json"),
             Path("plan.json"),
+            Path("publication.json"),
             Path("result.json"),
             Path("stderr.log"),
             Path("stdout.log"),
@@ -860,7 +1045,12 @@ class AttemptRecorder:
                     "sha256": str(item["sha256"]),
                 }
             )
-        self.root.parent.mkdir(parents=True, exist_ok=True)
+        self.root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        formal = str((manifest.get("identity") or {}).get("study_mode", "")) == "formal"
+        if formal:
+            _require_private_owned_directory(
+                self.root.parent, label="formal attempt root"
+            )
         if self.root.exists() or self.root.is_symlink():
             raise SystemsHarnessError(
                 f"attempt directory already exists and is immutable: {self.root}"
@@ -872,7 +1062,10 @@ class AttemptRecorder:
             raise SystemsHarnessError(
                 f"attempt staging root must not be a symlink: {staging_parent}"
             )
-        staging_parent.mkdir(parents=True, exist_ok=True)
+        staging_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _require_private_owned_directory(
+            staging_parent, label="attempt staging root"
+        )
         required_staging_bytes = sum(
             int(item["bytes"]) for item in validated_copies
         )
@@ -927,9 +1120,9 @@ class AttemptRecorder:
 
             if capture_process_streams:
                 # Open and duplicate every descriptor before the immutable launch
-                # exists.  After launch creation only dup2 and the same-filesystem
-                # staging rename remain, so any setup failure leaves no claimed raw
-                # attempt ID.
+                # exists.  Descriptor setup therefore finishes before the native
+                # publish or fallback claim linearization point.  A later fallback
+                # failure deliberately retains its claim and burns the raw ID.
                 try:
                     import sys
 
@@ -960,7 +1153,8 @@ class AttemptRecorder:
                 raise SystemsHarnessError(
                     f"attempt directory already exists and is immutable: {self.root}"
                 )
-            _rename_directory_noreplace(staging, self.root)
+            publication = _rename_directory_noreplace(staging, self.root)
+            _exclusive_json(self.root / "publication.json", publication)
         except BaseException:
             if capture_process_streams and saved_descriptors:
                 for descriptor, saved in saved_descriptors.items():

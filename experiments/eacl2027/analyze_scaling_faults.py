@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and reduce one immutable amendment-005 systems attempt."""
+"""Validate and reduce one immutable amendment-006 systems attempt."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import stat
 from collections import Counter, defaultdict
 from dataclasses import fields
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ from experiments.eacl2027 import scaling_faults_runtime as runtime_contract
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS_VERSION = "protocol-v3-amendment-005-systems-reducer-v1"
+ANALYSIS_VERSION = "protocol-v3-amendment-006-systems-reducer-v1"
 ANALYSIS_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 FORMAL_ATTEMPT_PATTERN = re.compile(
     r"(?P<prefix>[a-z0-9][a-z0-9._-]{0,59})-r(?P<ordinal>[0-9]{2})"
@@ -34,6 +35,7 @@ PROTOCOL_PATHS = (
     "experiments/eacl2027/protocol-v3-amendment-003.json",
     "experiments/eacl2027/protocol-v3-amendment-004.json",
     "experiments/eacl2027/protocol-v3-amendment-005.json",
+    "experiments/eacl2027/protocol-v3-amendment-006.json",
 )
 TERMINAL_STATUSES = frozenset(
     {
@@ -117,6 +119,189 @@ def _require_dict(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise AnalysisValidationError(f"{label} must be a JSON object")
     return value
+
+
+_PUBLICATION_METHODS = frozenset(
+    {"native_no_replace", "hardlink_claim_then_posix_rename"}
+)
+_FORMAL_NATIVE_PUBLICATION_PRIMITIVE = "renameat2_RENAME_NOREPLACE"
+# Formal execution is pinned to Linux on watgpu.  Keep this mapping independent
+# of the reducer host so a Linux receipt remains valid when analyzed on macOS.
+_LINUX_NATIVE_UNSUPPORTED_ERRNOS = {
+    "EINVAL": 22,
+    "ENOSYS": 38,
+    "ENOTSUP": 95,
+    "EOPNOTSUPP": 95,
+}
+
+
+def _expected_publication_claim_path(root: Path) -> Path:
+    staging_parent = root.parent.with_name(f".{root.parent.name}.staging")
+    return (
+        staging_parent
+        / ".publication-claims"
+        / f"{root.name}.launch.json"
+    )
+
+
+def _validate_publication(root: Path) -> dict[str, Any]:
+    """Validate the immutable publication method and any NFS claim guard."""
+
+    publication_path = root / "publication.json"
+    if publication_path.is_symlink() or not publication_path.is_file():
+        raise AnalysisValidationError(
+            "publication.json is missing, non-regular, or a symlink"
+        )
+    publication = _require_dict(
+        _load_json(publication_path), "publication.json"
+    )
+    if set(publication) != {
+        "schema_version",
+        "destination",
+        "method",
+        "native_primitive",
+        "native_unsupported",
+        "claim",
+    }:
+        raise AnalysisValidationError("publication.json has unexpected fields")
+    if type(publication.get("schema_version")) is not int or (
+        publication["schema_version"] != 1
+    ):
+        raise AnalysisValidationError("publication.json schema_version must equal 1")
+    if publication.get("destination") != str(root):
+        raise AnalysisValidationError(
+            "publication destination differs from the exact attempt root"
+        )
+    method = publication.get("method")
+    primitive = publication.get("native_primitive")
+    if method not in _PUBLICATION_METHODS:
+        raise AnalysisValidationError("publication method is invalid")
+    if primitive != _FORMAL_NATIVE_PUBLICATION_PRIMITIVE:
+        raise AnalysisValidationError(
+            "formal publication must use the pinned Linux renameat2 primitive"
+        )
+
+    unsupported = publication.get("native_unsupported")
+    claim_value = publication.get("claim")
+    expected_claim = _expected_publication_claim_path(root)
+    if method == "native_no_replace":
+        if unsupported is not None or claim_value is not None:
+            raise AnalysisValidationError(
+                "native publication must not declare fallback evidence"
+            )
+        if expected_claim.parent.is_symlink():
+            raise AnalysisValidationError(
+                "native publication claim namespace is a symlink"
+            )
+        if expected_claim.exists() or expected_claim.is_symlink():
+            raise AnalysisValidationError(
+                "native publication has an unexpected fallback claim"
+            )
+        return publication
+
+    unsupported_receipt = _require_dict(
+        unsupported, "fallback native unsupported receipt"
+    )
+    if set(unsupported_receipt) != {"errno", "name"}:
+        raise AnalysisValidationError(
+            "fallback native unsupported receipt has unexpected fields"
+        )
+    error_number = unsupported_receipt.get("errno")
+    error_name = unsupported_receipt.get("name")
+    if (
+        type(error_number) is not int
+        or not isinstance(error_name, str)
+        or error_name not in _LINUX_NATIVE_UNSUPPORTED_ERRNOS
+        or _LINUX_NATIVE_UNSUPPORTED_ERRNOS.get(error_name) != error_number
+    ):
+        raise AnalysisValidationError(
+            "fallback is not bound to an allowed unsupported native errno"
+        )
+
+    claim = _require_dict(claim_value, "fallback publication claim")
+    if set(claim) != {"path", "artifact", "bytes", "sha256"}:
+        raise AnalysisValidationError(
+            "fallback publication claim has unexpected fields"
+        )
+    if claim.get("path") != str(expected_claim):
+        raise AnalysisValidationError(
+            "fallback publication claim path differs from the derived path"
+        )
+    if claim.get("artifact") != "launch.json":
+        raise AnalysisValidationError(
+            "fallback publication claim must bind launch.json"
+        )
+    byte_count = claim.get("bytes")
+    digest = claim.get("sha256")
+    if (
+        type(byte_count) is not int
+        or byte_count < 0
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+    ):
+        raise AnalysisValidationError(
+            "fallback publication claim byte identity is invalid"
+        )
+
+    # Resolve no part of the declared path before checking it: a lexical
+    # symlink in the staging/claim chain must not be normalized away.
+    for candidate in (
+        expected_claim.parent.parent,
+        expected_claim.parent,
+        expected_claim,
+    ):
+        if candidate.is_symlink():
+            raise AnalysisValidationError(
+                "fallback publication claim path contains a symlink"
+            )
+    expected_owner = root.parent.stat(follow_symlinks=False).st_uid
+    for label, directory in (
+        ("attempt root", root.parent),
+        ("attempt staging root", expected_claim.parent.parent),
+        ("publication claims root", expected_claim.parent),
+    ):
+        if not directory.is_dir():
+            raise AnalysisValidationError(
+                f"fallback {label} is not a directory"
+            )
+        observed = directory.stat(follow_symlinks=False)
+        if (
+            observed.st_uid != expected_owner
+            or stat.S_IMODE(observed.st_mode) != 0o700
+        ):
+            raise AnalysisValidationError(
+                f"fallback {label} is not owner-exclusive mode 0700"
+            )
+    if not expected_claim.is_file():
+        raise AnalysisValidationError(
+            "fallback publication claim is missing or non-regular"
+        )
+    launch_path = root / "launch.json"
+    if launch_path.is_symlink() or not launch_path.is_file():
+        raise AnalysisValidationError(
+            "fallback publication launch artifact is missing or non-regular"
+        )
+    claim_bytes, claim_digest = _stream_file_identity(expected_claim)
+    launch_bytes, launch_digest = _stream_file_identity(launch_path)
+    if (
+        byte_count != claim_bytes
+        or digest != claim_digest
+        or claim_bytes != launch_bytes
+        or claim_digest != launch_digest
+    ):
+        raise AnalysisValidationError(
+            "fallback publication claim does not match launch bytes"
+        )
+    claim_stat = expected_claim.stat(follow_symlinks=False)
+    launch_stat = launch_path.stat(follow_symlinks=False)
+    if (
+        claim_stat.st_dev != launch_stat.st_dev
+        or claim_stat.st_ino != launch_stat.st_ino
+    ):
+        raise AnalysisValidationError(
+            "fallback publication claim is not a hard link to launch.json"
+        )
+    return publication
 
 
 _HOOK_CONTRACT_FIELDS = frozenset(
@@ -1932,8 +2117,8 @@ def _validate_formal_plan(
         raise AnalysisValidationError("launch identity is not formal")
     if result.get("study_mode") != "formal":
         raise AnalysisValidationError("result study_mode is not formal")
-    if result.get("protocol_status") != "formal_protocol_v3_amendment_005":
-        raise AnalysisValidationError("result protocol status is not amendment 005")
+    if result.get("protocol_status") != "formal_protocol_v3_amendment_006":
+        raise AnalysisValidationError("result protocol status is not amendment 006")
     if not isinstance(identity.get("formal_runtime"), dict):
         raise AnalysisValidationError("formal launch lacks runtime identity")
     git = _require_dict(identity.get("git"), "launch Git identity")
@@ -1944,7 +2129,7 @@ def _validate_formal_plan(
     if set(config_value) != names:
         raise AnalysisValidationError("launch config does not bind every MatrixConfig field")
     contract = _require_dict(
-        _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 005"
+        _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 006"
     )
     if contract.get("freeze_state") != "frozen_outcome_blind" or not contract.get(
         "frozen_utc"
@@ -4840,10 +5025,21 @@ def validate_attempt(
     root = expanded.resolve()
     if not root.is_dir():
         raise AnalysisValidationError("--input must be an immutable attempt directory")
-    required = {name: root / name for name in ("launch.json", "plan.json", "result.json")}
+    required = {
+        name: root / name
+        for name in (
+            "launch.json",
+            "plan.json",
+            "publication.json",
+            "result.json",
+        )
+    }
     if any(path.is_symlink() for path in required.values()):
-        raise AnalysisValidationError("launch, plan, and result must not be symlinks")
+        raise AnalysisValidationError(
+            "launch, plan, publication, and result must not be symlinks"
+        )
     launch = _require_dict(_load_json(required["launch.json"]), "launch.json")
+    publication = _validate_publication(root)
     result = _require_dict(_load_json(required["result.json"]), "result.json")
     plan_value = _load_json(required["plan.json"])
     if not isinstance(plan_value, list) or not all(
@@ -4872,7 +5068,7 @@ def validate_attempt(
         )
     if dict(_expected_component_counts) == FORMAL_COMPONENT_COUNTS:
         contract = _require_dict(
-            _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 005"
+            _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 006"
         )
         try:
             launched = datetime.fromisoformat(
@@ -5019,7 +5215,12 @@ def validate_attempt(
     )
     input_hashes = {
         name: _sha256(required[name])
-        for name in ("launch.json", "plan.json", "result.json")
+        for name in (
+            "launch.json",
+            "plan.json",
+            "publication.json",
+            "result.json",
+        )
     }
     input_hashes["units.jsonl"] = _sha256(root / "units.jsonl")
     input_hashes.update(
@@ -5038,6 +5239,7 @@ def validate_attempt(
     return {
         "root": root,
         "identity": identity,
+        "publication": publication,
         "plan": plan,
         "result": result,
         "result_sha256": input_hashes["result.json"],
@@ -5146,6 +5348,7 @@ def _loose_hashes(root: Path) -> dict[str, str | None]:
     for name in (
         "launch.json",
         "plan.json",
+        "publication.json",
         "result.json",
         "units.jsonl",
         "streams.json",

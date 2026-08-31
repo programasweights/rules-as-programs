@@ -87,10 +87,10 @@ EXTERNAL_MANIFEST = (
 EXTERNAL_OUTPUT = ROOT / "outputs" / "frozen" / "external-paw-finetuned.jsonl"
 EXTERNAL_DATASET = ROOT / "data" / "public" / "external.jsonl"
 PROTOCOL_V3 = ROOT / "protocol-v3.json"
-FORMAL_PARENT_AMENDMENT = ROOT / "protocol-v3-amendment-004.json"
-FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-005.json"
+FORMAL_PARENT_AMENDMENT = ROOT / "protocol-v3-amendment-005.json"
+FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-006.json"
 FORMAL_AMENDMENT_SHA256 = (
-    "11ee9f268076b2fc56a3cedad8a8b1919ec4407db826b1d998dec84a68743bb3"
+    "f2ce7848370630b82024bb84668600fcda765b34af734f0fe94392ed9a530a2f"
 )
 FROZEN_OUTPUT_DIR = (ROOT / "outputs" / "frozen").resolve()
 EXTERNAL_RULE_ORDER = (
@@ -6658,7 +6658,7 @@ def run_study(
             "statuses": global_outcome_statuses,
         },
         "protocol_status": (
-            "formal_protocol_v3_amendment_005"
+            "formal_protocol_v3_amendment_006"
             if formal
             else "candidate_noncanonical"
         ),
@@ -6739,17 +6739,17 @@ def _validate_output_path(path: Path) -> Path:
 
 def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
     if _sha256_file(FORMAL_AMENDMENT) != FORMAL_AMENDMENT_SHA256:
-        raise SystemsHarnessError("protocol-v3 amendment 005 bytes changed")
+        raise SystemsHarnessError("protocol-v3 amendment 006 bytes changed")
     try:
         contract = json.loads(FORMAL_AMENDMENT.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemsHarnessError(f"invalid amendment 005: {exc}") from exc
-    if contract.get("amendment_id") != "protocol-v3-amendment-005":
+        raise SystemsHarnessError(f"invalid amendment 006: {exc}") from exc
+    if contract.get("amendment_id") != "protocol-v3-amendment-006":
         raise SystemsHarnessError("unexpected formal amendment identity")
     if require_frozen:
         if contract.get("freeze_state") != "frozen_outcome_blind":
             raise SystemsHarnessError(
-                "protocol-v3 amendment 005 is not frozen outcome-blind"
+                "protocol-v3 amendment 006 is not frozen outcome-blind"
             )
         frozen_utc = contract.get("frozen_utc")
         try:
@@ -6758,11 +6758,11 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
             )
         except ValueError as exc:
             raise SystemsHarnessError(
-                "protocol-v3 amendment 005 has no valid frozen_utc"
+                "protocol-v3 amendment 006 has no valid frozen_utc"
             ) from exc
         if frozen_at.tzinfo is None:
             raise SystemsHarnessError(
-                "protocol-v3 amendment 005 frozen_utc must be timezone-aware"
+                "protocol-v3 amendment 006 frozen_utc must be timezone-aware"
             )
     prefix = (
         (contract.get("effective_protocol_identity") or {}).get("frozen_prefix")
@@ -7133,7 +7133,7 @@ def _validate_formal_config(
         }
     if mismatches:
         raise SystemsHarnessError(
-            "formal configuration differs from protocol v3 amendment 005: "
+            "formal configuration differs from protocol v3 amendment 006: "
             + json.dumps(mismatches, sort_keys=True)
         )
     expected_partition = str(effective.get("slurm_partition", "ALL"))
@@ -7576,7 +7576,7 @@ def _aborted_attempt_result(
         "planned_unit_count": len(plan),
         "system_violation_units": int(unit_classification == "system_violation"),
         "protocol_status": (
-            "formal_protocol_v3_amendment_005"
+            "formal_protocol_v3_amendment_006"
             if formal
             else "candidate_noncanonical"
         ),

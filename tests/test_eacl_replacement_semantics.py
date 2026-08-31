@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 import shutil
 import socket
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -56,6 +58,17 @@ def _predecessor(
         },
     )
     _write_json(predecessor / "plan.json", [])
+    _write_json(
+        predecessor / "publication.json",
+        {
+            "schema_version": 1,
+            "destination": str(predecessor),
+            "method": "native_no_replace",
+            "native_primitive": "renameat2_RENAME_NOREPLACE",
+            "native_unsupported": None,
+            "claim": None,
+        },
+    )
     _write_json(predecessor / "result.json", result)
     _write_json(
         predecessor / "streams.json",
@@ -371,6 +384,332 @@ def test_atomic_attempt_publication_never_replaces_a_racing_destination(
 
     assert attempt_root.is_dir()
     assert list(attempt_root.iterdir()) == []
+
+
+def test_native_publication_writes_the_exact_method_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+    real_rename = attempts.os.rename
+
+    def native_success(source: Path, destination: Path) -> str:
+        real_rename(source, destination)
+        return "renameat2_RENAME_NOREPLACE"
+
+    monkeypatch.setattr(
+        attempts, "_native_rename_directory_noreplace", native_success
+    )
+
+    attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    publication = json.loads(
+        (attempt_root / "publication.json").read_text(encoding="utf-8")
+    )
+    assert publication == {
+        "schema_version": 1,
+        "destination": str(attempt_root),
+        "method": "native_no_replace",
+        "native_primitive": "renameat2_RENAME_NOREPLACE",
+        "native_unsupported": None,
+        "claim": None,
+    }
+
+
+def _force_native_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    error: int = errno.EINVAL,
+) -> None:
+    def unsupported(_source: Path, _destination: Path) -> str:
+        raise attempts._NativeNoReplaceUnsupported(
+            "renameat2_RENAME_NOREPLACE", error
+        )
+
+    monkeypatch.setattr(
+        attempts, "_native_rename_directory_noreplace", unsupported
+    )
+
+
+def test_unsupported_native_publish_uses_persistent_launch_hardlink_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+
+    attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    publication = json.loads(
+        (attempt_root / "publication.json").read_text(encoding="utf-8")
+    )
+    claim_path = Path(publication["claim"]["path"])
+    assert publication == {
+        "schema_version": 1,
+        "destination": str(attempt_root),
+        "method": "hardlink_claim_then_posix_rename",
+        "native_primitive": "renameat2_RENAME_NOREPLACE",
+        "native_unsupported": {"errno": errno.EINVAL, "name": "EINVAL"},
+        "claim": {
+            "path": str(claim_path),
+            "artifact": "launch.json",
+            "bytes": (attempt_root / "launch.json").stat().st_size,
+            "sha256": hashlib.sha256(
+                (attempt_root / "launch.json").read_bytes()
+            ).hexdigest(),
+        },
+    }
+    assert claim_path == (
+        tmp_path
+        / ".attempts.staging"
+        / ".publication-claims"
+        / "formal-r01.launch.json"
+    )
+    assert claim_path.is_file()
+    assert os.path.samestat(
+        claim_path.stat(), (attempt_root / "launch.json").stat()
+    )
+
+
+def test_publication_receipt_is_written_and_fsynced_only_after_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+    publication_observed = False
+    synced_directories: list[Path] = []
+    real_json = attempts._exclusive_json
+    real_fsync = attempts._fsync_directory
+
+    def observe_json(path: Path, value: Any) -> None:
+        nonlocal publication_observed
+        if path.name == "publication.json":
+            assert path.parent == attempt_root
+            assert (attempt_root / "launch.json").is_file()
+            publication_observed = True
+        real_json(path, value)
+
+    def observe_fsync(path: Path) -> None:
+        synced_directories.append(path)
+        real_fsync(path)
+
+    monkeypatch.setattr(attempts, "_exclusive_json", observe_json)
+    monkeypatch.setattr(attempts, "_fsync_directory", observe_fsync)
+
+    attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    assert publication_observed
+    assert (attempt_root / "publication.json").is_file()
+    assert attempt_root in synced_directories
+
+
+def test_claim_persists_when_posix_rename_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+
+    def fail_rename(_source: Path, _destination: Path) -> None:
+        raise OSError(5, "synthetic storage error")
+
+    monkeypatch.setattr(attempts.os, "rename", fail_rename)
+    with pytest.raises(
+        attempts.SystemsHarnessError,
+        match="could not atomically publish claimed attempt directory",
+    ):
+        attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    claim_path = (
+        tmp_path
+        / ".attempts.staging"
+        / ".publication-claims"
+        / "formal-r01.launch.json"
+    )
+    assert claim_path.is_file()
+    assert not attempt_root.exists()
+    assert json.loads(claim_path.read_text(encoding="utf-8"))["plan"] == []
+
+
+def test_duplicate_compliant_writer_loses_exclusive_publication_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+    real_rename = attempts.os.rename
+
+    def leave_claim_without_publish(_source: Path, _destination: Path) -> None:
+        raise OSError(5, "synthetic first-writer crash")
+
+    monkeypatch.setattr(attempts.os, "rename", leave_claim_without_publish)
+    with pytest.raises(attempts.SystemsHarnessError, match="claimed attempt"):
+        attempts.AttemptRecorder(attempt_root, {"plan": []})
+    claim_path = (
+        tmp_path
+        / ".attempts.staging"
+        / ".publication-claims"
+        / "formal-r01.launch.json"
+    )
+    first_identity = claim_path.stat()
+    first_bytes = claim_path.read_bytes()
+
+    monkeypatch.setattr(attempts.os, "rename", real_rename)
+    with pytest.raises(
+        attempts.SystemsHarnessError, match="publication claim already exists"
+    ):
+        attempts.AttemptRecorder(attempt_root, {"plan": [{"condition_id": "other"}]})
+
+    assert claim_path.read_bytes() == first_bytes
+    assert os.path.samestat(first_identity, claim_path.stat())
+    assert not attempt_root.exists()
+
+
+def test_racing_compliant_writers_have_exactly_one_claim_winner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+    claim_barrier = threading.Barrier(2)
+    real_link = attempts.os.link
+
+    def synchronize_claim_links(
+        source: Path,
+        destination: Path,
+        *,
+        follow_symlinks: bool = True,
+    ) -> None:
+        if Path(destination).parent.name == ".publication-claims":
+            claim_barrier.wait(timeout=5)
+        real_link(
+            source,
+            destination,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(attempts.os, "link", synchronize_claim_links)
+    outcomes: list[Exception | None] = []
+
+    def publish(manifest: dict[str, Any]) -> None:
+        try:
+            attempts.AttemptRecorder(attempt_root, manifest)
+        except Exception as exc:
+            outcomes.append(exc)
+        else:
+            outcomes.append(None)
+
+    writers = [
+        threading.Thread(target=publish, args=({"plan": []},)),
+        threading.Thread(
+            target=publish,
+            args=({"plan": [{"condition_id": "other"}]},),
+        ),
+    ]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(timeout=10)
+
+    assert all(not writer.is_alive() for writer in writers)
+    assert sum(outcome is None for outcome in outcomes) == 1
+    loser = next(outcome for outcome in outcomes if outcome is not None)
+    assert isinstance(loser, attempts.SystemsHarnessError)
+    assert "publication claim already exists" in str(loser)
+    publication = json.loads(
+        (attempt_root / "publication.json").read_text(encoding="utf-8")
+    )
+    claim_path = Path(publication["claim"]["path"])
+    assert os.path.samestat(
+        claim_path.stat(), (attempt_root / "launch.json").stat()
+    )
+
+
+def test_nonunsupported_native_error_never_falls_back_to_posix_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+    posix_rename_called = False
+
+    def fail_closed(_source: Path, _destination: Path) -> str:
+        raise attempts.SystemsHarnessError("synthetic native EIO")
+
+    def observe_posix_rename(_source: Path, _destination: Path) -> None:
+        nonlocal posix_rename_called
+        posix_rename_called = True
+
+    monkeypatch.setattr(
+        attempts, "_native_rename_directory_noreplace", fail_closed
+    )
+    monkeypatch.setattr(attempts.os, "rename", observe_posix_rename)
+
+    with pytest.raises(attempts.SystemsHarnessError, match="native EIO"):
+        attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    assert not posix_rename_called
+    assert not attempt_root.exists()
+    assert not (
+        tmp_path
+        / ".attempts.staging"
+        / ".publication-claims"
+        / "formal-r01.launch.json"
+    ).exists()
+
+
+def test_burned_fallback_claim_blocks_later_native_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+
+    def fail_after_claim(_source: Path, _destination: Path) -> None:
+        raise OSError(5, "synthetic post-claim failure")
+
+    monkeypatch.setattr(attempts.os, "rename", fail_after_claim)
+    with pytest.raises(attempts.SystemsHarnessError, match="claimed attempt"):
+        attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    native_called = False
+
+    def unexpected_native(_source: Path, _destination: Path) -> str:
+        nonlocal native_called
+        native_called = True
+        return "renameat2_RENAME_NOREPLACE"
+
+    monkeypatch.setattr(
+        attempts, "_native_rename_directory_noreplace", unexpected_native
+    )
+    with pytest.raises(
+        attempts.SystemsHarnessError, match="publication claim already exists"
+    ):
+        attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    assert not native_called
+    assert not attempt_root.exists()
+
+
+def test_fallback_requires_owner_exclusive_claim_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_native_unsupported(monkeypatch)
+    attempt_root = tmp_path / "attempts" / "formal-r01"
+    staging_root = tmp_path / ".attempts.staging"
+    staging_root.mkdir(mode=0o700)
+    claims_root = staging_root / ".publication-claims"
+    claims_root.mkdir(mode=0o700)
+    claims_root.chmod(0o755)
+
+    with pytest.raises(attempts.SystemsHarnessError, match="mode 0700"):
+        attempts.AttemptRecorder(attempt_root, {"plan": []})
+
+    assert not attempt_root.exists()
+
+
+def test_formal_attempt_root_must_be_owner_exclusive(tmp_path: Path) -> None:
+    attempts_root = tmp_path / "attempts"
+    attempts_root.mkdir(mode=0o700)
+    attempts_root.chmod(0o755)
+
+    with pytest.raises(attempts.SystemsHarnessError, match="mode 0700"):
+        attempts.AttemptRecorder(
+            attempts_root / "formal-r01",
+            {"identity": {"study_mode": "formal"}, "plan": []},
+        )
 
 
 def test_deep_staged_copy_fsyncs_every_created_directory(

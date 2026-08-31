@@ -816,7 +816,7 @@ def test_malformed_fault_uses_final_exact_quiescence_not_early_count(
 
 def test_formal_main_captures_cache_end_after_run_study_abort(monkeypatch, tmp_path):
     attempts = tmp_path / "attempts"
-    attempts.mkdir()
+    attempts.mkdir(mode=0o700)
     attempt = attempts / "abort-001"
     terminal_order = []
     monkeypatch.setattr(systems, "FORMAL_RAW_ATTEMPT_ROOT", attempts)
@@ -1599,6 +1599,17 @@ def test_replacement_launch_binding_requires_verified_immediate_predecessor(tmp_
     for name, value in (
         ("launch.json", {"identity": {"attempt_id": predecessor.name}}),
         ("plan.json", [{"component": "matrix", "unit_id": "c1"}]),
+        (
+            "publication.json",
+            {
+                "schema_version": 1,
+                "destination": str(predecessor),
+                "method": "native_no_replace",
+                "native_primitive": "renameat2_RENAME_NOREPLACE",
+                "native_unsupported": None,
+                "claim": None,
+            },
+        ),
         ("result.json", {"status": "incomplete_harness_error"}),
     ):
         (predecessor / name).write_text(json.dumps(value) + "\n")
