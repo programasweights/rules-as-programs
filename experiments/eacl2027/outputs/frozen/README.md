@@ -106,6 +106,36 @@ after all eight programs were prepared. They exclude compilation, the Codex
 hook, daemon/store work, and UI rendering. The lexical and Always-OK timings are
 harness function-call timings and are not deployment latency baselines.
 
+## Matched-backbone control (protocol v3, amendments 001--003)
+
+The `v3/` directory contains two clean fresh-process matched-backbone runs for
+each quality dataset and the prospectively specified paired analyses. The
+control directly uses the exact unadapted Qwen3-0.6B Q6_K GGUF interpreter
+used by PAW (content SHA-256
+`9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c`),
+with greedy CPU decoding, no input truncation, and at most eight new tokens.
+For every case, two within-run decodes agree; after removing timing fields, the
+decoded outputs and strict predictions also agree across the two fresh runs.
+
+On the controlled set, the matched base reaches .648 macro-F1 and .510 exact
+accuracy. Standard PAW's .183 macro-F1 gain has paired 95% interval
+[-.039, .340], so its positive-gain gate is not supported; finetuned PAW's
+.313 gain has interval [.237, .415] and supports the gate. On the selected
+public-instruction set, the matched base reaches .389 macro-F1 and .519 exact
+accuracy. Standard and finetuned PAW gain .451 ([.278, .639]) and .557
+([.373, .753]) macro-F1, respectively, supporting both gates. Thus three of
+the four named compiler-by-dataset gates are supported. These analyses compare
+fixed synthetic contrasts and do not establish natural-event prevalence or a
+latency advantage across unmatched runtimes.
+
+The frozen analysis artifacts are
+`v3/matched-backbone-controlled-v1.json` (SHA-256
+`d8d95b198a7cc49dcef5c4b7decb0ba8a345fbb0ec3a58ab1ec09570ed2f140e`)
+and `v3/matched-backbone-external-v1.json` (SHA-256
+`10b8ca72cbd91bcaec8f629318cede9eaa3d18149f00cd7188dd8833f539b523`).
+The `v3/superseded/` subdirectory separately retains the rejected dirty-scope
+controlled attempt; it is not used in any reported result.
+
 ## Installed production path (protocol 2.0.0)
 
 `integrated.json` was produced from the same clean commit `9658dde...` and has
