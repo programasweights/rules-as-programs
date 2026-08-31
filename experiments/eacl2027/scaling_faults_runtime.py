@@ -871,7 +871,7 @@ def retain_cache_end_receipt(
     entry_changes: list[dict[str, Any]] = []
     permitted_runtime_manifest_temporal_changes: list[dict[str, Any]] = []
     allow_runtime_manifest_temporal_change = dependency.get("runtime_lock_path") == (
-        "experiments/eacl2027/formal-runtime-lock-v4.json"
+        "experiments/eacl2027/formal-runtime-lock-v6.json"
     )
     for path in sorted(all_after_entries):
         current = all_after_entries[path]

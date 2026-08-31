@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and reduce immutable amendment-007/008 systems attempts."""
+"""Validate and reduce immutable amendment-007/008/009 systems attempts."""
 
 from __future__ import annotations
 
@@ -43,6 +43,14 @@ PROTOCOL_PATHS_007 = (
 PROTOCOL_PATHS_008 = (
     *PROTOCOL_PATHS_007,
     "experiments/eacl2027/protocol-v3-amendment-008.json",
+)
+PROTOCOL_PATHS_009 = (
+    *PROTOCOL_PATHS_008,
+    "experiments/eacl2027/protocol-v3-amendment-009.json",
+)
+PROTOCOL_PATHS_010 = (
+    *PROTOCOL_PATHS_009,
+    "experiments/eacl2027/protocol-v3-amendment-010.json",
 )
 # Backward-compatible name for the amendment-007 single-attempt reducer.
 PROTOCOL_PATHS = PROTOCOL_PATHS_007
@@ -959,6 +967,47 @@ def _load_amendment_008() -> dict[str, Any] | None:
         raise AnalysisValidationError(
             "amendment 008 frozen_utc is not a past timestamp"
         )
+    correction_path = REPO_ROOT / PROTOCOL_PATHS_009[-1]
+    if correction_path.is_symlink() or not correction_path.is_file():
+        raise AnalysisValidationError("amendment 009 is unavailable")
+    correction = _require_dict(_load_json(correction_path), "amendment 009")
+    correction_identity = _require_dict(
+        correction.get("effective_protocol_identity"),
+        "amendment-009 effective identity",
+    )
+    if (
+        correction.get("amendment_id") != "protocol-v3-amendment-009"
+        or correction.get("parent_amendment") != "protocol-v3-amendment-008"
+        or not str(correction.get("status", "")).startswith("frozen ")
+    ):
+        raise AnalysisValidationError("amendment 009 is not frozen")
+    value = json.loads(json.dumps(value))
+    value["effective_protocol_identity"]["required_git_topology"] = (
+        correction_identity["required_git_topology"]
+    )
+    value["effective_protocol_identity"]["interpretation_order"] = (
+        correction_identity["interpretation_order"]
+    )
+    routing_path = REPO_ROOT / PROTOCOL_PATHS_010[-1]
+    if routing_path.is_symlink() or not routing_path.is_file():
+        raise AnalysisValidationError("amendment 010 is unavailable")
+    routing = _require_dict(_load_json(routing_path), "amendment 010")
+    routing_identity = _require_dict(
+        routing.get("effective_protocol_identity"),
+        "amendment-010 effective identity",
+    )
+    if (
+        routing.get("amendment_id") != "protocol-v3-amendment-010"
+        or routing.get("parent_amendment") != "protocol-v3-amendment-009"
+        or not str(routing.get("status", "")).startswith("frozen ")
+    ):
+        raise AnalysisValidationError("amendment 010 is not frozen")
+    value["effective_protocol_identity"]["required_git_topology"] = (
+        routing_identity["required_git_topology"]
+    )
+    value["effective_protocol_identity"]["interpretation_order"] = (
+        routing_identity["interpretation_order"]
+    )
     return value
 
 
@@ -2057,7 +2106,7 @@ def _effective_formal_runtime_profile(
         "amendment-008 cache correction",
     )
     dependency["formal_cache_dir"] = correction.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v4.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v6.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -2558,7 +2607,7 @@ def _component_static_analysis_binding(analysis_id: str) -> dict[str, Any]:
     binding["analysis_version"] = COMPONENT_ANALYSIS_ID
     binding["protocol_documents"] = [
         {"path": relative, "sha256": _sha256(REPO_ROOT / relative)}
-        for relative in PROTOCOL_PATHS_008
+        for relative in PROTOCOL_PATHS_010
     ]
     binding["reducer_config"] = COMPONENT_REDUCER_CONFIG
     binding["reducer_config_sha256"] = _sha256_bytes(
@@ -5914,7 +5963,7 @@ def validate_attempt(
         legacy_r01=legacy_r01,
         runner_anchor=anchored_r02,
         protocol_paths=(
-            PROTOCOL_PATHS_008
+            PROTOCOL_PATHS_010
             if component_r03
             else PROTOCOL_PATHS_007[:-1]
             if legacy_r01 is not None
@@ -6876,6 +6925,8 @@ def analyze_component_composite(path: Path, analysis_id: str) -> dict[str, Any]:
             },
         },
         "amendment_008_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_008[-1]),
+        "amendment_009_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_009[-1]),
+        "amendment_010_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_010[-1]),
     }
     return {
         "schema_version": 1,

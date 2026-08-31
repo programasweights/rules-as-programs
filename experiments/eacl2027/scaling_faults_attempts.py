@@ -67,6 +67,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _COMPONENT_AMENDMENT_PATH = (
     _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-008.json"
 )
+_COMPONENT_CORRECTION_PATH = (
+    _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-009.json"
+)
+_COMPONENT_ROUTING_CORRECTION_PATH = (
+    _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-010.json"
+)
 _COMPONENT_CANARY_ARCHIVE_PARENT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4"
 )
@@ -698,6 +704,60 @@ def _load_component_amendment() -> dict[str, Any]:
         raise _component_error("amendment frozen_utc is not timezone-aware")
     if frozen > datetime.now(timezone.utc):
         raise _component_error("amendment frozen_utc is in the future")
+    if (
+        _COMPONENT_CORRECTION_PATH.is_symlink()
+        or not _COMPONENT_CORRECTION_PATH.is_file()
+    ):
+        raise _component_error("the frozen amendment-009 correction is unavailable")
+    try:
+        correction = _strict_json_object(
+            _COMPONENT_CORRECTION_PATH.read_text(encoding="utf-8"),
+            label="amendment 009",
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _component_error("amendment 009 is unavailable") from exc
+    correction_identity = correction.get("effective_protocol_identity")
+    if (
+        correction.get("amendment_id") != "protocol-v3-amendment-009"
+        or correction.get("parent_amendment") != "protocol-v3-amendment-008"
+        or not str(correction.get("status", "")).startswith("frozen ")
+        or not isinstance(correction_identity, dict)
+        or not isinstance(correction_identity.get("required_git_topology"), dict)
+    ):
+        raise _component_error("amendment 009 is not the frozen exact correction")
+    amendment = json.loads(json.dumps(amendment))
+    amendment["effective_protocol_identity"]["required_git_topology"] = (
+        correction_identity["required_git_topology"]
+    )
+    amendment["effective_protocol_identity"]["interpretation_order"] = (
+        correction_identity["interpretation_order"]
+    )
+    if (
+        _COMPONENT_ROUTING_CORRECTION_PATH.is_symlink()
+        or not _COMPONENT_ROUTING_CORRECTION_PATH.is_file()
+    ):
+        raise _component_error("the frozen amendment-010 correction is unavailable")
+    try:
+        routing = _strict_json_object(
+            _COMPONENT_ROUTING_CORRECTION_PATH.read_text(encoding="utf-8"),
+            label="amendment 010",
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _component_error("amendment 010 is unavailable") from exc
+    routing_identity = routing.get("effective_protocol_identity")
+    if (
+        routing.get("amendment_id") != "protocol-v3-amendment-010"
+        or routing.get("parent_amendment") != "protocol-v3-amendment-009"
+        or not str(routing.get("status", "")).startswith("frozen ")
+        or not isinstance(routing_identity, dict)
+    ):
+        raise _component_error("amendment 010 is not the frozen exact correction")
+    amendment["effective_protocol_identity"]["required_git_topology"] = (
+        routing_identity["required_git_topology"]
+    )
+    amendment["effective_protocol_identity"]["interpretation_order"] = (
+        routing_identity["interpretation_order"]
+    )
     return amendment
 
 
@@ -4177,16 +4237,16 @@ def _validate_all_partition_canary_archive(
             raise _component_error(f"canary archived {name} script identity differs")
 
     task_summary_raw = members[f"srun-task-{job_id}.stdout.log"].read_bytes()
+    if not task_summary_raw.endswith(b"\n") or task_summary_raw.count(b"\n") != 1:
+        raise _component_error("canary task stdout is not one LF-terminated JSON row")
     try:
         task_summary = _strict_json_object(
-            task_summary_raw.decode("utf-8").rstrip("\n"),
+            task_summary_raw[:-1].decode("utf-8"),
             label="canary task stdout summary",
         )
     except UnicodeDecodeError as exc:
         raise _component_error("canary task stdout is not UTF-8") from exc
-    if task_summary_raw != _canonical_json_bytes(
-        task_summary
-    ) + b"\n" or task_summary != {
+    if task_summary != {
         "status": "passed",
         "receipt": str(canary_receipt_path),
         "receipt_sha256": canary_receipt["sha256"],

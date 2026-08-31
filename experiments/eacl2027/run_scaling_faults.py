@@ -95,6 +95,8 @@ FORMAL_BASE_AMENDMENT_SHA256 = (
     "540ee245cd025d3cb5c4146fb36ec30b7d54b40ccc74de78a3a4df9a06f4aa91"
 )
 FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-008.json"
+FORMAL_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-009.json"
+FORMAL_ROUTING_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-010.json"
 FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
 FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
     "For exact raw r03, study_mode is exactly "
@@ -7049,6 +7051,24 @@ def run_study(
             if formal
             else None
         ),
+        "protocol_correction_amendment": (
+            {
+                "path": str(FORMAL_CORRECTION_AMENDMENT.relative_to(REPO_ROOT)),
+                "sha256": _sha256_file(FORMAL_CORRECTION_AMENDMENT),
+            }
+            if formal
+            else None
+        ),
+        "protocol_routing_correction_amendment": (
+            {
+                "path": str(
+                    FORMAL_ROUTING_CORRECTION_AMENDMENT.relative_to(REPO_ROOT)
+                ),
+                "sha256": _sha256_file(FORMAL_ROUTING_CORRECTION_AMENDMENT),
+            }
+            if formal
+            else None
+        ),
         "rules": [
             {
                 key: value
@@ -7114,6 +7134,16 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         raise SystemsHarnessError("protocol-v3 amendment 007 bytes changed")
     if FORMAL_AMENDMENT.is_symlink() or not FORMAL_AMENDMENT.is_file():
         raise SystemsHarnessError("protocol-v3 amendment 008 is absent or a symlink")
+    if (
+        FORMAL_CORRECTION_AMENDMENT.is_symlink()
+        or not FORMAL_CORRECTION_AMENDMENT.is_file()
+    ):
+        raise SystemsHarnessError("protocol-v3 amendment 009 is absent or a symlink")
+    if (
+        FORMAL_ROUTING_CORRECTION_AMENDMENT.is_symlink()
+        or not FORMAL_ROUTING_CORRECTION_AMENDMENT.is_file()
+    ):
+        raise SystemsHarnessError("protocol-v3 amendment 010 is absent or a symlink")
 
     def reject_constant(value: str) -> None:
         raise ValueError(f"non-finite JSON number {value}")
@@ -7177,6 +7207,61 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
             raise SystemsHarnessError(
                 "protocol-v3 amendment 008 frozen_utc may not be in the future"
             )
+        try:
+            correction = json.loads(
+                FORMAL_CORRECTION_AMENDMENT.read_text(encoding="utf-8"),
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemsHarnessError(f"invalid strict amendment 009: {exc}") from exc
+        correction_identity = (
+            correction.get("effective_protocol_identity")
+            if isinstance(correction, dict)
+            else None
+        )
+        if (
+            not isinstance(correction, dict)
+            or correction.get("amendment_id") != "protocol-v3-amendment-009"
+            or correction.get("parent_amendment") != "protocol-v3-amendment-008"
+            or not str(correction.get("status", "")).startswith("frozen ")
+            or not isinstance(correction_identity, dict)
+        ):
+            raise SystemsHarnessError("protocol-v3 amendment 009 is not frozen")
+        contract = json.loads(json.dumps(contract))
+        contract["effective_protocol_identity"]["required_git_topology"] = (
+            correction_identity["required_git_topology"]
+        )
+        contract["effective_protocol_identity"]["interpretation_order"] = (
+            correction_identity["interpretation_order"]
+        )
+        try:
+            routing = json.loads(
+                FORMAL_ROUTING_CORRECTION_AMENDMENT.read_text(encoding="utf-8"),
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemsHarnessError(f"invalid strict amendment 010: {exc}") from exc
+        routing_identity = (
+            routing.get("effective_protocol_identity")
+            if isinstance(routing, dict)
+            else None
+        )
+        if (
+            not isinstance(routing, dict)
+            or routing.get("amendment_id") != "protocol-v3-amendment-010"
+            or routing.get("parent_amendment") != "protocol-v3-amendment-009"
+            or not str(routing.get("status", "")).startswith("frozen ")
+            or not isinstance(routing_identity, dict)
+        ):
+            raise SystemsHarnessError("protocol-v3 amendment 010 is not frozen")
+        contract["effective_protocol_identity"]["required_git_topology"] = (
+            routing_identity["required_git_topology"]
+        )
+        contract["effective_protocol_identity"]["interpretation_order"] = (
+            routing_identity["interpretation_order"]
+        )
     interpretation_order = list(
         (contract.get("effective_protocol_identity") or {}).get("interpretation_order")
         or []
@@ -7185,7 +7270,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         "experiments/eacl2027/protocol-v3.json",
         *[
             f"experiments/eacl2027/protocol-v3-amendment-{index:03d}.json"
-            for index in range(1, 9)
+            for index in range(1, 11)
         ],
     ]
     if interpretation_order != expected_order:
@@ -7226,7 +7311,7 @@ def _formal_runtime_profile() -> dict[str, Any]:
         _formal_contract().get("corrected_direct_paw_cache_contract") or {}
     )
     dependency["formal_cache_dir"] = corrected.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v4.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v6.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"

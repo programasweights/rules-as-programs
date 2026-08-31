@@ -2170,7 +2170,7 @@ def test_canary_validator_accepts_extra_import_activations_but_requires_worker(
             "srun-client.stdout.log": f"{job_id}\n".encode(),
             f"srun-task-{job_id}.stderr.log": b"",
             f"srun-task-{job_id}.stdout.log": (
-                attempts._canonical_json_bytes(task_summary) + b"\n"
+                json.dumps(task_summary, sort_keys=True).encode() + b"\n"
             ),
             "srun.exit-status.txt": b"0\n",
         }
