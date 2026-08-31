@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-010",
+  "created_utc": "2026-08-31T22:58:09Z",
+  "frozen_utc": "2026-08-31T22:58:09Z",
+  "status": "frozen prelaunch runtime-lock routing correction; no I5 commit, H5 lock, r03 setup, or measured outcome existed",
+  "parent_amendment": "protocol-v3-amendment-009",
+  "parent_protocol_commit": "dcd055644dbe4c0bac7784de412fe4a6f805f30b",
+  "reason": "The exact post-Amendment-009 test gate failed before I5 commit because the r03 cache closeout helper recognizes the one permitted current-runtime-manifest mtime/ctime rewrite by exact runtime-lock path. Routing the formal profile to a new v5 lock without updating that helper produced a system_violation in the focused metadata-drift test. The helper was part of I4 and Amendment 008's fatal/cache implementation scope, but Amendment 009's new I5 allowlist accidentally omitted it. This amendment corrects the prelaunch plan before any formal setup or measurement.",
+  "observed_prelaunch_boundary": {
+    "i5_commit_present": false,
+    "h5_runtime_lock_present": false,
+    "r03_attempt_root_present": false,
+    "focused_test": "tests/test_eacl_runtime_cache_receipts.py::test_r03_allows_only_current_manifest_mtime_ctime_drift",
+    "observed_status": "failed before implementation commit",
+    "observed_value": "system_violation",
+    "required_value": "completed"
+  },
+  "explicit_override": {
+    "scope": "Only the prospective P6/I6/H6 topology and exact runtime-lock-v6 filename routing.",
+    "required_runtime_helper_change": "Recognize experiments/eacl2027/formal-runtime-lock-v6.json as the exact r03 lock path for Amendment 008's existing metadata-only exception on runtimes/qwen3-0.6b-q6_k.json. No exception field, file, byte, topology, ownership, or other temporal rule changes.",
+    "inherited_parser_change": "Amendment 009's one-line strict-JSON task-summary rule remains exact.",
+    "unchanged": [
+      "all Amendment 008 experimental design, r02 forensics, cache, canary, evidence, full-430, sole-primary-source, fatal-result, retention, and non-censoring rules",
+      "all Amendment 009 parser semantics and sealed failed-replacement evidence",
+      "partition ALL, watgpu808, CPU-only execution, corrected direct PAW cache root, and exact r03 ID",
+      "the unclassified r02 exit-5 cause and every immutable r01/r02 byte"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "dcd055644dbe4c0bac7784de412fe4a6f805f30b",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-010.json"
+        ],
+        "semantic_role": "P6 final prelaunch routing correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I6 parser, amendment-chain, lock routing, and exact metadata exception"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v6.json"
+        ],
+        "semantic_role": "H6 live runtime lock generated from I6"
+      },
+      "head_must_equal_h4_before_r03_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v6.json",
+    "chronology_rule": "Commit this file alone as P6 directly on P5. Commit exactly the declared I6 paths as its child. Generate formal-runtime-lock-v6.json from the live I6 wheelhouse and corrected cache and commit only it as H6. Push H6, create a fresh H6-bound replacement receipt, validate it completely, and only then permit r03 setup."
+  },
+  "claim_limits": [
+    "This planning correction adds no experimental result and changes no design or outcome predicate.",
+    "The metadata-only exception remains confined to the one exact current-runtime-manifest path and mtime_ns/ctime_ns fields with all content and identity fields unchanged.",
+    "Any further prelaunch gate failure must fail closed and requires a new amendment if implementation or protocol bytes change."
+  ]
+}
