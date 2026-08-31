@@ -27,7 +27,9 @@ identity. The Qwen run used model commit
 `cdbee75f17c01a7cc42f958dc650907174af0554`, deterministic decoding, no input
 truncation, and zero invalid outputs or runtime errors. It ran as Slurm job
 `1523653` on partition `ALL` with an NVIDIA L40S, PyTorch 2.9.1+cu130, and
-Transformers 4.57.6.
+Transformers 4.57.6. Retrospectively captured scheduler provenance is recorded
+in `qwen3-4b.slurm-receipt.json`; adding that receipt did not change the frozen
+predictions, manifest, or metrics.
 
 `paired-comparisons-v1.json` is a separately marked post-hoc analysis of these
 already frozen predictions. Relative to Qwen3-4B, finetuned PAW is +0.1224

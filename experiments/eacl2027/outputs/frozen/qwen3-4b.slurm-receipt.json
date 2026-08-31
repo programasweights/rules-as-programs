@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "receipt_kind": "retrospective_slurm_provenance",
+  "captured_utc": "2026-08-31T07:14:36Z",
+  "run": "controlled-qwen3-4b",
+  "slurm": {
+    "job_id": "1523653",
+    "job_name": "rap-qwen",
+    "partition": "ALL",
+    "node_list": "watgpu308",
+    "state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:00:22",
+    "start": "2026-08-30T08:28:14",
+    "end": "2026-08-30T08:28:36",
+    "nodes": 1,
+    "requested_memory": "32G",
+    "capture_query": {
+      "argv": [
+        "sacct",
+        "-j",
+        "1523653",
+        "--format=JobID,JobName,Partition,State,ExitCode,Elapsed,NodeList,Start,End,NNodes,ReqMem",
+        "-n",
+        "-P"
+      ],
+      "columns": [
+        "JobID",
+        "JobName",
+        "Partition",
+        "State",
+        "ExitCode",
+        "Elapsed",
+        "NodeList",
+        "Start",
+        "End",
+        "NNodes",
+        "ReqMem"
+      ]
+    },
+    "parent_sacct_row": {
+      "utf8": "1523653|rap-qwen|ALL|COMPLETED|0:0|00:00:22|watgpu308|2026-08-30T08:28:14|2026-08-30T08:28:36|1|32G\n",
+      "bytes": 100,
+      "sha256": "7727d486cb96022f182d1e14c41f23a93c0a979c2efb84691cec51cf438a1067"
+    }
+  },
+  "retained_scheduler_streams": {
+    "stdout": {
+      "path": "/u4/yuntian/rap-eacl-91dbb03-DylWxT/slurm-1523653.out",
+      "bytes": 1732,
+      "sha256": "e5072ac15c1d22f73a8b22519fbae024505aa214d308a6333da5e0153af71e6a",
+      "relation": "byte-identical to tracked frozen manifest"
+    },
+    "stderr": {
+      "path": "/u4/yuntian/rap-eacl-91dbb03-DylWxT/slurm-1523653.err",
+      "bytes": 622,
+      "sha256": "42534ace3bab2647094399960be6b27e9422251bc09c7f23a19cd62d03a8cf4f"
+    }
+  },
+  "tracked_frozen_artifacts": {
+    "manifest": {
+      "path": "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl.manifest.json",
+      "bytes": 1732,
+      "sha256": "e5072ac15c1d22f73a8b22519fbae024505aa214d308a6333da5e0153af71e6a"
+    },
+    "predictions": {
+      "path": "experiments/eacl2027/outputs/frozen/qwen3-4b.jsonl",
+      "bytes": 129379,
+      "records": 192,
+      "sha256": "cc51d5b364c1a098676af53d500199634acc31a34d8ab48a0ed2f0df4989cf9d"
+    }
+  },
+  "retrospective_scope": "This receipt records scheduler provenance after the controlled run. No frozen predictions, manifest, or metrics were changed."
+}
