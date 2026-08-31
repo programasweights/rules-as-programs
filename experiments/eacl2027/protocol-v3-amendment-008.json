@@ -1,0 +1,1838 @@
+{
+  "amendment_id": "protocol-v3-amendment-008",
+  "created_utc": "2026-08-31T11:17:36Z",
+  "freeze_state": "frozen_outcome_aware_full_430_whole_attempt_correction",
+  "frozen_utc": "2026-08-31T22:40:08Z",
+  "status": "frozen outcome-aware full-430 whole-attempt correction after terminal r02; exact r03 is the sole primary numeric source",
+  "affected_study": "scaling_fault_offline",
+  "terminal_r02_observation": {
+    "observed_utc": "2026-08-31T18:33:16.209061Z",
+    "slurm_job_id": "1524523",
+    "slurm_state": "FAILED",
+    "slurm_exit_code": "5:0",
+    "slurm_end_utc": "2026-08-31T18:33:05Z",
+    "result_json_present": false,
+    "planned_unit_count": 430,
+    "started_unit_count": 280,
+    "terminal_unit_count": 279,
+    "started_without_terminal_unit_count": 1,
+    "never_started_unit_count": 150,
+    "direct_paw_partition": {
+      "planned": 350,
+      "terminal": 279,
+      "started_without_terminal": 1,
+      "never_started": 70
+    },
+    "deterministic_no_paw_partition": {
+      "planned": 80,
+      "terminal": 0,
+      "started_without_terminal": 0,
+      "never_started": 80
+    },
+    "started_without_terminal_unit": {
+      "plan_index": 279,
+      "component": "matrix",
+      "unit_id": "r8-p8-one_project_hotspot-sequential20-rep2"
+    },
+    "terminal_status_histogram": {
+      "completed": 11,
+      "system_violation": 268
+    },
+    "complete_tree_sha256": "c94a5e8ec2fdd4623b1e7db019a12b7c39b7f239727e732a028b2b7072fd38a6",
+    "terminal_sacct_stdout_sha256": "799361d506c13a521252b9cfb346ed74875f6896cdc8ead5c057597d9dcde09b",
+    "terminal_scontrol_stdout_sha256": "cd32ceee63a381b3b14d902e71688d307c498c6b554498583d5636a75e22a754",
+    "exit_cause_rule": "The exact cause of process exit 5 is unclassified. The missing unit terminal excludes the normal per-unit Exception path; the absent result.json excludes the ordinary BaseException abort/finalize/status-to-5 path; and empty lossless stderr is inconsistent with the explicit Exception-to-SystemExit(5) path that prints a traceback. Only a bypassing process exit code 5 at the retained evaluation_started boundary is supported. This amendment does not relabel it as a harness, infrastructure, or measured-system cause.",
+    "primary_eligibility_rule": "r02 is a failed incomplete raw attempt and supplies no primary numeric row. Its exact 279 terminal rows, one interrupted start, 150 unstarted rows, complete tree, and scheduler evidence remain immutable sensitivity and failure-anatomy evidence. The 279 terminal rows are repeated in r03 only because their direct ProgramAsWeights dependencies were outside the launch-bound root; no measured value or favorability is an eligibility input."
+  },
+  "draft_safety_gate": {
+    "pending_marker_prefix": "PENDING_TERMINAL_",
+    "pending_placeholder_regex": "^PENDING_TERMINAL_[A-Z0-9_]+$",
+    "draft_placeholder_occurrence_count": 0,
+    "draft_placeholder_unique_token_count": 0,
+    "recursive_pending_rule": "Before freeze, recursively visit scalar values in the canonical amendment. A value is unresolved iff it is a JSON string that fully matches ^PENDING_TERMINAL_[A-Z0-9_]+$ with a nonempty suffix. Exclude the metadata value at /draft_safety_gate/pending_marker_prefix; prose containing the prefix is not a placeholder. This draft's exact occurrence and unique-token counts are stored above. Every occurrence of the same token must be replaced by the same JSON scalar value and type. The exact-regex count must be zero before the amendment can become effective.",
+    "freeze_forbidden_when": "Freeze is forbidden while status begins with draft, frozen_utc is not timezone-aware, any exact-regex pending placeholder remains, duplicate-token replacements disagree, any of nine evidence receipts is missing, whole-attempt historical validation has not passed, the ALL-partition canary has not passed, or the full-430 and uniform-source gates fail.",
+    "launch_forbidden_when": "Formal r03 setup, launch-record creation, daemon start, warmup, hook invocation, or measured event is forbidden unless this amendment has zero pending markers, status is non-draft and explicitly frozen, frozen_utc is final, P4/I4/H4 are pushed with the exact topology below, HEAD equals H4, the tree is clean in the declared scope, setup independently revalidates every terminal binding plus the post-freeze Git topology, and the real I4 runner/launcher/analyzer/retention implementation has passed every fatal_result_contract implementation_and_test_gate case.",
+    "draft_path_rule": "This committed canonical file is the effective frozen protocol amendment; the earlier /private/tmp draft remains non-effective historical work product.",
+    "declared_target_state_rule": "freeze_state records the current draft phase only. It may change exactly once to frozen_outcome_aware_full_430_whole_attempt_correction only together with the exact reviewed frozen status, final timezone-aware frozen_utc, zero exact pending placeholders, passed evidence/canary/history gates, and the required Git topology.",
+    "fail_closed": "A parser, setup script, launcher, runner, reducer, or reviewer that encounters a pending marker or cannot prove its absence must reject freeze and launch rather than infer a value."
+  },
+  "reason": "This amendment was drafted after observing r02 and is explicitly outcome-aware. H3 bound a nested programasweights cache subtree while the installed direct ProgramAsWeights API interpreted PAW_CACHE_DIR itself as the content root; r02 therefore used an initially absent sibling root whose dependency bytes materialized during the launch. r02 then ended FAILED 5:0 with no result.json after exactly 280 starts, 279 terminal plan-prefix rows, one interrupted direct-PAW start, and 150 unstarted rows. The exit cause remains unclassified. All 279 terminal rows are direct-PAW matrix rows and are primary-ineligible solely because their launch dependencies were not bound; the remaining 71 direct rows seek their first terminal completions and all 80 deterministic rows seek their first executions. Exact r03 executes the unchanged complete 430-row plan at the corrected direct root and is the sole primary numeric source. Every r01/r02 byte, raw status, terminal value, interrupted artifact, and unstarted row remains visible. No measured value or favorability chooses a source or authorizes another attempt.",
+  "preservation_and_scope": {
+    "predecessor_raw_attempt_id": "formal-v3-20260831t051023z-r02",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r03",
+    "scope": "one exact r02-to-r03 full-430 whole-attempt protocol-correction edge for launch-bound direct ProgramAsWeights dependency provenance and incomplete predecessor execution",
+    "whole_attempt_replacement_authorized": true,
+    "partial_predecessor_primary_rows_authorized": false,
+    "performance_independence": "The full r03 plan and uniform r03 primary source are fixed before any r03 setup or outcome. Exactly 279 terminal r02 rows repeat because static H3 code proves every one uses the unbound direct-PAW root; the interrupted direct row and 70 unstarted direct rows seek first terminal completion; the 80 deterministic rows were never started and receive first executions. Latency, throughput, verdict, severity, status favorability, and every other measured value are forbidden eligibility inputs.",
+    "preserved_amendment": {
+      "path": "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "commit": "07563c2aef31a436c0821761bc5c634049e0ff63",
+      "sha256": "540ee245cd025d3cb5c4146fb36ec30b7d54b40ccc74de78a3a4df9a06f4aa91",
+      "rule": "Amendment 007 remains byte-for-byte immutable and fully effective, including its r01-to-r02 outcome-aware premeasurement AF_UNIX adjudication, retention, claim, non-censoring, fixed design, resource profile, and claim limits, except for the exact r02-to-r03 whole-attempt eligibility, receipt, cache-root, study-mode, and primary-source clauses explicitly overridden here. Amendment 008 does not rewrite, supersede, or relabel r01, r02, or the r01-to-r02 edge."
+    },
+    "unchanged_requirements": "Every protocol-v3 and amendment-001-through-007 requirement not explicitly changed here remains effective. In particular, ALL partition, fixed resources, event definitions, latency boundaries, accounting, retention, publication, and non-censoring remain unchanged."
+  },
+  "known_at_draft": {
+    "h3": {
+      "commit": "efea2a704433602fdfa159429ba7b4620b22fc62",
+      "required_role": "exact pushed H3 parent of P4 and exact implementation/runtime-lock head used by r02",
+      "runner": {
+        "path": "experiments/eacl2027/run_scaling_faults.py",
+        "sha256": "16078b7c9b58871ff377648dd0d8b5575eca63cf4f7bd2d1b55cb26f5d78b58c",
+        "git_blob": "23399103bde1c19df5cc250ddd8832bd1b13aa7e"
+      },
+      "launcher": {
+        "path": "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+        "sha256": "4249da4236cee92438b4ac6fd107c5a848dceedd26ed9a18478ffcb33dc81524",
+        "git_blob": "770664a71fd9e6325d4d298421c8cc4fa4d41988"
+      },
+      "runtime_lock": {
+        "path": "experiments/eacl2027/formal-runtime-lock-v3.json",
+        "sha256": "2a7dac0d6d3a57a6416fabc665255d09001e3054572532527b724ed9be7ee5c7"
+      }
+    },
+    "direct_paw_semantics_anchors": {
+      "programasweights_wheel_sha256": "139237bc2187ea6db53572c6189a499adf01b5e98ec8e0d400453f3368578a07",
+      "installed_config_py_sha256": "995983950a722ac9d257650faf5e68f0409a3746df388eac54dd42b3650ccf81",
+      "installed_cache_py_sha256": "b09d9fcb2d8ad17a72a4cb68111c550b42a03ce3b998decf18506be7aac59b03",
+      "base_model": {
+        "bytes": 622733120,
+        "sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c"
+      },
+      "interpretation": "These immutable H3 dependency bytes are the authority for direct PAW cache-root semantics. A receipt helper that appends programasweights cannot redefine what the installed direct API does with PAW_CACHE_DIR."
+    },
+    "outcome_awareness": "The cache-root issue was identified after r02 began and from r02-associated evidence. This amendment must always be reported as outcome-aware and may not be described as preregistered before r02."
+  },
+  "pending_terminal_bindings": {
+    "r02": {
+      "raw_status": "missing",
+      "process_exit_code": 5,
+      "slurm_job_id": "1524523",
+      "slurm_partition": "ALL",
+      "slurm_node_list": "watgpu108",
+      "slurm_terminal_state": "FAILED",
+      "slurm_exit_code": "5:0",
+      "planned_unit_count": 430,
+      "started_unit_count": 280,
+      "terminal_unit_count": 279,
+      "started_without_terminal_unit_count": 1,
+      "never_started_unit_count": 150,
+      "complete_tree_entry_count": 70738,
+      "complete_tree_regular_file_count": 34975,
+      "complete_tree_regular_file_bytes": 630704677,
+      "complete_tree_sha256": "c94a5e8ec2fdd4623b1e7db019a12b7c39b7f239727e732a028b2b7072fd38a6",
+      "complete_tree_digest_rule": "Freshly recompute the exact existing _predecessor_tree_receipts lexicographically ordered list. Reject duplicate keys, non-finite numbers, symlinks, and identity mismatches; encode the list as UTF-8 JSON with sort_keys=true, separators=(',', ':'), ensure_ascii=false, allow_nan=false, and no trailing LF; SHA-256 those exact bytes. Derive entry count, regular-file count, and regular-file bytes from this same list.",
+      "launch_json_bytes": 29604532,
+      "launch_json_sha256": "5dd695528e5d6d664ede580e493d85926bfa6a3e5adad05cee0d8c18788a1876",
+      "launch_identity_sha256": "c496a3b704649b507f8bef428912519eaaace47f432170b48e060ebbee677ec1",
+      "plan_json_bytes": 122245,
+      "plan_json_sha256": "cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434",
+      "publication_json_bytes": 582,
+      "publication_json_sha256": "10f97d246b7eb6213765213e978b3274fd4835b34acd23b3180b55a80f211130",
+      "publication_claim_bytes": 29604532,
+      "publication_claim_sha256": "5dd695528e5d6d664ede580e493d85926bfa6a3e5adad05cee0d8c18788a1876",
+      "publication_claim_rule": "Bind the exact immutable publication-claim regular file by resolved path, device/inode hard-link identity to the retained launch claim, byte count, and SHA-256; content equality without the required hard-link identity is insufficient.",
+      "units_jsonl_bytes": 85414,
+      "units_jsonl_sha256": "5ea696d990fda43d181bd26fa4e96f6a8910af6103d24e8ac7d72738d29e95ac",
+      "streams_json_bytes": 212,
+      "streams_json_sha256": "208d1fd5d724657b664ff706f656a55e5e0df94a3eaef04659a9e7885d5ccdc4",
+      "stdout_log_bytes": 0,
+      "stdout_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_log_bytes": 0,
+      "stderr_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result_json": {
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r02/result.json",
+        "present": false,
+        "rule": "The path must be absent by fresh lstat and absent from the complete predecessor-tree inventory. No bytes, SHA-256, synthetic summary, reconstructed unit index, or post-hoc substitute is permitted."
+      }
+    },
+    "all_partition_canary": {
+      "status": "passed",
+      "job_id": "1524768",
+      "partition": "ALL",
+      "node_list": "watgpu808",
+      "frozen_input_manifest_sha256": "2cf8266d87b3c832411c16b5cca8de606ef212d599306226fa0a02df68286469",
+      "frozen_input_output_sha256": "8bd307e7fe7de266e7ec154de5bec8fee73918ebf9ca5a9878ad1f55757d2888",
+      "input_selection_rule": "first expected=WARNING row per rule in canonical formal rule order",
+      "ordered_input_hashes_sha256": "20d2370f0a2bc7d9e741bd14055fdec630aa4949f66075647e3e3bf01267b6c7",
+      "node_local_cache_root": "/tmp/rap-eacl-paw-cache-canary-v4-1524768/cache",
+      "source_inventory_before_sha256": "9298c93902144dda582c66df8f684c9bf5ac94b9d4aaa7f9d5f328c9cb8210a6",
+      "source_inventory_after_sha256": "9298c93902144dda582c66df8f684c9bf5ac94b9d4aaa7f9d5f328c9cb8210a6",
+      "copy_inventory_before_sha256": "3151cf28b34e4eb5afb80ecfbd0017b7ac5ef9dd6252751d7da5f9294e693909",
+      "copy_inventory_after_sha256": "284713a4fdafb5b671c2c36c4b9a48e258565fcb2a82fc1c8dc2d1696b2f5f2e",
+      "copy_added_file_count": 0,
+      "copy_removed_file_count": 0,
+      "copy_changed_file_count": 0,
+      "copy_tmp_file_count": 0,
+      "worker_generation": 1,
+      "worker_pid": 1751484,
+      "network_guard_marker": "rap-eacl-paw-cache-canary-v4-network-guard-v2",
+      "network_guard_activation_count": 11,
+      "network_guard_activation_log_bytes": 8195,
+      "network_guard_activation_log_sha256": "6db334a3f386f859ce3a250c03064cb35075aa60c24e3c62458afee8e16a1358",
+      "guarded_pip_wrapper_activation_count": 3,
+      "guarded_pip_wrapper_identities_passed": true,
+      "inner_guard_identity_passed": true,
+      "spawned_worker_guard_identity_passed": true,
+      "timed_out_count": 0,
+      "valid_severity_count": 8,
+      "archive_root": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4/20260831T222950Z-1768725",
+      "archive_manifest_path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4/20260831T222950Z-1768725/evidence.sha256",
+      "archive_manifest_bytes": 4767,
+      "archive_manifest_sha256": "1ef5e29b1ad1eb92d96d0f97067fa76615ff5cdaab2820f44991f15855eac100",
+      "canary_receipt_path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4/20260831T222950Z-1768725/rap-eacl-paw-cache-canary-v4-1524768.json",
+      "canary_receipt_bytes": 288974,
+      "canary_receipt_sha256": "22b252dde5b7e2f3559c2259d21a28f5e58fc296783aec385e61cadb7cf491c8",
+      "launcher_exit_status": 0,
+      "srun_exit_status": 0,
+      "postrun_sacct_exit_status": 0,
+      "postrun_sacct_attempts": 1,
+      "evidence_path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4/20260831T222950Z-1768725/evidence.sha256.sha256",
+      "evidence_bytes": 166,
+      "evidence_sha256": "f58baffe5f82b052537a20510f9493947654d05d3a591d81e8e53b64c7766082",
+      "program_results_in_exact_order": [
+        {
+          "rule_id": "3pcxewp5hggr1vsn",
+          "program_id": "762d0837bbc06f75dc23",
+          "case_id": "external-3pcxewp5hggr1vsn-pair-06-positive",
+          "source_line": 3,
+          "expected": "WARNING",
+          "input_utf8_bytes": 42,
+          "input_sha256": "4fc62f1e3df3bba4614be62a30674885bf723af39c25f33cc64f303c97fe2f98",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "98z9wvr031840p4g",
+          "program_id": "b735dff5093dd49bd27d",
+          "case_id": "external-98z9wvr031840p4g-pair-02-positive",
+          "source_line": 24,
+          "expected": "WARNING",
+          "input_utf8_bytes": 23,
+          "input_sha256": "64da83d0b0f7c4f56b12064b50b87d9f432485c0b83f70a76d58ec1225390e61",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "e3m4bdwj6gqcwpnn",
+          "program_id": "cf411837cd27dd43604a",
+          "case_id": "external-e3m4bdwj6gqcwpnn-pair-08-positive",
+          "source_line": 37,
+          "expected": "WARNING",
+          "input_utf8_bytes": 74,
+          "input_sha256": "af358a8f1106487a07df1d91b8c6d6531feaadac6c1c36e32fb8b4dbae37b7f5",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "g3b7damk0b5xgdj6",
+          "program_id": "d53e0b93521bc075170c",
+          "case_id": "external-g3b7damk0b5xgdj6-pair-02-positive",
+          "source_line": 26,
+          "expected": "WARNING",
+          "input_utf8_bytes": 57,
+          "input_sha256": "307b13964b9797423b34b880eacd4102a9afaf4eadbe7dc82a13daa92c30892b",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "q88xgdmftag16dq9",
+          "program_id": "16a7a75554b8006ca240",
+          "case_id": "external-q88xgdmftag16dq9-pair-04-positive",
+          "source_line": 8,
+          "expected": "WARNING",
+          "input_utf8_bytes": 99,
+          "input_sha256": "15bba84bae70ffeaf11b96f248c35ebc55f9af7f055b2ebde0f4368b810e7fd7",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "qfh0h1cf4wt5aeg4",
+          "program_id": "8c96ca80eea5aff5147f",
+          "case_id": "external-qfh0h1cf4wt5aeg4-pair-06-positive",
+          "source_line": 7,
+          "expected": "WARNING",
+          "input_utf8_bytes": 109,
+          "input_sha256": "60df44b3f6bd7bfc1a4686ab73f226216aa2020e875f3d70a247bfea2dd77921",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "sr09vpkt60y74r0q",
+          "program_id": "a78ddf95882555e71250",
+          "case_id": "external-sr09vpkt60y74r0q-pair-04-positive",
+          "source_line": 21,
+          "expected": "WARNING",
+          "input_utf8_bytes": 70,
+          "input_sha256": "b140f1069d24e4938d92f0db413377cdb05f0d1831c4bec7c6f5bea6a401ba59",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        },
+        {
+          "rule_id": "xb24rc14cpcrsf4g",
+          "program_id": "81888657ac4f92ce39a8",
+          "case_id": "external-xb24rc14cpcrsf4g-pair-07-positive",
+          "source_line": 1,
+          "expected": "WARNING",
+          "input_utf8_bytes": 54,
+          "input_sha256": "71c0c09d26b3eea54f5828ce10d38323e18d417b598f387d9b8c182e106c00a3",
+          "raw_output_utf8_bytes": 7,
+          "raw_output_utf8_sha256": "86f56fe8221f029db2c9755cc998669a7d873c32bfa83bc9431bafe0bb814400",
+          "severity": "WARNING",
+          "timed_out": false,
+          "worker_generation": 1,
+          "worker_pid": 1751484
+        }
+      ]
+    },
+    "evidence_receipts": {
+      "launch_wide_cache_root_adjudication": {
+        "kind": "launch_wide_cache_root_adjudication",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-008-evidence-20260831T223904Z/launch-wide-cache-root-adjudication-v1.json",
+        "bytes": 951,
+        "sha256": "a972482a4d6190cd6bf6187f6217bf220b091d8c0555df1da3ccf17529ae7ec7"
+      },
+      "paw_cache_semantics_receipt": {
+        "kind": "paw_cache_semantics_receipt",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-008-evidence-20260831T223904Z/paw-cache-semantics-receipt-v1.json",
+        "bytes": 943,
+        "sha256": "d0cbdca2f967b1a83996b832c1a57ce0da61365c1cd73730c33ab87b811f2504"
+      },
+      "all_partition_paw_cache_canary": {
+        "kind": "all_partition_paw_cache_canary",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4/20260831T222950Z-1768725/evidence.sha256.sha256",
+        "bytes": 166,
+        "sha256": "f58baffe5f82b052537a20510f9493947654d05d3a591d81e8e53b64c7766082"
+      },
+      "whole_attempt_replacement_validation": {
+        "kind": "whole_attempt_replacement_validation",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-008-evidence-20260831T223904Z/whole-attempt-replacement-validation-v1.json",
+        "bytes": 691529,
+        "sha256": "81a2154f217f0ed7b362a3248689bdc76fd00a72b2e148c03188cb659f7ff41d"
+      },
+      "r02_effective_cache_forensic_inventory": {
+        "kind": "r02_effective_cache_forensic_inventory",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-008-evidence-20260831T223904Z/r02-effective-cache-forensic-inventory-v1.json",
+        "bytes": 803,
+        "sha256": "c69bc05a19a18694af08735373e3ace6bbd65be22c2fcf3e7ee177da2a576324"
+      },
+      "r02_terminal_archive": {
+        "kind": "r02_terminal_archive",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/r02-terminal-archive-1524523-v1.json",
+        "bytes": 31238,
+        "sha256": "dd33a2abeaae52c9218216ac3978e7ca69ffcb9296542067355fca64e6601e56"
+      },
+      "scheduler_sacct": {
+        "kind": "scheduler_sacct",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/terminal-edge-forced-utc-sacct-1524523.txt",
+        "bytes": 280,
+        "sha256": "799361d506c13a521252b9cfb346ed74875f6896cdc8ead5c057597d9dcde09b"
+      },
+      "scheduler_stdout": {
+        "kind": "scheduler_stdout",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/rap-eacl-systems-v3-1524523.stdout.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "scheduler_stderr": {
+        "kind": "scheduler_stderr",
+        "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/rap-eacl-systems-v3-1524523.stderr.log",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    "historical_validation": {
+      "status": "passed",
+      "receipt_path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-008-evidence-20260831T223904Z/whole-attempt-replacement-validation-v1.json",
+      "receipt_bytes": 691529,
+      "receipt_sha256": "81a2154f217f0ed7b362a3248689bdc76fd00a72b2e148c03188cb659f7ff41d"
+    }
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json"
+    ],
+    "conflict_rule": "A later amendment controls only the exact fields and study boundaries it explicitly changes. Amendment 007 and every earlier requirement remain effective elsewhere.",
+    "explicit_one_time_overrides": {
+      "scope": "Only the exact formal-v3-20260831t051023z-r02 to formal-v3-20260831t051023z-r03 edge. r03 executes the complete unchanged 430-row plan and is the sole primary numeric source. These overrides do not alter r01, do not establish a general cache-mutation rerun rule, and do not authorize another attempt based on an unfavorable r03 outcome.",
+      "formal_effective_config.study_mode": "For exact raw r03, study_mode is exactly formal_protocol_v3_amendment_008 and is cross-bound without aliasing in the effective-config receipt, setup receipt, launch identity, every terminal result, raw result, and analyzer. study_mode is not inserted into plan rows; r03 plan.json must be byte-for-byte equal to r02 plan.json and retain the frozen canonical plan hash. The inherited formal_protocol_v3_amendment_007 value remains exact for r01/r02 only.",
+      "formal_effective_config.fault_names_in_order": "For exact r03, fault_names_in_order remains the complete inherited order [daemon_crash, worker_exit, worker_timeout, sqlite_lock, malformed_payload, duplicate_delivery, deployment_failure]. No family is omitted, synthesized, or sourced from another attempt.",
+      "formal_effective_config.deterministic_plan_checks": "For exact r03, the inherited complete design remains exact: 288 matrix conditions, one soak, one paired-offline unit, seven fault families with 20 repetitions each, 140 fault attempts, and 430 top-level units. plan.json is byte-for-byte equal to r02 plan.json (122245 bytes, SHA-256 cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434) and its canonical parsed array SHA-256 is 4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c.",
+      "formal_attempt_retention.complete_plan": "For exact r03, plan.json contains the complete inherited 430 top-level units in the exact original order: 288 matrix, one soak, one paired-offline, and all 140 fault repetitions. Execute every row exactly once within r03; no omitted, synthetic, placeholder, or cross-attempt row is allowed.",
+      "formal_attempt_retention.replacement_chain.replacement_attempt": "For only the exact r02-to-r03 edge, replace the ordinary harness/infrastructure branch with the outcome-aware launch-wide whole-attempt protocol-correction contract in this amendment. The receipt retains the complete predecessor tree and exact evidence before r03 publication, authorizes exactly one full 430-row r03, preserves r02 as a failed incomplete raw attempt, and never imports an r02 value into the r03 primary result.",
+      "formal_attempt_retention.replacement_chain.replacement_receipt_schema.schema_version": "For only the exact r02-to-r03 whole-attempt-correction receipt, schema_version is integer 2. Schema version 1 remains exact for every other replacement edge.",
+      "formal_attempt_retention.replacement_chain.replacement_receipt_schema.exact_top_level_fields": "For only the exact r02-to-r03 whole-attempt-correction receipt, replace the inherited 12-field set with exactly [schema_version, created_utc, successor_raw_attempt_id, predecessor_raw_attempt_id, classification, original_status, reason, affected_boundary, predecessor_artifacts, predecessor_tree, evidence_receipts, scheduler_adjudication, successor_source, whole_attempt_protocol_correction]. No other field is allowed. Every other replacement edge retains the inherited 12-field version-1 set.",
+      "formal_attempt_retention.replacement_chain.replacement_receipt_schema.classification_allowlist": "For only the exact r02-to-r03 receipt, the sole permitted classification is outcome_aware_launch_wide_whole_attempt_protocol_correction. harness_error and infrastructure_error remain ordinary classifications on every other edge and are not asserted for r02.",
+      "formal_attempt_retention.replacement_chain.replacement_receipt_schema.evidence_receipts": "For only the exact r02-to-r03 receipt, replace the generic nonempty list with exactly one each of the nine kinds and exact item schema in replacement_and_evidence_contract. Generic, duplicate, extra, missing, relative, symlinked, mutable, or semantically empty evidence is invalid.",
+      "formal_attempt_retention.replacement_chain.replacement_receipt_schema.status_eligibility": "For only the exact r02-to-r03 edge, original_status is exactly missing because result.json is absent. It may map only to outcome_aware_launch_wide_whole_attempt_protocol_correction after the immutable tree proves exact 430 planned, 280 started, 279 terminal, one started without terminal, and 150 never started; the launch-wide cache-root provenance defect is independently reproduced; every raw partial byte is retained; the canary, evidence, full-plan, and topology gates pass; and r03 is fixed as the sole primary source for all 430 rows. This override does not classify exit 5 as harness or infrastructure failure and does not use any r02 value or favorability.",
+      "formal_attempt_retention.replacement_chain.replacement_receipt_schema.scheduler_adjudication": "For outcome_aware_launch_wide_whole_attempt_protocol_correction, scheduler_adjudication is null. Exact scheduler receipts remain mandatory evidence of terminal identity and chronology, but FAILED 5:0 is not relabeled as an allowed external scheduler state and does not establish the unexplained process-exit cause.",
+      "formal_attempt_retention.primary_attempt_rule": "Exact r03 is the sole primary numeric source for all 430 canonical rows if and only if its complete full-plan and every pre-execution and terminal gate pass. r02 contributes no primary row: its 279 terminal rows are dependency-provenance-invalid sensitivity evidence, its one interrupted unit has no terminal record, and its remaining 150 rows were never started. A failed, unfavorable, or system-violating r03 row may not be replaced with r02.",
+      "formal_attempt_retention.rerun_eligibility": "Override amendment 007 only for this edge. Exactly the 279 r02 terminal rows may execute again because all are direct-PAW matrix rows whose dependencies were outside the launch-bound root; eligibility is launch-wide provenance, never the observed status or value. The interrupted direct row receives its first terminal completion in r03, the other 70 direct rows receive their first executions, and the 80 deterministic rows receive their first executions. Executing the complete 430-row plan in one successor yields one comparable primary attempt without cross-attempt substitution.",
+      "formal_attempt_retention.classification.system_violation": "All measured r02 and r03 system violations remain raw system outcomes. The protocol correction changes primary-attempt eligibility only: it never reclassifies a terminal r02 row, invents a terminal record for an unfinished row, imputes an unstarted row, or alters/substitutes a raw value.",
+      "formal_attempt_retention.terminal_attempt_status": "For exact r03, the inherited 430-unit status contract applies unchanged: completed means all 430 rows are terminal with no system violation; completed_with_system_violations means all 430 are terminal with at least one measured system violation; incomplete classes remain distinct and use the inherited process exit codes. Primary promotion requires a complete exact r03; r02 remains raw original_status=missing.",
+      "formal_attempt_retention.required_incremental_artifacts": "For exact r03, preclaim the external supervisor-closeout root and durably write supervisor-start.json before spawning the child; require one sealed supervisor-closeout.json whenever the supervisor survives child wait. Additionally require fatal-lifecycle.jsonl immediately after attempt publication and maintain it under fatal_result_contract. A durably valid ordinary result.json and fatal-result.json are mutually exclusive in-tree terminal products. If the supervised runner exits, the attempt root is safely published, and no durably valid ordinary result exists, the supervisor must exclusively create and fsync fatal-result.json under the exact schema; a caught exception may first create the optional exclusive fatal-exception.json envelope. Prepublication and unsafe-root failures remain external closeout states. These r03-only artifacts do not alter the byte-identical 430-row plan and are never backfilled into r02.",
+      "formal_attempt_retention.process_exit_codes": "For exact r03, the sealed supervisor closeout is the decision authority. A durably published fatal-result.json, prepublication/unpublished failure, fatal-finalization failure, or ordinary-result/child-exit disagreement requires final supervisor exit code 5 while retaining the exact child return code or signal. A durably valid ordinary result with exact child agreement retains the inherited status-to-exit-code mapping and forbids fatal-result.json. Terminal sacct must agree with the declared supervisor exit before promotion. If the allocation kills the supervisor before closeout, retain supervisor-start plus scheduler/raw boundaries and reject primary promotion; never synthesize closeout or fatal evidence afterward.",
+      "formal_runtime_profile.cache_and_dependency_receipt.cache_path": "For exact r03, PAW_CACHE_DIR must equal the existing resolved non-symlink absolute content root /u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights, which directly contains base_models/, programs/, and runtimes/. PROGRAMASWEIGHTS_CACHE_DIR must be absent. Record the path, symlink chain, owner/mode, and strict inventory before setup and launch.",
+      "formal_runtime_profile.cache_and_dependency_receipt.immutability_boundary": "The general rule that cache mutation is not grounds to discard or repeat a performance failure remains in force except for this launch-wide preflight/receipt-to-direct-API root mismatch. The exception is based on unbound dependency provenance and applies only to the 279 already-terminal direct-PAW r02 rows; all other r03 rows seek their first terminal result. The narrowly allowed byte-preserving current-runtime-manifest mtime_ns/ctime_ns side effect during r03 is recorded under required_cache_inventory and grants no permission to alter any byte, topology field, or other metadata.",
+      "formal_runtime_profile.cache_and_dependency_receipt.package_provenance": "For exact r03, require the live wheelhouse and corrected-root inventory to equal formal-runtime-lock-v4.json at the structured-receipt level; retain the same package/import provenance and durable setup evidence, additionally binding amendment 008, P4/I4/H4, the whole-attempt-correction receipt, exact full r03 plan, corrected root, and absent PROGRAMASWEIGHTS_CACHE_DIR. The v3 package receipt remains immutable r01/r02 evidence.",
+      "formal_runtime_profile.cache_and_dependency_receipt.required_cache_inventory": "For exact r03, inventory the corrected PAW_CACHE_DIR itself and require its complete files/directories, program IDs, runtime manifests, referenced base model, ownership, device/inode/link topology, sizes, modes, and SHA-256 values to equal formal-runtime-lock-v4.json. Also inventory the parent sibling layout so an unbound fallback root or newly materialized dependency cannot pass. At pre-execution gates require exact temporal metadata equality. Across r03 execution only, replace strict mtime_ns/ctime_ns equality for the one corrected-root path runtimes/qwen3-0.6b-q6_k.json with the metadata-only exception in corrected_direct_paw_cache_contract.inventory_rule: exact installed ProgramAsWeights rewrites this cached current-manifest path on each conforming program load even when its bytes are unchanged. Retain exact before/after timestamps and require its content, topology, ownership, mode, device, inode, link count, byte count, and SHA-256 to remain identical; no other path or field, including the immutable versioned manifest, is excepted. The v3 inventory contract remains historical evidence for r01/r02.",
+      "formal_runtime_profile.cache_and_dependency_receipt.runtime_lock_path": "For exact r03, the runtime lock is experiments/eacl2027/formal-runtime-lock-v4.json created as the sole H4 path after I4. The v3 lock remains the immutable authority for r01/r02 and the historical defect adjudication.",
+      "formal_runtime_profile.runtime_budget": "For exact r03, retain the inherited ALL-partition seven-day allocation, no larger timeout, the original complete-430 plan counts, and the inherited 552000-second conservative bounded-wait envelope. H4 setup mechanically recomputes and binds the exact full-plan warmup, evaluation, soak, fault, and wait counts; no reduced-plan arithmetic or additional budget is permitted.",
+      "effective_protocol_identity.acyclic_formal_binding.pre_outcome_binding": "Before r03 setup, daemon start, warmup, hook invocation, or measurement, independently validate zero pending markers in frozen amendment 008, exact pushed P4/I4/H4 topology, complete immutable r02 retention, exact missing result, all evidence and canary receipts, byte-identical 430-row r03 plan, corrected cache root, absent PROGRAMASWEIGHTS_CACHE_DIR, and the uniform r03 primary-source contract. publication.json must be durable before measurement.",
+      "effective_protocol_identity.acyclic_formal_binding.chronology_rule": "For this edge, preserve r01/r02 and their claims; freeze P4 directly on H3; create the exact implementation-only I4 child and runtime-lock-only H4 child; push all three; then create the external whole-attempt-correction receipt and r03 setup/launch evidence. No later amendment or implementation byte may be silently substituted.",
+      "effective_protocol_identity.acyclic_formal_binding.required_git_state": "For the r02-to-r03 edge, replace amendment 007's P3/I3/H3 state rule with the exact P4/I4/H4 topology declared in effective_protocol_identity.required_git_topology. H3 remains the exact parent anchor; r03 HEAD must equal pushed H4 and the declared dirty scope must be clean at setup and launch.",
+      "effective_protocol_identity.acyclic_formal_binding.runner_gate": "After amendment 008 freezes as P4, I4 may pin its exact digest and H4 may bind the resulting I4 runtime bytes. Amendment 008 must not be rewritten to pin future P4/I4/H4 identities; the external replacement, setup, and launch receipts bind those descendants acyclically.",
+      "preregistered_reducer_and_worst_case.attempt_reducer": "Use the exact complete r03 attempt as the sole input to every frozen matrix, soak, offline, fault, worst-case, marginal-contrast, precision, accounting, and claim-limit reducer. r02 remains a separately reported failed partial sensitivity attempt and contributes no numeric row to a primary reducer.",
+      "no_recursive_extension": "No r04 is authorized because r03 is slow, unfavorable, contains measured system violations, mutates an otherwise correctly bound cache, or disagrees with r02 sensitivity evidence. Any new independently established protocol, harness, or external infrastructure defect requires a new frozen amendment and may not reuse this exception."
+    },
+    "h3_parent_anchor": {
+      "commit": "efea2a704433602fdfa159429ba7b4620b22fc62",
+      "meaning": "P4 must be the immediate child of this exact pushed H3 commit. No merge, cherry-pick onto a different parent, or intervening descendant is permitted."
+    },
+    "acyclic_binding": "The frozen amendment must bind already immutable H3 and r02 identities plus pre-existing canary and historical-validation receipts. It must not contain its own SHA-256 or future I4/H4 byte hashes. I4 may pin the frozen amendment digest; H4 may pin I4 runtime bytes. Amendment 008 must not be rewritten to point back to those future bytes.",
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "efea2a704433602fdfa159429ba7b4620b22fc62",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-008.json"
+        ]
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ]
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v4.json"
+        ]
+      },
+      "future_identity_rule": "P4, I4, H4, the I4 runner/launcher bytes, and the H4 runtime-lock bytes are necessarily created after this amendment is frozen. Validation introduced by I4 must bind them in the external r02-to-r03 whole-attempt-correction receipt, H4 lock, r03 setup receipt, and launch identity, not write them back into amendment 008. This preserves acyclic identity binding.",
+      "head_must_equal_h4_before_r03_setup": true,
+      "all_commits_must_be_pushed_before_r03_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ],
+      "check": "git status --porcelain --untracked-files=normal -- rules_as_programs experiments/eacl2027 pyproject.toml must be empty before setup-receipt creation and again before r03 launch-record creation."
+    },
+    "chronology": [
+      "Obtain and immutably retain the complete r02 terminal tree, claim, partial ledger, external terminal archive, and scheduler evidence without modifying r02.",
+      "Complete the external PAW-semantics evidence, whole-attempt-replacement validation, r02 cache forensic inventory, and ALL-partition direct-PAW canary.",
+      "Replace every exact pending placeholder, verify zero remain, set frozen_utc and frozen status once, and commit only amendment 008 as P4 directly on H3.",
+      "Create I4 as the implementation-only child with exactly the ten allowlisted paths, including the exact fatal lifecycle, child-process supervisor, exclusive fatal receipt, analyzer handling, retention, and focused failure-injection tests in fatal_result_contract.",
+      "Create formal-runtime-lock-v4.json from I4 and commit only it as H4.",
+      "Push P4, I4, and H4. Create and validate the exact r02-to-r03 whole-attempt-correction receipt only afterward.",
+      "Launch the complete 430-row r03 only at exact clean H4 on partition ALL after setup independently revalidates all identities, evidence, plan bytes, corrected cache semantics, and uniform primary-source rule; preclaim the exact external supervisor-closeout root before spawning the measured child and retain terminal sacct against its final closeout."
+    ]
+  },
+  "corrected_direct_paw_cache_contract": {
+    "h3_incorrect_declared_root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache",
+    "r03_paw_cache_dir_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+    "required_direct_children_exactly_present": [
+      "base_models",
+      "programs",
+      "runtimes"
+    ],
+    "environment": {
+      "PAW_CACHE_DIR": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+      "PROGRAMASWEIGHTS_CACHE_DIR": "UNSET"
+    },
+    "direct_api_rule": "The installed ProgramAsWeights config.py and cache.py named above control direct API resolution. PAW_CACHE_DIR is the content root itself. No receipt, runner, or RAP wrapper may append another programasweights component for direct execution, and no fallback environment variable, HOME cache, symlink, or network fetch is permitted. Formal r03 may not use a copied-model fallback. The external canary's one explicit byte-identical node-local copy of the entire locked nested cache tree is the only copy exception and is never an r03 cache source.",
+    "inventory_rule": "Before canary, H4 lock creation, r03 setup, launch, and post-run reduction, require a non-symlink source root owned by the effective user and complete raw plus strict inventories. Bind root and entry UID/GID, device, inode, link count, type, mode, bytes, SHA-256, mtime_ns, and ctime_ns while excluding atime because reads may update it. At every gate before r03 executes, and across the external canary, the /u4 source before/after must be exactly equal on every bound field. Across exact r03 execution, all source entries and fields must remain exactly equal except that only mtime_ns and ctime_ns may differ at the single relative path runtimes/qwen3-0.6b-q6_k.json; retain both exact before/after timestamps, require its type, UID/GID, device, inode, link count, mode, bytes, and SHA-256 to remain identical, and require no difference at the immutable runtimes/qwen3-0.6b-q6_k.v1.json or any other path. The permitted temporal-difference set may be empty or any observed subset of those two fields and is reported, never normalized away. Separately define source/copy content equivalence over relative path, type, mode, bytes, and SHA-256; device/inode are required to differ for copied regular files and are not part of content equivalence. Bind every direct child, all eight program trees, embedded and cached runtime manifests, the exact base-model bytes/SHA-256, symlink chains, and installed ProgramAsWeights wheel/config/cache bytes. The external canary inventories the locked /u4 source but runs only from a content-equivalent node-local copy; r03 uses the exact locked /u4 direct root. H4 locks the pre-r03 inventory plus this exact one-path temporal exception rather than promising impossible timestamp equality after ProgramAsWeights rewrites its byte-identical current manifest.",
+    "runtime_rule": "The canary and formal runner must use the exact same Python, wheelhouse, installed package bytes, program IDs, n_ctx, CPU/GPU-layer settings, model receipt, and direct-root layout. For r03, PAW_CACHE_DIR equals the exact locked /u4 root above. For the external canary only, PAW_CACHE_DIR equals a fresh byte-for-byte node-local copy of that root. Compilation and remote model or artifact retrieval are forbidden.",
+    "receipt_correction": "I4/H4 receipt schemas must declare the direct content root without a synthetic programasweights_subtree child. Relative paths in program, runtime, and base-model receipts are relative to the corrected direct root.",
+    "fail_closed": "Any missing direct child, wrong environment variable, extra appended programasweights level, fallback cache access, symlink escape, changed package byte, changed model byte, cache miss, attempted network access, direct prediction failure, or cache change outside the one exact byte-preserving r03 current-manifest temporal exception blocks freeze, launch, or promotion as applicable and is retained as evidence."
+  },
+  "all_partition_canary": {
+    "required_before_freeze": true,
+    "partition_exact": "ALL",
+    "node_exact": "watgpu808",
+    "source_cache_root_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+    "canary_script": {
+      "remote_path": "/u4/yuntian/rap-eacl-paw-cache-canary-v4-watgpu808-guard-v3.py",
+      "sha256": "84c3cbb78e98d0368702fa55cf97e9ab816c8fc8835f9981d3633ba965a18c1e"
+    },
+    "launcher_script": {
+      "remote_path": "/u4/yuntian/run-rap-eacl-paw-cache-canary-v4-watgpu808-guard-v3.sh",
+      "sha256": "5abf5dd9852299fb0f99c10554e407d619e4871f9212ec7651c318615723b370"
+    },
+    "production_timeout_seconds_exact": 8.0,
+    "valid_severities_exact": [
+      "OK",
+      "INFO",
+      "WARNING",
+      "CRITICAL"
+    ],
+    "frozen_input_source": {
+      "manifest_path": "experiments/eacl2027/outputs/frozen/external-paw-finetuned.jsonl.manifest.json",
+      "manifest_sha256": "2cf8266d87b3c832411c16b5cca8de606ef212d599306226fa0a02df68286469",
+      "output_path": "experiments/eacl2027/outputs/frozen/external-paw-finetuned.jsonl",
+      "output_sha256": "8bd307e7fe7de266e7ec154de5bec8fee73918ebf9ca5a9878ad1f55757d2888",
+      "selection_rule": "For each rule in ordered_programs_exact, scan exact output bytes in line order and select the first JSON row whose rule_id matches and expected is exactly WARNING; the selected row must match the frozen case_id, one-based source line, program_id, input UTF-8 bytes, byte count, and SHA-256 bound in pending_terminal_bindings.all_partition_canary.program_results_in_exact_order.",
+      "ordered_input_hashes_sha256": "20d2370f0a2bc7d9e741bd14055fdec630aa4949f66075647e3e3bf01267b6c7",
+      "ordered_input_hashes_serialization": "SHA-256 of canonical UTF-8 JSON for the ordered eight lowercase input SHA-256 strings with sort_keys=true, separators=(',', ':'), ensure_ascii=false, allow_nan=false, and no trailing LF."
+    },
+    "ordered_programs_exact": [
+      {
+        "rule_id": "3pcxewp5hggr1vsn",
+        "program_id": "762d0837bbc06f75dc23"
+      },
+      {
+        "rule_id": "98z9wvr031840p4g",
+        "program_id": "b735dff5093dd49bd27d"
+      },
+      {
+        "rule_id": "e3m4bdwj6gqcwpnn",
+        "program_id": "cf411837cd27dd43604a"
+      },
+      {
+        "rule_id": "g3b7damk0b5xgdj6",
+        "program_id": "d53e0b93521bc075170c"
+      },
+      {
+        "rule_id": "q88xgdmftag16dq9",
+        "program_id": "16a7a75554b8006ca240"
+      },
+      {
+        "rule_id": "qfh0h1cf4wt5aeg4",
+        "program_id": "8c96ca80eea5aff5147f"
+      },
+      {
+        "rule_id": "sr09vpkt60y74r0q",
+        "program_id": "a78ddf95882555e71250"
+      },
+      {
+        "rule_id": "xb24rc14cpcrsf4g",
+        "program_id": "81888657ac4f92ce39a8"
+      }
+    ],
+    "network_policy": "No compilation, download, remote fallback, or access to an undeclared cache root is allowed. The canary must succeed entirely from the bound wheelhouse and a fresh node-local byte copy of the corrected locked source cache. An injected sitecustomize guard must deny and append-only log AF_INET/AF_INET6 construction through Python socket.socket and _socket.socket, guarded connect/connect_ex/sendto/sendmsg calls, create_connection, and both socket and _socket getaddrinfo/getnameinfo/gethostbyname/gethostbyname_ex/gethostbyaddr calls in offline pip and the spawned inference process tree. The append-only activation evidence must prove exact guard class/function identity inside each pip invocation, the inner canary, and the spawned production inference worker. This process-level observation does not intercept native-extension syscalls and is not an OS isolation claim.",
+    "procedure": [
+      "Before launch, independently hash the exact regular non-symlink remote canary and launcher paths and require the fixed SHA-256 values above. The launcher must independently enforce the canary hash and fail closed if evidence-manifest construction, manifest/sidecar verification, file sealing, directory sync, or final owner/mode verification fails.",
+      "On partition ALL and exact node watgpu808, start from the H3-bound immutable ProgramAsWeights wheel/config/cache/model bytes and a fresh owner-private node-local canary directory outside every raw attempt tree.",
+      "Strictly inventory the owner-held locked source tree at /u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights, then copy that nested tree into the fresh node-local directory without hard links, symlinks, reflink assumptions, or omitted files. After copying bytes and metadata, fsync every copied regular file and every directory bottom-up plus the destination parent. Prove exact source/copy content-equivalence and prove every copied regular file has an inode distinct from its source; do not require device/inode equality across roots.",
+      "Set PAW_CACHE_DIR to the node-local copy itself, explicitly remove PROGRAMASWEIGHTS_CACHE_DIR, and prove base_models, programs, and runtimes are its direct children. Never run inference against, open for write, or otherwise mutate the /u4 source cache.",
+      "Use the exact production rules_as_programs.paw_runtime.shared() process-global supervised PAW accessor after proving no prior shared runtime exists, plus the production Python and wheelhouse and an 8.0-second per-call timeout. Start one supervised worker generation and do not restart, replace, parallelize, or bypass it; shut down and clear the exact shared instance once after all calls.",
+      "Invoke all eight exact program IDs serially in the declared order, once each, on the first expected=WARNING row for that rule in frozen dataset order, using the exact stored input UTF-8 bytes. Bind the frozen dataset path/hash, deterministic selector, input byte count and SHA-256 before execution. For every invocation bind the exact input UTF-8 SHA-256, raw output UTF-8 byte count and SHA-256, normalized severity, timed_out=false, worker generation, and worker PID.",
+      "Require every invocation to terminate before its 8.0-second timeout, every normalized output to be exactly one of OK/INFO/WARNING/CRITICAL, and all eight rows to report one identical non-null worker generation and one identical live worker PID. A timeout, worker replacement, malformed output, missing row, duplicate row, or reordered program fails the canary.",
+      "After the eighth invocation, drain, stop, and clear the shared canary worker exactly once. Strictly re-inventory both roots. Require exact source before/after equality including ownership, inode/link, mtime, and ctime. For the node-local copy require zero content/topology/mode/ownership changes and zero .tmp entries; permit only explicitly enumerated mtime/ctime changes to the exact cached runtime-manifest path when its bytes/SHA-256 remain identical, and fail on every other metadata change. Preserve complete before/after raw, temporal, and content-equivalence inventories.",
+      "Write one immutable canonical semantic canary JSON containing every source/copy, environment, package, model, program, input/output, worker-generation/PID, timeout, and in-job scontrol fact. Seal it, its sidecar and six Python logs, the task/client streams, terminal canary sacct, r02 terminal gate, script identities, timestamps, and statuses beneath the exact two-level archive contract. Bind only the sealed archive sidecar as the all_partition_paw_cache_canary evidence path/bytes/SHA-256 top anchor, while directly cross-binding the inner semantic receipt and manifest in pending_terminal_bindings. The separately required scheduler_sacct, scheduler_stdout, and scheduler_stderr evidence kinds belong only to terminal r02 and must not be duplicated or replaced by canary scheduler material."
+    ],
+    "sealed_archive_contract": {
+      "root_rule": "archive_root is exactly the resolved parent directory of evidence_path and an immediate child of /u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4; its basename matches ^[0-9]{8}T[0-9]{6}Z-[1-9][0-9]*$. It is owned by the launching user, mode 0500, regular-directory and non-symlink. It has no child directory, symlink, device, socket, FIFO, or other special entry and contains exactly 28 regular non-symlink files, all owned by the launching user with mode 0444: the 26 manifest members plus evidence.sha256 and evidence.sha256.sha256.",
+      "top_anchor_rule": "evidence_path is exactly <archive_root>/evidence.sha256.sha256 and replacement_and_evidence_contract's all_partition_paw_cache_canary item binds this same absolute path, byte count, and lowercase SHA-256. Its exact one-line coreutils syntax is '<archive_manifest_sha256><two ASCII spaces><archive_manifest_path><LF>'; archive_manifest_path is exactly <archive_root>/evidence.sha256 and its observed bytes/SHA-256 equal the direct pending fields. Verify both hashes independently; no path normalization, relative path, extra line, CR, or alternate sidecar is allowed.",
+      "manifest_member_templates_exactly": [
+        "archive-ended-at-utc.txt",
+        "canary-script.sha256",
+        "launch-started-at-utc.txt",
+        "launcher-script.sha256",
+        "launcher.exit-status.txt",
+        "postrun-sacct.attempts.txt",
+        "postrun-sacct.exit-status.txt",
+        "postrun-sacct.stderr.log",
+        "postrun-sacct.txt",
+        "r02-terminal-sacct.stderr.log",
+        "r02-terminal-sacct.txt",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.guard-activations.jsonl",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.inner.stderr.log",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.inner.stdout.log",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.json",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.json.sha256",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.network.jsonl",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.setup.stderr.log",
+        "rap-eacl-paw-cache-canary-v4-<job_id>.setup.stdout.log",
+        "required-terminal-r02-job-id.txt",
+        "slurm-job-id.txt",
+        "srun-client.stderr.log",
+        "srun-client.stdout.log",
+        "srun-task-<job_id>.stderr.log",
+        "srun-task-<job_id>.stdout.log",
+        "srun.exit-status.txt"
+      ],
+      "manifest_rule": "evidence.sha256 is exactly 26 LF-terminated coreutils lines over manifest_member_templates_exactly after replacing every <job_id> with pending_terminal_bindings.all_partition_canary.job_id. Each line is '<lowercase 64-hex SHA-256><two ASCII spaces><resolved absolute member path><LF>'; the lines and members are in increasing absolute-path byte order, every member path is exactly <archive_root>/<expanded template>, and fresh streaming recomputation matches every hash. The manifest set is complete and exclusive; evidence.sha256, its sidecar, temporary names, unlisted files, duplicated identities, path escapes, and missing or extra members are forbidden.",
+      "inner_receipt_rule": "canary_receipt_path is exactly <archive_root>/rap-eacl-paw-cache-canary-v4-<job_id>.json and its pending bytes/SHA-256 equal fresh streaming values and the exact adjacent .json.sha256 sidecar. Parse strict JSON after rejecting duplicate keys and non-finite numbers; require status=passed, cross-bind every direct pending canary summary, independently recompute the detailed source/copy equivalence and permitted metadata diff from its complete inventories, require no source alias or multi-link destination, and validate its six log_anchors against the exact archived setup stdout/stderr, inner stdout/stderr, network JSONL, and guard-activation JSONL members.",
+      "scheduler_and_stream_rule": "launcher.exit-status.txt, srun.exit-status.txt, and postrun-sacct.exit-status.txt each contain exactly '0<LF>' and equal their direct pending integer-zero fields; postrun-sacct.attempts.txt contains the pending integer in [1,12] plus LF. slurm-job-id.txt and required-terminal-r02-job-id.txt contain respectively <job_id><LF> and '1524523<LF>'. postrun-sacct.txt is exact retained UTF-8 pipe output containing one unique top-level <job_id> row with job name rap-paw-cache-canary-v4, partition ALL, node watgpu808, terminal state COMPLETED, exit code 0:0, AllocCPUS=8, and no allocated gres/gpu; its stderr is empty. Cross-bind only stable in-job scontrol identity/resource fields to postrun sacct: JobId, Partition, NodeList, NumCPUs/AllocCPUS, requested memory and AllocTRES/no-GPU, plus JobName and TimeLimit where represented comparably. Explicitly do not equate inner JobState=RUNNING with the independently required postrun COMPLETED state. r02-terminal-sacct.txt contains a unique terminal top-level 1524523 row agreeing with the canonical terminal-r02 receipt on stable job/partition/node/state/exit fields; its launcher-local timestamp text is retained but need not be byte-identical to the forced-UTC command output, and its stderr is empty. Both srun task streams and both srun client streams are retained byte-for-byte through the manifest; the one task stdout must parse as the exact semantic receipt summary printed by the canary and cross-bind canary_receipt_path/SHA-256, while no stream may substitute for the semantic receipt or sacct.",
+      "chronology_and_identity_rule": "launch-started-at-utc.txt and archive-ended-at-utc.txt each contain exactly one timezone-aware UTC second timestamp plus LF. Parse timezone-aware UTC semantic-receipt strings at exact JSON pointers /started_at_utc, /inner/started_at_utc, /inner/ended_at_utc, and /ended_at_utc and require launch-started <= /started_at_utc <= /inner/started_at_utc <= /inner/ended_at_utc <= /ended_at_utc <= archive-ended. The launcher's sacct Start/End strings are retained verbatim as opaque scheduler text and are not interpreted because the frozen launcher did not force or capture their timezone. Terminal postrun sacct capture after srun and before archive end follows from the exact hash-pinned launcher control flow plus zero launcher/srun/sacct status files, not from parsing those naive timestamps. canary-script.sha256 and launcher-script.sha256 each contain one exact coreutils line binding the declared absolute script path and fixed SHA-256; verify both live regular non-symlink remote scripts before launch and again from these archived identities. Any failed hash, status, chronology, job/partition/node/resource identity, seal, member, stream, or semantic cross-binding makes the canary non-passing and blocks freeze/r03."
+    },
+    "pending_receipt": {
+      "binding": "pending_terminal_bindings.all_partition_canary",
+      "exact_shape_rule": "The pending binding directly retains exactly its declared fields: frozen dataset identity and first-WARNING selector, ordered eight per-program input byte counts/digests and raw-output byte counts/digests, normalized severities, timed_out=false, generation/PID observations, one aggregate worker generation/PID, zero timeout and disallowed-mutation counts, exact source/copy before/after inventory hashes and counts, network-guard scope/count/activation identity summaries, the sealed archive root and manifest identity, the inner semantic receipt identity, three zero exit statuses, bounded sacct attempts, and the one archive-sidecar evidence top anchor. The byte-bound inner semantic receipt is the sole typed authority for detailed source-copy content_equivalence_sha256, permitted_metadata_diff hash, source_aliases, destination_files_with_multiple_links, and per-file inode/link proofs; those details are intentionally not duplicated as undeclared pending-binding fields. I4 must validate the sealed_archive_contract starting from evidence_path, parse the inner receipt, recompute the detailed proofs from its inventories, require zero aliases/multi-link destinations, and cross-bind every direct summary field. Duplicate semantic receipts, manifests, sidecars, or alternative canary evidence anchors are forbidden."
+    },
+    "claim_limit": "A passing canary validates the corrected direct cache layout, byte-identical node-local copy, production supervised worker path, and one serial inference for each of the eight exact programs on watgpu808 only. It predicts no matrix latency, throughput, soak stability, accounting, offline agreement, or injected-fault outcome."
+  },
+  "full_attempt_plan": {
+    "status": "frozen after independent terminal r02 validation reproduced the full-plan, partial-boundary, cache, scheduler, and uniform-r03-source identities",
+    "full_plan": {
+      "unit_count": 430,
+      "stored_json_bytes": 122245,
+      "stored_json_sha256": "cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434",
+      "canonical_sha256": "4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c",
+      "ordered_membership_sha256": "cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162",
+      "components_in_fixed_order": [
+        {
+          "kind": "matrix",
+          "units": 288
+        },
+        {
+          "kind": "soak",
+          "units": 1
+        },
+        {
+          "kind": "offline",
+          "units": 1
+        },
+        {
+          "kind": "faults",
+          "families_in_fixed_order": [
+            "daemon_crash",
+            "worker_exit",
+            "worker_timeout",
+            "sqlite_lock",
+            "malformed_payload",
+            "duplicate_delivery",
+            "deployment_failure"
+          ],
+          "repetitions_per_family": 20,
+          "units": 140
+        }
+      ],
+      "identity_rule": "r03 plan.json must be byte-for-byte identical to immutable r02 plan.json and parse strictly to the same 430-row array. Both stored-file and canonical hashes, every row, order, unit ID, condition, event count, repetition, and component must agree."
+    },
+    "r02_partial_execution": {
+      "terminal_provenance_rerun": {
+        "unit_count": 279,
+        "unit_membership_sha256": "be08719a1247669532c0a0ce81b2af8620f6bc16f67aa866cddcd57e57c6d133"
+      },
+      "interrupted_direct_first_completion": {
+        "unit_count": 1,
+        "unit_membership_sha256": "61465b4f23df99fdbf8b2da08838a859c6b632a542970e90825afdf0f6ffbd72"
+      },
+      "unstarted_direct_first_execution": {
+        "unit_count": 70,
+        "unit_membership_sha256": "3a5211c5eb8924f1cff38af27d5fc7721b120441aba6bbdb603958415021e814"
+      },
+      "all_direct_first_completion": {
+        "unit_count": 71,
+        "unit_membership_sha256": "5617983b1af61bdc492f4b980653e996b8fde172bfe10e93058e3dff0dfe4aed"
+      },
+      "deterministic_first_execution": {
+        "unit_count": 80,
+        "unit_membership_sha256": "50a33139613a256b459317f71dfe3fb6de8114ecc673f94a85386feeb6df4b60"
+      },
+      "rule": "These sets are derived only from the exact frozen plan, exact 279-line terminal ledger, exact started/terminal tree presence, and static dependency class. They are reporting/execution roles, not cross-attempt primary-source choices. Every primary row comes from r03."
+    },
+    "r03_full_plan": {
+      "unit_count": 430,
+      "stored_json_bytes": 122245,
+      "stored_json_sha256": "cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434",
+      "canonical_sha256": "4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c",
+      "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+      "execution_order": "Execute the exact complete plan once in original order. The first 279 rows repeat only because launch-bound dependency provenance was invalid; row 279 seeks its first terminal completion; rows 280..429 seek their first executions. No row is imported, omitted, synthesized, or replaced after seeing r03."
+    },
+    "generated_rule_identity": {
+      "rule_id": "systfawtprbe0001",
+      "source_sha256": "501b3019245451318869c8a8d35808023505c438d8a23e416ad1eb68b3a24947",
+      "normalized_sha256": "dde6e1dac24bfd7e3142d7abd2c13f82a762fd437f2b49e73b0651e7255640db",
+      "behavior_sha256": "09dcc6e2541d87d1d4185060a2418a93f7f54fe9afdd1b3c5e9b8c0865d4b7ab",
+      "rule": "Historical validation and I4 tests must prove that this exact generated source/normalized behavior identity is used wherever the formal plan requires the deterministic generated rule."
+    },
+    "r02_partial_terminal_forensics_schema": {
+      "evidence_kind": "whole_attempt_replacement_validation",
+      "receipt_type": "r02_partial_terminal_forensics",
+      "canonicalization": "Let C(x) be strict JSON after rejecting duplicate keys and non-finite numbers, encoded with UTF-8, ensure_ascii=false, allow_nan=false, sort_keys=true, separators=(',', ':'), and no trailing LF. The stored file is C(wrapper) plus one LF. payload_sha256 is SHA-256 of C(payload); the evidence receipt separately binds the stored-file bytes and SHA-256.",
+      "wrapper_fields_exactly": [
+        "schema_version",
+        "receipt_type",
+        "payload",
+        "payload_sha256"
+      ],
+      "schema_version": 1,
+      "payload_fields_exactly": [
+        "generated_utc",
+        "source_attempt",
+        "terminal_archive",
+        "scheduler",
+        "cache_root_misbinding",
+        "primary_source_contract",
+        "label_predicates",
+        "validation",
+        "execution_partition",
+        "terminal_sensitivity_boundaries",
+        "counts",
+        "terminal_status_histogram",
+        "error_histogram",
+        "ordered_units",
+        "digests"
+      ],
+      "generated_utc_rule": "payload.generated_utc is an ISO-8601 UTC string with explicit timezone, is not before scheduler.observed_utc or any source receipt observation used to build the payload, and is not later than independent validation. It records receipt generation only and may not backdate the evidence.",
+      "file_receipt_fields_exactly": [
+        "path",
+        "bytes",
+        "sha256",
+        "type"
+      ],
+      "file_receipt_rule": "Every path is resolved, absolute, pre-existing, regular, non-symlink, outside the immutable r02 attempt except when it binds an already existing raw r02 artifact, and type is regular_file. Byte count and streaming lowercase SHA-256 must match. No receipt authorizes a write beneath r02.",
+      "source_attempt_fields_exactly": [
+        "raw_attempt_id",
+        "attempt_root",
+        "job_id",
+        "present_top_level_files",
+        "absent_top_level_paths",
+        "complete_tree",
+        "publication_claim",
+        "launch_identity_sha256",
+        "plan_sha256"
+      ],
+      "source_present_top_level_files_exactly": [
+        "launch",
+        "plan",
+        "publication",
+        "units",
+        "streams",
+        "stdout",
+        "stderr"
+      ],
+      "source_attempt_rule": "raw_attempt_id is exactly formal-v3-20260831t051023z-r02; attempt_root is exactly the resolved non-symlink absolute directory /u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r02; and job_id is the JSON string '1524523'. present_top_level_files is an object with exactly source_present_top_level_files_exactly, each using file_receipt_fields_exactly and file_receipt_rule, and paths are respectively <attempt_root>/launch.json, plan.json, publication.json, units.jsonl, streams.json, stdout.log, and stderr.log. absent_top_level_paths equals exactly [<attempt_root>/result.json]; fresh lstat must return absence and the path must be absent from complete_tree. complete_tree and publication_claim follow their exact schemas below. launch_identity_sha256 is SHA-256 of C(the strict parsed launch.json /identity object), exactly c496a3b704649b507f8bef428912519eaaace47f432170b48e060ebbee677ec1. plan_sha256 is SHA-256 of C(the complete strict parsed 430-row plan array), exactly 4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c, distinct from stored plan.json SHA-256 cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434. Every present receipt equals the corresponding complete-tree file; no absent, extra, aliased, relative, synthetic, reconstructed result, or post-hoc substitute path is accepted.",
+      "complete_tree_fields_exactly": [
+        "entry_count",
+        "regular_file_count",
+        "regular_file_bytes",
+        "canonical_json_bytes",
+        "type_histogram",
+        "sha256"
+      ],
+      "complete_tree_type_histogram_fields_exactly": [
+        "directory",
+        "regular_file"
+      ],
+      "complete_tree_rule": "Freshly recompute the exact lexicographically sorted predecessor-tree receipt array with no symlink and canonicalize it under C. Values are exactly entry_count=70738, regular_file_count=34975, regular_file_bytes=630704677, canonical_json_bytes=16489614, type_histogram={directory:35763,regular_file:34975}, and sha256=c94a5e8ec2fdd4623b1e7db019a12b7c39b7f239727e732a028b2b7072fd38a6. The seven present top-level files occur exactly once and result.json does not occur.",
+      "stat_file_receipt_fields_exactly": [
+        "path",
+        "present",
+        "type",
+        "mode",
+        "bytes",
+        "sha256",
+        "device",
+        "inode",
+        "nlink"
+      ],
+      "publication_claim_fields_exactly": [
+        "algorithm",
+        "claim",
+        "launch",
+        "hard_link_identity_verified"
+      ],
+      "publication_claim_rule": "algorithm is exactly 'streaming SHA-256 plus exact st_dev/st_ino equality'; claim and launch use stat_file_receipt_fields_exactly, are present regular files with mode=384, bytes=29604532, SHA-256=5dd695528e5d6d664ede580e493d85926bfa6a3e5adad05cee0d8c18788a1876, device=1048675, inode=817907, and nlink=2; launch path is <attempt_root>/launch.json; claim path is /u4/yuntian/rap-eacl-systems-formal-v3/.attempts.staging/.publication-claims/formal-v3-20260831t051023z-r02.launch.json; and hard_link_identity_verified=true. Re-stat and rehash both rather than trusting the archival boolean.",
+      "terminal_archive_fields_exactly": [
+        "path",
+        "bytes",
+        "sha256",
+        "type"
+      ],
+      "terminal_archive_rule": "Apply file_receipt_rule and require the exact resolved path /u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/r02-terminal-archive-1524523-v1.json, source mode 0444, bytes=31238, and SHA-256=dd33a2abeaae52c9218216ac3978e7ca69ffcb9296542067355fca64e6601e56, exactly equal to the r02_terminal_archive evidence item. Parse strict canonical JSON+LF and require schema_version=1, artifact_kind=archival_raw_terminal_capture_not_semantic_pass_receipt, source attempt identity, complete tree, claim, top-level artifacts, 279/1/150 accounting, exit-5 boundary, scheduler raw receipts, timezone/environment receipts, post-purge captures, and immutability statement to match their independent primary-byte recomputations. Stored archive conclusions are never semantic authority.",
+      "scheduler_fields_exactly": [
+        "observed_utc",
+        "squeue",
+        "sacct",
+        "scontrol_job"
+      ],
+      "scheduler_command_receipt_fields_exactly": [
+        "command",
+        "exit_code",
+        "stdout",
+        "stdout_bytes",
+        "stdout_sha256",
+        "stderr",
+        "stderr_bytes",
+        "stderr_sha256",
+        "parsed"
+      ],
+      "scheduler_command_rule": "Each object is the exact already-retained terminal-edge command receipt, not a demand to re-execute a now-purged query. command is the exact declared argv array and exit_code is integer 0 for that retained invocation. stdout/stderr are exact strict UTF-8 text including every LF with matching byte counts and SHA-256; stderr is empty and binds zero bytes plus the empty-file SHA-256. parsed has exactly {format,rows}, with the declared parser and exact row schema. The sacct argv used /usr/bin/env with TZ=UTC and SLURM_TIME_FORMAT=standard, so its naive Start/End text is UTC. Nonzero retained exit, nonempty retained stderr, undecodable bytes, field-count mismatch, or parse ambiguity blocks the receipt. Fresh post-purge failures are separately retained in terminal_archive and cannot replace the successful terminal-edge captures.",
+      "scheduler_commands_exactly": {
+        "squeue": {
+          "argv": [
+            "/usr/bin/squeue",
+            "-h",
+            "-j",
+            "1524523",
+            "-o",
+            "%i|%j|%T|%P|%R|%M|%l"
+          ],
+          "parsed_format": "pipe_rows_v1",
+          "row_fields_exactly": [
+            "job_id",
+            "job_name",
+            "state",
+            "partition",
+            "reason_or_node",
+            "elapsed",
+            "time_limit"
+          ]
+        },
+        "sacct": {
+          "argv": [
+            "/usr/bin/env",
+            "TZ=UTC",
+            "SLURM_TIME_FORMAT=standard",
+            "/usr/bin/sacct",
+            "-j",
+            "1524523",
+            "--starttime",
+            "2026-08-30",
+            "--parsable2",
+            "--noheader",
+            "--format=JobIDRaw,JobName,Partition,State,ExitCode,ElapsedRaw,Start,End,NodeList"
+          ],
+          "parsed_format": "sacct_pipe_rows_v1",
+          "row_fields_exactly": [
+            "job_id_raw",
+            "job_name",
+            "partition",
+            "state",
+            "exit_code",
+            "elapsed_raw",
+            "start",
+            "end",
+            "node_list"
+          ]
+        },
+        "scontrol_job": {
+          "argv": [
+            "/usr/bin/scontrol",
+            "show",
+            "job",
+            "-o",
+            "1524523"
+          ],
+          "parsed_format": "scontrol_key_value_rows_v1",
+          "row_fields_exactly": [
+            "fields"
+          ],
+          "fields_rule": "fields is an object containing every whitespace-delimited key=value token in the exact row; duplicate keys or tokens without '=' block parsing. Values remain exact strings without normalization."
+        }
+      },
+      "scheduler_terminal_semantics": "Capture only after r02 is terminal. scheduler.observed_utc is exactly 2026-08-31T18:33:16.209061Z, the original terminal-edge scontrol observation; it is timezone-aware, not before sacct End, and not later than receipt generated_utc. squeue parsed rows equal []. sacct contains exactly one top-level row with job_id_raw='1524523'; step rows are retained but cannot substitute. The top row has partition=ALL, node_list=watgpu108, state=FAILED, exit_code='5:0', elapsed_raw='30848', start='2026-08-31T09:58:57', and end='2026-08-31T18:33:05'. Parse those naive timestamps only under the command's forced TZ=UTC and attach +00:00 for chronology. The terminal scontrol receipt captured before purge contains exactly one fields object with JobId=1524523, Partition=ALL, NodeList=watgpu108, JobState=FAILED, and ExitCode=5:0 agreeing with sacct. Later scontrol purge does not invalidate the pre-purge raw receipt; post-purge failure receipts remain archived. source_attempt, launch Slurm identity, scheduler rows, pending bindings, r02_terminal_archive, and separately bound scheduler evidence all agree under their declared parsers. No scheduler field is used to infer why the process exited 5.",
+      "cache_root_misbinding_fields_exactly": [
+        "configured_direct_root",
+        "launch_inventoried_nested_root",
+        "launch_nested_inventory_sha256",
+        "launch_nested_raw_tree_inventory_sha256",
+        "direct_closeout_inventory",
+        "operational_active_set",
+        "observation"
+      ],
+      "cache_root_misbinding_rule": "configured_direct_root is exactly /u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache, the H3 PAW_CACHE_DIR used by direct ProgramAsWeights. launch_inventoried_nested_root is exactly /u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights, the resolved root of H3 formal-runtime-lock-v3.json paw_cache.complete_tree and paw_cache.raw_tree. launch_nested_inventory_sha256 is exactly the copied and independently recomputed paw_cache.complete_tree.inventory_sha256 6764a77f942f8a2699babb0801fcf4beb94b6511040e5b5f95b56e06e64c8977 over its exact 51 path/bytes/SHA file receipts; launch_nested_raw_tree_inventory_sha256 is exactly paw_cache.raw_tree.inventory_sha256 7c849181a6de60b237ddfb3a7eab3678ec6f1e212696b217a4efcb9959f05b43 over root_entry plus all 62 entry objects under that nested root. direct_closeout_inventory.required_files is the exact sorted projection of the 51 raw_tree entries with type=regular to cache_inventory_item fields, cross-binding path/bytes/SHA to the same complete_tree files and retaining raw-tree type/mode. Both roots, both hashes, every required item, the H3 runtime-lock file receipt, and r02 launch identity must agree; no synthetic helper-appended root or alternate projection is allowed.",
+      "direct_closeout_inventory_fields_exactly": [
+        "required_files",
+        "observed_files",
+        "matched_files",
+        "missing_files",
+        "mismatched_files",
+        "inventory_sha256"
+      ],
+      "cache_inventory_item_fields_exactly": [
+        "relative_path",
+        "type",
+        "mode",
+        "bytes",
+        "sha256"
+      ],
+      "cache_inventory_rule": "required_files is the exact 51-item locked nested inventory, with cache_inventory_item shape, strictly increasing by UTF-8 relative_path. observed_files is the complete direct-root regular-file inventory under direct children base_models, programs, and runtimes, using the same item shape and sort, with paths relative to the configured direct content root. matched_files is the ordered array of relative-path strings whose observed direct-root bytes/type/mode equal the required item. missing_files is the ordered array of absent required relative paths. mismatched_files is an ordered array of {relative_path,required,observed}, where required and observed both use the inventory-item schema and observed is always nonnull; an absent required path occurs only in missing_files and never also in mismatched_files. inventory_sha256 equals SHA-256 of C(observed_files), so it is independently recomputable from the receipt. Derive matched, missing, and mismatched as three disjoint exhaustive classifications of required_files from observed_files; any duplicate observed path, unrecorded regular file, path outside the three direct children, or observed path absent from required_files is an extra and blocks validation. For the retained factual r02 closeout, missing_files is exactly [\"runtimes/qwen3-0.6b-q6_k.v1.json\"] and mismatched_files is exactly []; any different recomputation blocks the receipt rather than rewriting the fact.",
+      "cache_mismatch_item_fields_exactly": [
+        "relative_path",
+        "required",
+        "observed"
+      ],
+      "operational_active_set_fields_exactly": [
+        "program_ids",
+        "program_tree_sha256_by_id",
+        "embedded_runtime_id_by_program_id",
+        "active_runtime_manifest",
+        "base_model",
+        "positive_measured_unit_membership_sha256"
+      ],
+      "operational_active_set_fixed_program_ids": [
+        "762d0837bbc06f75dc23",
+        "b735dff5093dd49bd27d",
+        "cf411837cd27dd43604a",
+        "d53e0b93521bc075170c",
+        "16a7a75554b8006ca240",
+        "8c96ca80eea5aff5147f",
+        "a78ddf95882555e71250",
+        "81888657ac4f92ce39a8"
+      ],
+      "operational_active_set_rule": "program_tree_sha256_by_id and embedded_runtime_id_by_program_id are objects with exactly the eight operational_active_set_fixed_program_ids keys and no others. Every embedded runtime value is exactly qwen3-0.6b-q6_k. For each program ID, program_tree_sha256_by_id[id] is SHA-256 of C(the array of all cache_inventory_item objects for regular files beneath the observed configured direct-root programs/<id>/ tree, sorted lexicographically by UTF-8 relative_path). Each relative_path is relative to the configured direct content root, begins exactly programs/<id>/, and the array includes every and only that tree's regular files from the complete direct-closeout inventory. Parse programs/<id>/meta.json strictly and require its program_id=id, runtime_id=qwen3-0.6b-q6_k, and runtime_manifest_version=1; its exact receipt and every other tree item must match the direct-closeout inventory. active_runtime_manifest is exactly relative_path runtimes/qwen3-0.6b-q6_k.json, its embedded_runtime_id is qwen3-0.6b-q6_k, and its bytes/SHA-256 match both the complete direct-closeout inventory and its strictly parsed runtime_id. base_model is exactly relative_path base_models/qwen3-0.6b-q6_k.gguf, bytes=622733120, SHA-256=9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c, and matches the same inventory. positive_measured_unit_membership_sha256 is SHA-256 of C(the plan-ordered array of exactly {plan_index,component,unit_id} for direct_paw rows matching measured_after_unbound_cache_convergence_v1); it must equal the measured-membership digest independently derived from ordered_units. Any absent, extra, duplicate, unparsable, or cross-inconsistent item blocks validation.",
+      "active_runtime_manifest_fields_exactly": [
+        "relative_path",
+        "bytes",
+        "sha256",
+        "embedded_runtime_id"
+      ],
+      "base_model_fields_exactly": [
+        "relative_path",
+        "bytes",
+        "sha256"
+      ],
+      "cache_observation_exact": "The H3 launch receipt bound the nested programasweights tree while direct ProgramAsWeights resolved the configured sibling root. The sibling root cold-materialized unbound dependency bytes during r02. Closeout equality of active bytes does not retroactively make launch provenance bound, and mutable manifest timestamps do not establish measurement crossing.",
+      "cache_misbinding_required_facts": "Bind the launch inventory's 51-file nested programasweights tree and the configured sibling direct root separately. The closeout direct root currently matches 50 of 51 required files; the exact absent path is runtimes/qwen3-0.6b-q6_k.v1.json. The active program metadata embeds runtime manifest v1 while observed execution uses the byte-bound current runtimes/qwen3-0.6b-q6_k.json. Record the versioned copy as absent rather than claiming 51/51. The current manifest is rewritten per load, so its mtime/ctime cannot define convergence; only positive immutable terminal measurement fields establish that a unit crossed measurement.",
+      "primary_source_contract_fields_exactly": [
+        "predicate_version",
+        "direct_paw_components",
+        "direct_paw_faults",
+        "deterministic_faults",
+        "primary_source_attempt_id",
+        "r02_role",
+        "no_metric_status_or_favorability_source_choice"
+      ],
+      "primary_source_contract_exact_value": {
+        "predicate_version": "protocol-v3-amendment-008-full-r03-v1",
+        "direct_paw_components": [
+          "matrix",
+          "soak",
+          "offline"
+        ],
+        "direct_paw_faults": [
+          "daemon_crash",
+          "worker_exit",
+          "worker_timeout"
+        ],
+        "deterministic_faults": [
+          "sqlite_lock",
+          "malformed_payload",
+          "duplicate_delivery",
+          "deployment_failure"
+        ],
+        "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+        "r02_role": "raw_partial_sensitivity_only",
+        "no_metric_status_or_favorability_source_choice": true
+      },
+      "dependency_basis_by_static_plan_exactly": {
+        "matrix": "component_requires_direct_paw",
+        "soak": "component_requires_direct_paw",
+        "offline": "component_requires_direct_paw",
+        "faults.daemon_crash": "fault_recovery_requires_direct_paw",
+        "faults.worker_exit": "fault_recovery_requires_direct_paw",
+        "faults.worker_timeout": "fault_recovery_requires_direct_paw",
+        "faults.sqlite_lock": "fault_boundary_is_deterministic_no_paw",
+        "faults.malformed_payload": "fault_boundary_is_deterministic_no_paw",
+        "faults.duplicate_delivery": "fault_boundary_is_deterministic_no_paw",
+        "faults.deployment_failure": "fault_boundary_is_deterministic_no_paw"
+      },
+      "static_dependency_predicate": "Using only the frozen plan row and exact H3 code, dependency_class is direct_paw iff component is matrix, soak, or offline, or component is faults with fault in daemon_crash, worker_exit, or worker_timeout. It is deterministic_no_paw iff component is faults with fault in sqlite_lock, malformed_payload, duplicate_delivery, or deployment_failure. dependency_basis equals the exact declared mapping. This partition explains why all 279 observed terminal rows share the launch-wide dependency-provenance defect and proves that all 80 deterministic rows were never started; it does not select values from different attempts.",
+      "r02_execution_states_exactly": [
+        "terminal",
+        "started_without_terminal",
+        "not_started"
+      ],
+      "r03_execution_roles_exactly": [
+        "provenance_rerun",
+        "first_completion_after_interrupted_start",
+        "first_execution_direct_paw",
+        "first_execution_deterministic_no_paw"
+      ],
+      "ordered_unit_fields_exactly": [
+        "plan_index",
+        "plan_ordinal",
+        "component",
+        "unit_id",
+        "plan",
+        "plan_item_sha256",
+        "dependency_class",
+        "dependency_basis",
+        "r02_execution_state",
+        "r03_execution_role",
+        "primary_source_attempt_id",
+        "terminal_sensitivity_label",
+        "matched_predicate_id",
+        "label_evidence",
+        "started_receipt",
+        "journal_line_receipt",
+        "terminal_receipt"
+      ],
+      "ordered_unit_rule": "ordered_units contains exactly 430 rows in exact plan order. plan_index is zero-based; plan_ordinal=plan_index+1; plan is the exact full plan object; plan_item_sha256=SHA-256(C(plan)); dependency_class and dependency_basis equal the static mapping; and primary_source_attempt_id is formal-v3-20260831t051023z-r03 for every row. Indices 0..278 have r02_execution_state=terminal and r03_execution_role=provenance_rerun; each has nonnull exact started, journal, and terminal receipts plus exactly one terminal sensitivity label/predicate/evidence. Index 279 has state=started_without_terminal and role=first_completion_after_interrupted_start; it has its exact started receipt and null journal, terminal, label, and predicate fields. Indices 280..349 have state=not_started and role=first_execution_direct_paw; indices 350..429 have state=not_started and role=first_execution_deterministic_no_paw; every receipt/label/predicate field is null. Every nonterminal label_evidence equals exactly {supporting_receipts:[],json_values:[],text_literals:[]}. No result unit index exists or may be reconstructed. Status, latency, accounting, error, verdict, severity, and favorability never change a role or primary source.",
+      "started_receipt_fields_exactly": [
+        "path",
+        "bytes",
+        "sha256",
+        "type"
+      ],
+      "started_network_boundary_exact": {
+        "id": "cpython_socket_api_inet_v1",
+        "mechanism": "CPython sitecustomize monkeypatch inherited by Python children",
+        "blocked_families": [
+          "AF_INET",
+          "AF_INET6"
+        ],
+        "blocked_apis": [
+          "socket.socket.connect",
+          "socket.socket.connect_ex",
+          "socket.socket.send",
+          "socket.socket.sendall",
+          "socket.socket.sendto",
+          "socket.socket.sendmsg when available",
+          "socket.create_connection"
+        ],
+        "allowed": [
+          "AF_UNIX local sockets"
+        ],
+        "outside_boundary": [
+          "native libraries or subprocesses that make socket syscalls without CPython socket APIs",
+          "non-Python processes"
+        ],
+        "advisory_environment_flags": [
+          "HF_HUB_OFFLINE",
+          "TRANSFORMERS_OFFLINE"
+        ]
+      },
+      "started_receipt_rule": "When r02_execution_state is terminal or started_without_terminal, apply file_receipt_rule and require the exact <attempt_root>/<component>/<unit_id>.started.json path and component-specific strict payload identity from amendment 007; the started file predates any corresponding terminal file. When state is not_started, started_receipt is null and the exact path is absent from both fresh lstat and the complete tree. The full set of present started receipts is exactly plan indices 0..279 with no other started path.",
+      "journal_line_receipt_fields_exactly": [
+        "line_number",
+        "byte_offset",
+        "bytes_including_lf",
+        "sha256",
+        "parsed"
+      ],
+      "journal_line_receipt_rule": "For each terminal row, line_number is plan_index+1; byte_offset and bytes_including_lf cover exactly one strict UTF-8 JSON object plus its single LF in source_attempt.present_top_level_files.units; sha256 binds those exact bytes. parsed has exactly component, phase, record_id, status, terminal_record, terminal_record_sha256; phase=terminal and every identity/hash/status equals the row and terminal receipt. The 279 receipts cover units.jsonl contiguously from byte offset zero through EOF with no gap, overlap, blank, or unconsumed byte and equal exact plan prefix 0..278. Nonterminal rows have journal_line_receipt=null.",
+      "terminal_receipt_fields_exactly": [
+        "path",
+        "bytes",
+        "sha256",
+        "type",
+        "status",
+        "payload_status",
+        "status_matches_journal"
+      ],
+      "terminal_receipt_rule": "For each terminal row, apply file_receipt_rule to the exact <attempt_root>/<component>/<unit_id>.terminal.json, parse strict JSON, and require component/unit/plan identity, path basename, payload status, journal status, and terminal SHA-256 to agree exactly under the inherited component-specific rules. No result.unit_index cross-check exists because result.json is absent. Nonterminal rows have terminal_receipt=null; the interrupted started path has no terminal path, and every never-started path has neither receipt. Fresh tree and lstat absence are mandatory.",
+      "label_evidence_fields_exactly": [
+        "supporting_receipts",
+        "json_values",
+        "text_literals"
+      ],
+      "label_evidence_rule": "supporting_receipts items use exactly file_receipt_fields_exactly and file_receipt_rule, are strictly increasing by resolved UTF-8 path, and contain no duplicate path or file identity. json_values items use exactly json_value_evidence_fields_exactly, are strictly increasing by the tuple (receipt_path,json_pointer) under UTF-8 byte ordering, and contain no duplicate tuple. text_literals items use exactly text_literal_evidence_fields_exactly, are strictly increasing by (receipt_path,the UTF-8 bytes of literal_utf8), contain no duplicate tuple, and occurrence_count is a positive integer equal to the exact nonoverlapping byte-occurrence count. supporting_receipts contains exactly one receipt for every distinct receipt_path cited directly by json_values or text_literals, plus only the measured matrix/soak incremental file receipt required by label_evidence_selection_rule; that one indirect receipt must match the exact path, bytes, and sha256 object resolved at the declared terminal pointer and is therefore cited through that terminal JSON value. No other uncited receipt is permitted. Every cited path is the row's exact terminal file or a pre-existing immutable component/runtime artifact beneath source_attempt.attempt_root cross-bound to the complete raw-tree receipt; path escape, symlink, arbitrary object, unbound extra evidence, or nondeterministic ordering blocks validation.",
+      "premeasurement_terminal_json_pointers_exactly": [
+        "",
+        "/status",
+        "/error/type",
+        "/error/message",
+        "/samples",
+        "/accounting"
+      ],
+      "positive_measurement_terminal_json_pointers_by_component_exactly": {
+        "matrix": [
+          "/status",
+          "/samples",
+          "/accounting/evaluations_expected",
+          "/daemon_identity/paw",
+          "/incremental_evidence/journal_progress"
+        ],
+        "soak": [
+          "/status",
+          "/events_submitted",
+          "/batches",
+          "/global_accounting/evaluations_expected",
+          "/incremental_evidence/event_samples"
+        ],
+        "offline": [
+          "/status",
+          "/prepared_online",
+          "/online/sample",
+          "/online/accounting/evaluations_expected",
+          "/online_daemon_identity/paw"
+        ],
+        "faults": [
+          "/status",
+          "/error",
+          "/probe_specific",
+          "/probe_specific/recovery/sample",
+          "/probe_specific/recovery/accounting/evaluations_expected",
+          "/standardized_outcomes",
+          "/started_monotonic_ns",
+          "/finished_monotonic_ns"
+        ]
+      },
+      "label_evidence_selection_rule": "Evidence is canonical and exhaustive. For premeasurement_cache_failure_v1, json_values contains exactly the terminal entries at premeasurement_terminal_json_pointers_exactly; text_literals contains exactly one daemon-output.log row for each of the two literals 'Downloading interpreter' and 'Downloading program' whose independently counted UTF-8 byte occurrence_count is positive, in required sort order, and at least one exists; supporting_receipts contains exactly the terminal file and daemon-output.log. For measured_after_unbound_cache_convergence_v1, json_values contains exactly the terminal entries in the component's positive_measurement_terminal_json_pointers_by_component_exactly and text_literals is []; matrix and soak additionally include exactly the regular non-symlink incremental file named by their final pointer as a supporting receipt whose path/bytes/sha256 equal that resolved object, while offline and faults support only the terminal receipt. For other_structural_phase_v1, json_values is exactly one terminal-root entry with json_pointer='' and the complete terminal value, text_literals is [], and supporting_receipts is exactly the terminal receipt. Arrays still obey label_evidence_rule sorting. There are no optional, alternate, zero-count, duplicate, started-file, units-file, or extra evidence entries.",
+      "json_value_evidence_fields_exactly": [
+        "receipt_path",
+        "json_pointer",
+        "value"
+      ],
+      "json_value_evidence_rule": "json_pointer is an RFC 6901 pointer into the exact parsed JSON at receipt_path; the empty string resolves to the complete parsed receipt root. Every row resolves and value equals the resolved value exactly. For a tested absence, bind the nearest containing object that proves absence; when no narrower container suffices, bind the terminal root. For other_structural_phase_v1, the one exact terminal-root row is the complete authority from which both preceding predicates are recomputed and rejected; no additional pointer or receipt is permitted. Never encode a missing pointer as a resolving pointer with null value.",
+      "text_literal_evidence_fields_exactly": [
+        "receipt_path",
+        "literal_utf8",
+        "occurrence_count"
+      ],
+      "label_predicates": {
+        "fields_exactly": [
+          "fields_exactly",
+          "precedence",
+          "output_label_by_predicate",
+          "premeasurement_cache_failure_v1",
+          "measured_after_unbound_cache_convergence_v1",
+          "other_structural_phase_v1",
+          "noncausal_limit"
+        ],
+        "precedence": [
+          "premeasurement_cache_failure_v1",
+          "measured_after_unbound_cache_convergence_v1",
+          "other_structural_phase_v1"
+        ],
+        "output_label_by_predicate": {
+          "premeasurement_cache_failure_v1": "premeasurement_cache_failure",
+          "measured_after_unbound_cache_convergence_v1": "measured_after_unbound_cache_convergence",
+          "other_structural_phase_v1": "other_structural_phase"
+        },
+        "premeasurement_cache_failure_v1": "Match iff dependency_class=direct_paw; component=matrix; terminal status=system_violation; /error/type equals SystemViolationError; /error/message begins with the exact literal 'warmup exact evaluation accounting failed:'; /samples equals []; /accounting equals {}; no positive component measurement predicate below holds; and the bound runtime/matrix/<unit_id>/daemon-output.log contains at least one exact 'Downloading program' or 'Downloading interpreter' UTF-8 occurrence. Bind exactly the canonical pointer and every positive literal occurrence row required by label_evidence_selection_rule.",
+        "measured_after_unbound_cache_convergence_v1": "Match iff dependency_class=direct_paw, the premeasurement predicate did not match, and the exact component predicate is positive: matrix requires nonempty /samples, integer /accounting/evaluations_expected >=1, /daemon_identity/paw=true, and bound nonempty /incremental_evidence/journal_progress; soak requires integer /events_submitted >=1, nonempty /batches, integer /global_accounting/evaluations_expected >=1, and bound nonempty /incremental_evidence/event_samples; offline requires /prepared_online=true, object /online/sample, integer /online/accounting/evaluations_expected >=1, and /online_daemon_identity/paw=true; a direct fault requires /error=null, absence of /probe_specific/probe_exception, object /probe_specific/recovery/sample, integer /probe_specific/recovery/accounting/evaluations_expected >=1, nonempty object /standardized_outcomes whose /orphan_process_count_status is not the exact runner marker unknown_after_caught_exception, and integer /started_monotonic_ns and /finished_monotonic_ns with finished_monotonic_ns >= started_monotonic_ns. Exception-only faults, the exact unknown standardized-outcome marker, or fault probes without a positive recovery evaluation go to other_structural_phase_v1. Bind exactly the canonical component pointers and, for matrix/soak, the indirectly cited incremental file required by label_evidence_selection_rule. Positive payload/artifact fields, never mutable filesystem times, establish crossing.",
+        "other_structural_phase_v1": "Match every terminal direct-PAW row not matching either preceding predicate. Bind exactly the complete terminal-root evidence required by label_evidence_selection_rule. Interrupted and unstarted rows receive no terminal sensitivity label. Unknown, null, omitted, or multiply assigned labels on a terminal row are forbidden.",
+        "noncausal_limit": "These labels describe retained structural phase only. They neither select membership nor assert that every measured suffix value was caused solely by cache convergence."
+      },
+      "matched_predicate_id_by_label_exactly": {
+        "premeasurement_cache_failure": "premeasurement_cache_failure_v1",
+        "measured_after_unbound_cache_convergence": "measured_after_unbound_cache_convergence_v1",
+        "other_structural_phase": "other_structural_phase_v1"
+      },
+      "validation_fields_exactly": [
+        "checks",
+        "failures"
+      ],
+      "boundary_label_row_fields_exactly": [
+        "label",
+        "count",
+        "first",
+        "last",
+        "runs",
+        "unit_membership_sha256"
+      ],
+      "boundary_point_fields_exactly": [
+        "plan_index",
+        "unit_id"
+      ],
+      "boundary_run_fields_exactly": [
+        "first",
+        "last",
+        "count"
+      ],
+      "required_validation_checks": [
+        "amendment_007_r01_r02_edge_revalidated",
+        "complete_r02_tree_claim_and_present_top_level_receipts_match",
+        "result_json_exactly_absent",
+        "installed_paw_cache_semantics_anchors_match",
+        "generated_rule_identity_match",
+        "direct_cache_closeout_forensic_partition_complete",
+        "plan_430_unique_ordered_keys",
+        "ledger_exact_279_terminal_prefix",
+        "started_exact_280_prefix",
+        "one_started_without_terminal_at_index_279",
+        "remaining_150_exactly_not_started",
+        "all_present_started_terminal_and_journal_receipts_match",
+        "all_279_terminal_rows_exactly_one_sensitivity_label",
+        "execution_partition_and_membership_hashes_match",
+        "uniform_r03_primary_source_430",
+        "scheduler_terminal_identity_cross_bound",
+        "exit_5_cause_remains_unclassified",
+        "no_source_rule_uses_metric_status_or_favorability",
+        "all_counts_boundaries_histograms_and_digests_recomputed"
+      ],
+      "validation_rule": "checks contains exactly required_validation_checks mapped to true and failures=[]. Recompute every check from the immutable r01/r02 edge receipts, complete r02 tree, exact H3 source, installed PAW bytes, external terminal archive raw bytes, scheduler receipts, and direct-root inventories. Do not trust archival narrative or stored conclusions. Missing result is an asserted absence only after tree and lstat validation. Any false, missing, extra, inferred exit cause, reconstructed result, partial-primary use, or value-dependent source choice blocks validation, freeze, and r03.",
+      "execution_partition_fields_exactly": [
+        "categories"
+      ],
+      "execution_partition_category_fields_exactly": [
+        "r02_execution_state",
+        "r03_execution_role",
+        "count",
+        "first",
+        "last",
+        "unit_membership_sha256"
+      ],
+      "execution_partition_exact_categories": [
+        {
+          "r02_execution_state": "terminal",
+          "r03_execution_role": "provenance_rerun",
+          "count": 279,
+          "first": {
+            "plan_index": 0,
+            "unit_id": "r1-p1-round_robin_across_projects-sequential20-rep0"
+          },
+          "last": {
+            "plan_index": 278,
+            "unit_id": "r8-p8-round_robin_across_projects-burst64-rep2"
+          },
+          "unit_membership_sha256": "be08719a1247669532c0a0ce81b2af8620f6bc16f67aa866cddcd57e57c6d133"
+        },
+        {
+          "r02_execution_state": "started_without_terminal",
+          "r03_execution_role": "first_completion_after_interrupted_start",
+          "count": 1,
+          "first": {
+            "plan_index": 279,
+            "unit_id": "r8-p8-one_project_hotspot-sequential20-rep2"
+          },
+          "last": {
+            "plan_index": 279,
+            "unit_id": "r8-p8-one_project_hotspot-sequential20-rep2"
+          },
+          "unit_membership_sha256": "61465b4f23df99fdbf8b2da08838a859c6b632a542970e90825afdf0f6ffbd72"
+        },
+        {
+          "r02_execution_state": "not_started",
+          "r03_execution_role": "first_execution_direct_paw",
+          "count": 70,
+          "first": {
+            "plan_index": 280,
+            "unit_id": "r8-p8-one_project_hotspot-burst24-rep2"
+          },
+          "last": {
+            "plan_index": 349,
+            "unit_id": "worker_timeout-rep19"
+          },
+          "unit_membership_sha256": "3a5211c5eb8924f1cff38af27d5fc7721b120441aba6bbdb603958415021e814"
+        },
+        {
+          "r02_execution_state": "not_started",
+          "r03_execution_role": "first_execution_deterministic_no_paw",
+          "count": 80,
+          "first": {
+            "plan_index": 350,
+            "unit_id": "sqlite_lock-rep0"
+          },
+          "last": {
+            "plan_index": 429,
+            "unit_id": "deployment_failure-rep19"
+          },
+          "unit_membership_sha256": "50a33139613a256b459317f71dfe3fb6de8114ecc673f94a85386feeb6df4b60"
+        }
+      ],
+      "execution_partition_rule": "categories equals execution_partition_exact_categories exactly in declared order. Each membership SHA-256 binds C(the plan-ordered array of exactly {plan_index,component,unit_id}); categories are disjoint, their ordered concatenation is the complete plan, and the concatenated membership SHA-256 is cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162. The direct first-terminal-completion union over indices 279..349 has count 71 and membership SHA-256 5617983b1af61bdc492f4b980653e996b8fde172bfe10e93058e3dff0dfe4aed.",
+      "counts_fields_exactly": [
+        "total",
+        "direct_paw",
+        "deterministic_no_paw",
+        "r02_started",
+        "r02_terminal",
+        "r02_started_without_terminal",
+        "r02_never_started",
+        "r02_never_started_direct_paw",
+        "r02_never_started_deterministic_no_paw",
+        "r03_provenance_rerun",
+        "r03_direct_first_completion",
+        "r03_deterministic_first_execution",
+        "r03_primary",
+        "cross_tabulation"
+      ],
+      "counts_fixed_values": {
+        "total": 430,
+        "direct_paw": 350,
+        "deterministic_no_paw": 80,
+        "r02_started": 280,
+        "r02_terminal": 279,
+        "r02_started_without_terminal": 1,
+        "r02_never_started": 150,
+        "r02_never_started_direct_paw": 70,
+        "r02_never_started_deterministic_no_paw": 80,
+        "r03_provenance_rerun": 279,
+        "r03_direct_first_completion": 71,
+        "r03_deterministic_first_execution": 80,
+        "r03_primary": 430
+      },
+      "count_cross_tabulation_row_fields_exactly": [
+        "dependency_class",
+        "r02_execution_state",
+        "r03_execution_role",
+        "component",
+        "terminal_status",
+        "count",
+        "unit_membership_sha256"
+      ],
+      "counts_rule": "cross_tabulation contains every nonempty dependency_class x r02_execution_state x r03_execution_role x component x terminal_status cell sorted lexicographically. terminal_status is the exact terminal payload status or the literal not_terminal. Membership SHA-256 binds the plan-ordered {plan_index,component,unit_id} array. Counts reproduce all fixed margins and the terminal status totals completed=11 and system_violation=268; no zero, extra, or outcome-dependent source cell is allowed.",
+      "terminal_sensitivity_boundaries_fields_exactly": [
+        "labels"
+      ],
+      "terminal_sensitivity_boundaries_rule": "labels contains exactly the three terminal sensitivity labels in predicate-precedence order, including zero-count rows. Their memberships are disjoint and partition exactly the 279 terminal indices 0..278, never any interrupted or unstarted row. For zero count, first/last are null, runs=[], and membership binds C([]); otherwise first/last are the outer plan points and runs contains every maximal contiguous terminal-plan-index run.",
+      "terminal_status_histogram_row_fields_exactly": [
+        "dependency_class",
+        "terminal_sensitivity_label",
+        "component",
+        "status",
+        "count",
+        "unit_membership_sha256"
+      ],
+      "terminal_status_histogram_rule": "Retain sorted exact {dependency_class,terminal_sensitivity_label,component,status,count,unit_membership_sha256} rows whose memberships partition exactly the 279 terminal units and sum to completed=11 plus system_violation=268. Nonterminal rows never appear in this histogram.",
+      "error_histogram_row_fields_exactly": [
+        "dependency_class",
+        "terminal_sensitivity_label",
+        "component",
+        "status",
+        "error_type",
+        "error_message",
+        "count",
+        "unit_membership_sha256"
+      ],
+      "error_histogram_rule": "Retain every nonempty dependency_class x terminal_sensitivity_label x component x status x error_type x error_message cell over exactly the 279 terminal rows, lexicographically sorted with null before strings for error keys. Preserve exact error text and bind plan-ordered membership. Interrupted and unstarted rows never receive an invented error.",
+      "digests_fields_exactly": [
+        "ordered_plan_keys_sha256",
+        "ordered_units_sha256",
+        "direct_rows_sha256",
+        "deterministic_rows_sha256",
+        "execution_partition_sha256",
+        "terminal_sensitivity_boundaries_sha256",
+        "terminal_status_histogram_sha256",
+        "error_histogram_sha256"
+      ],
+      "digest_rule": "Each digest is SHA-256 of C(the exact named object/array). ordered_plan_keys uses exactly {plan_index,component,unit_id} and equals cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162. ordered_units binds all complete row objects; direct_rows and deterministic_rows filter full rows in plan order; the remaining digests bind their complete declared structures. Empty arrays are C([]), never omission.",
+      "freeze_rule": "Create this receipt exclusively outside r02 after r02 is terminal. Recompute it independently from the complete immutable raw tree, exact H3 code, exact plan and 279-line ledger, explicit result absence, external terminal archive, scheduler evidence, and cache inventories. Its stored bytes/SHA-256 fill the sole whole_attempt_replacement_validation evidence binding and historical gate. I4/H4 consume this exact schema; mismatch blocks freeze or r03 rather than inferring a value."
+    },
+    "freeze_gate": "Freeze only when independent validation reproduces the full plan bytes/canonical hash, exact r02 279/1/150 partial boundary, every declared membership digest, explicit result absence, launch-wide cache-root mismatch, raw terminal archive, and uniform r03 primary-source rule without consulting any measured value or favorability. The exact unexplained exit-5 cause remains unclassified. The retained receipt must include every terminal row and the interrupted unit's raw artifacts. Any mismatch blocks this draft and requires review; it never shrinks r03 or imports an r02 value."
+  },
+  "historical_validation": {
+    "status": "passed",
+    "validator_independence": "A fresh process outside r02 parses immutable primary bytes and exact H3 source; it does not import a generated receipt builder, trust archived narrative, reuse a stored conclusion, or mutate r01/r02.",
+    "inputs": [
+      "immutable r01/r02 replacement edge and amendment-007 bytes",
+      "complete immutable r02 tree, publication claim, seven present top-level files, and exact result.json absence",
+      "exact H3 source/runtime-lock/installed ProgramAsWeights semantic anchors",
+      "r02 terminal raw archive plus exact scheduler and timezone receipts",
+      "the full-plan and execution-partition identities declared in this amendment",
+      "corrected-root inventory contract"
+    ],
+    "required_checks": [
+      "Revalidate amendment 007's immutable r01-to-r02 adjudication without relabeling either raw attempt.",
+      "Recompute r02 complete-tree, claim, top-level receipts, exact result absence, 430 plan, 280 starts, 279 terminal ledger prefix, one unpaired start, and 150 unstarted rows.",
+      "Prove all 279 terminal rows are direct-PAW matrix rows under the exact static H3 code and reproduce the four execution categories and every frozen membership hash.",
+      "Recompute the launch-bound nested root versus configured direct-root mismatch from H3/launch/installed-package bytes and the complete closeout inventory.",
+      "Classify every terminal r02 row by the exact terminal sensitivity predicates; retain the one interrupted start and every unstarted row without inventing terminal values.",
+      "Validate the forced-UTC sacct, pre-purge scontrol, empty squeue, exact scheduler streams, post-purge receipts, timezone/environment facts, and unexplained exit-cause constraint from the raw terminal archive.",
+      "Prove r03 plan.json is the exact full 430-row r02 plan and every primary row is sourced only from r03 before any r03 result exists.",
+      "Validate generated-rule identity and the corrected direct-cache contract. The ALL-partition canary remains an independent freeze gate under all_partition_canary.sealed_archive_contract and is not asserted by this receipt.",
+      "Emit exactly one canonical whole_attempt_replacement_validation receipt using full_attempt_plan.r02_partial_terminal_forensics_schema; that same typed file is the sole historical-validation gate."
+    ],
+    "prohibited": [
+      "using any favorable or unfavorable r02 value to choose whether or what to execute in r03",
+      "using any r02 row as a primary numeric value",
+      "reconstructing result.json or a result unit index",
+      "classifying unexplained exit 5 as harness, infrastructure, or measured-system cause",
+      "dropping the interrupted start, a terminal payload, an unstarted plan row, or any raw terminal archive byte",
+      "trusting archival prose as a semantic pass result",
+      "mutating r01/r02 or writing evidence beneath either attempt"
+    ],
+    "receipt_rule": "status and pending_terminal_bindings.historical_validation.status both equal the exact string passed. The receipt path/bytes/SHA-256 exactly equal both pending_terminal_bindings.historical_validation and the whole_attempt_replacement_validation evidence item. No second opaque history file is accepted."
+  },
+  "replacement_and_evidence_contract": {
+    "edge": "formal-v3-20260831t051023z-r02 -> formal-v3-20260831t051023z-r03",
+    "classification": "outcome_aware_launch_wide_whole_attempt_protocol_correction",
+    "original_status": "missing",
+    "affected_boundary": "launch-wide direct ProgramAsWeights dependency provenance plus absence of a complete predecessor result: preflight bound a nested cache subtree, direct inference resolved an initially absent sibling root, r02 stopped after an exact 279-row terminal prefix, and result.json is absent",
+    "receipt_identity_rule": "replacement.json has schema_version=2; successor_raw_attempt_id=formal-v3-20260831t051023z-r03; predecessor_raw_attempt_id=formal-v3-20260831t051023z-r02; classification=outcome_aware_launch_wide_whole_attempt_protocol_correction; original_status=missing; reason is byte-for-byte equal to the amendment's top-level reason string; affected_boundary is byte-for-byte equal to this contract's affected_boundary string; and created_utc is a timezone-aware timestamp no later than setup validation. These identities are exact, not merely nonempty.",
+    "predecessor_artifacts_rule": "Use the inherited exact eight-key predecessor_artifacts object. launch.json, plan.json, publication.json, units.jsonl, streams.json, stdout.log, and stderr.log use exact present receipts matching pending_terminal_bindings.r02 and the complete tree. result.json is exactly null, permitted only because fresh lstat and the complete-tree inventory both prove the exact path absent. No reconstructed result, alternate path, or omitted key is accepted.",
+    "scheduler_adjudication_rule": "scheduler_adjudication is exactly null for outcome_aware_launch_wide_whole_attempt_protocol_correction. The forced-UTC sacct, pre-purge scontrol, empty squeue, post-purge captures, and task streams remain exact evidence; they prove FAILED 5:0 and chronology but do not classify the process-exit cause as external infrastructure.",
+    "required_evidence_kinds_exactly_once": [
+      "launch_wide_cache_root_adjudication",
+      "paw_cache_semantics_receipt",
+      "all_partition_paw_cache_canary",
+      "whole_attempt_replacement_validation",
+      "r02_effective_cache_forensic_inventory",
+      "r02_terminal_archive",
+      "scheduler_sacct",
+      "scheduler_stdout",
+      "scheduler_stderr"
+    ],
+    "archival_context_kinds_exactly": [
+      "launch_wide_cache_root_adjudication",
+      "paw_cache_semantics_receipt",
+      "r02_effective_cache_forensic_inventory",
+      "r02_terminal_archive"
+    ],
+    "evidence_item_exact_fields": [
+      "kind",
+      "path",
+      "bytes",
+      "sha256"
+    ],
+    "evidence_rule": "Each kind occurs exactly once. Each path is the exact resolved absolute path to a pre-existing regular non-symlink immutable file outside r02, with streaming byte count and lowercase SHA-256. Empty scheduler streams bind zero bytes and the empty-file SHA-256. The canary path is the sealed evidence.sha256.sha256 top anchor. whole_attempt_replacement_validation is the sole typed historical gate. r02_terminal_archive preserves exact raw capture bytes and is never itself a semantic pass receipt. Generic text or labels cannot substitute for typed recomputation.",
+    "performance_independent_gate": "Exact H3 identities, installed PAW semantics, r02 environment/cache forensics, exact 279/1/150 partial boundary, static dependency classes, complete raw terminal archive, full-plan equality, explicit amendment-007 overrides, and zero use of measured values/favorability must all match. r02 contributes no primary row. Every r03 primary row is fixed before r03 setup. Any mismatch rejects this draft rather than changing the full plan or importing an r02 value.",
+    "semantic_gate_rule": "The four archival_context files preserve primary/raw context but their assertions are not trusted. The sole typed historical gate is whole_attempt_replacement_validation, which independently recomputes the H3 root mismatch, installed ProgramAsWeights semantics, complete r02 tree and result absence, exact partial ledger/tree boundary, static dependency facts, terminal sensitivity labels, uniform r03 source, and all hashes from immutable primary bytes. The canary is validated through all_partition_canary.sealed_archive_contract. Scheduler kinds and r02_terminal_archive are cross-validated through the partial-terminal forensics schema and scheduler_rule.",
+    "scheduler_rule": "scheduler_sacct path is exactly /u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/terminal-edge-forced-utc-sacct-1524523.txt and its bytes are exactly the strict UTF-8 forced-UTC terminal-edge command stdout, mode 0444, 280 bytes with SHA-256 799361d506c13a521252b9cfb346ed74875f6896cdc8ead5c057597d9dcde09b, including every LF; the older 176-byte scheduler-sacct.txt is not this evidence. scheduler_stdout and scheduler_stderr paths are exactly /u4/yuntian/rap-eacl-systems-formal-v3/scheduler/rap-eacl-systems-v3-1524523.stdout.log and /u4/yuntian/rap-eacl-systems-formal-v3/scheduler/rap-eacl-systems-v3-1524523.stderr.log; both are distinct zero-byte regular non-symlink files with the empty SHA-256 and equal terminal scontrol StdOut/StdErr. Scheduler evidence records FAILED 5:0 identity and chronology only; it does not classify the unexplained process cause.",
+    "successor_source_fields_exactly": [
+      "schema_version",
+      "protocol_parent",
+      "protocol_commit",
+      "implementation_commit",
+      "runtime_lock_commit",
+      "commit_diff_paths",
+      "tracked_files"
+    ],
+    "successor_commit_diff_path_fields_exactly": [
+      "protocol",
+      "implementation",
+      "runtime_lock"
+    ],
+    "successor_tracked_file_fields_exactly": [
+      "path",
+      "bytes",
+      "sha256",
+      "git_blob"
+    ],
+    "successor_source_rule": "replacement.json successor_source has exactly successor_source_fields_exactly and schema_version=1. protocol_parent is the exact H3 parent anchor; protocol_commit=P4 has exactly one parent equal to H3; implementation_commit=I4 has exactly one parent equal to P4; runtime_lock_commit=H4 has exactly one parent equal to I4 and is exact HEAD. Every commit is lowercase 40-hex, non-merge, and H4 is contained by at least one pushed non-HEAD remote ref; no global child-uniqueness claim is made about any commit. commit_diff_paths has exactly its three fields and each sorted array exactly equals effective_protocol_identity.required_git_topology's corresponding diff_paths_exactly. tracked_files is exactly the concatenation of protocol, implementation, and runtime-lock path arrays in that order; each entry has exactly the tracked-file fields, binds the clean H4 working-tree regular non-symlink bytes, lowercase SHA-256, lowercase 40-hex Git blob object, and exact H4:path blob. Duplicate/extra/missing paths, a merge, unpushed H4, dirty bound path, or alternate topology blocks r03.",
+    "whole_attempt_protocol_correction_fields_exactly": [
+      "schema_version",
+      "analysis_id",
+      "full_plan_unit_count",
+      "full_plan_stored_json_bytes",
+      "full_plan_stored_json_sha256",
+      "full_plan_canonical_sha256",
+      "full_plan_membership_sha256",
+      "r02_started_unit_count",
+      "r02_terminal_unit_count",
+      "r02_started_without_terminal_unit_count",
+      "r02_never_started_unit_count",
+      "provenance_rerun_unit_count",
+      "provenance_rerun_membership_sha256",
+      "interrupted_direct_unit_count",
+      "interrupted_direct_membership_sha256",
+      "unstarted_direct_unit_count",
+      "unstarted_direct_membership_sha256",
+      "direct_first_completion_unit_count",
+      "direct_first_completion_membership_sha256",
+      "deterministic_first_execution_unit_count",
+      "deterministic_first_execution_membership_sha256",
+      "primary_source_attempt_id",
+      "amendment",
+      "historical_validation"
+    ],
+    "whole_attempt_protocol_correction_amendment_fields_exactly": [
+      "path",
+      "bytes",
+      "sha256"
+    ],
+    "whole_attempt_protocol_correction_history_fields_exactly": [
+      "receipt_path",
+      "receipt_bytes",
+      "receipt_sha256"
+    ],
+    "whole_attempt_protocol_correction_rule": "replacement.json whole_attempt_protocol_correction has exactly its declared fields and schema_version=1; analysis_id=protocol-v3-amendment-008-whole-attempt-replacement-v1; full plan is exactly 430/122245/cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434/4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c/cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162; partial/execution counts are exactly 280 started, 279 terminal, one interrupted direct row, 150 never started, 279 provenance repeats, 70 unstarted direct rows, 71 direct first completions, and 80 deterministic first executions; all six membership hashes equal full_attempt_plan; and primary_source_attempt_id=formal-v3-20260831t051023z-r03. amendment has exactly its three fields, path experiments/eacl2027/protocol-v3-amendment-008.json, and freshly binds frozen P4 bytes at H4. historical_validation has exactly its three fields and equals the passed typed receipt, which also equals the whole_attempt_replacement_validation evidence item.",
+    "retention_rule": "Create the r02-to-r03 whole-attempt-correction receipt exclusively outside r02 only after H4 is pushed. Before r03 publication, copy and verify the correction receipt, every regular r02 predecessor-tree byte, and every evidence byte into staging with deterministic paths and no source/target duplication. Ordinary evidence at zero-based index N is retained once at replacement/evidence/<N:03d>-<kind>. whole_attempt_replacement_validation is also the historical receipt, so retain it only at its ordinary evidence path. For all_partition_paw_cache_canary only, replace the ordinary one-file copy with exactly all 28 validated archive regular files, each once, at replacement/evidence/002-all_partition_paw_cache_canary/<exact basename>; preserve all 26 manifest members, manifest, sidecar, exact bytes/SHA-256, and no extra. Validate the copied manifest by mapping each original absolute member basename to that retained directory while preserving original manifest/sidecar bytes. The launch retention manifest is self_contained=true only when it contains the complete exact predecessor, all nine evidence expansions, the terminal archive, and every source re-read during exclusive copy. Deletion/tamper, top-anchor-only canary retention, duplicate history, collision, or unlisted copy blocks publication. Never add or alter a byte beneath r02.",
+    "fail_closed": "A missing/duplicate evidence kind, pending placeholder, mutable/incomplete r02 tree, unexpected result path, different H3, unexpected cache behavior, full-plan mismatch, partial-boundary mismatch, omitted raw terminal byte, inferred exit cause, any r02 primary row, outcome-dependent source choice, or invalid P4/I4/H4 topology rejects freeze and r03. A mismatch requires review; it never authorizes plan shrinkage, cross-attempt substitution, or automatic extension."
+  },
+  "noncensoring_and_primary_reducer": {
+    "analysis_id": "protocol-v3-amendment-008-whole-attempt-replacement-v1",
+    "attempt_status_rule": "Raw r01, r02, and r03 statuses remain unchanged. r02 original_status is missing because result.json is absent; the amendment does not synthesize a terminal status. Primary promotion is a separate analysis field bound to the complete r03 attempt.",
+    "primary_plan": {
+      "source_attempt_id": "formal-v3-20260831t051023z-r03",
+      "unit_count": 430,
+      "stored_json_bytes": 122245,
+      "stored_json_sha256": "cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434",
+      "canonical_sha256": "4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c",
+      "ordered_membership_sha256": "cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162"
+    },
+    "fixed_reducers": "Apply every inherited matrix, soak, offline, fault, worst-case, marginal-contrast, precision, accounting, and claim-limit reducer to exactly the complete r03 result. Preserve every failed/system-violation unit. Never join, average, substitute, or impute from r01/r02.",
+    "no_cross_attempt_substitution": "All 430 primary rows come from exact r03. Never choose a better r02 value, replace an r03 failure with r02, average duplicate executions, or omit an unfavorable r03 row. r02 terminal values appear only in a clearly separated raw sensitivity/failure-anatomy report.",
+    "promotion_gate": "Promote a primary result only when amendment-007 validation passes; r02 is terminal, immutable, fully retained, and exactly matches the 279/1/150 boundary; exact r03 plan contains all 430 rows; r03 executes every row at clean H4; every r03 row is terminal; a durably valid complete result.json exists; fatal-result.json and fatal-exception.json are absent; the fatal lifecycle terminates at result_published; the sealed external supervisor closeout is valid with disposition=ordinary_result_exit_agrees; terminal Slurm sacct state/ExitCode agrees with its final_supervisor_exit_code; every publication/cache/evidence/canary/history gate passes; and all reducers consume r03 alone. A missing/invalid closeout, valid fatal receipt, prepublication failure, invalid/missing terminal product, exit/result/scheduler disagreement, or fatal lifecycle mismatch reports the study incomplete.",
+    "r02_reporting": "Report the exact failed scheduler outcome, missing result, 279 terminal rows, one interrupted start, 150 unstarted rows, terminal status/error/sensitivity histograms, cache-provenance defect, and unexplained exit constraint. Preserve every raw artifact. Do not call r02 complete and do not include an r02 value in a primary aggregate.",
+    "r03_reporting": "Report every one of the 430 r03 rows or its exact interrupted/unstarted state, including failures, timeouts, system violations, accounting defects, offline mismatches, fault-expectation failures, and the distinction between 279 provenance repeats, 71 direct first terminal completions, and 80 deterministic first executions. Always report the sealed supervisor-closeout disposition, child return/signal, planned final exit, and terminal sacct agreement. If fatal-result.json exists, separately report its structural phase, exception-observation state, exact counts, and journal/tree anchors; if the root was not published, fatal finalization failed, or ordinary result exit disagreed, report that exact external closeout state. Never infer a cause. No r04 is authorized merely because an outcome is unfavorable or resultless.",
+    "raw_attempt_ledger": [
+      {
+        "raw_attempt_id": "formal-v3-20260831t051023z-r01",
+        "numeric_role": "excluded premeasurement AF_UNIX harness error exactly as amendment 007",
+        "source": "amendment-007 preserved raw attempt and adjudication"
+      },
+      {
+        "raw_attempt_id": "formal-v3-20260831t051023z-r02",
+        "numeric_role": "failed incomplete raw sensitivity and failure-anatomy evidence only; no primary row",
+        "source": "immutable H3 attempt with absent result.json"
+      },
+      {
+        "raw_attempt_id": "formal-v3-20260831t051023z-r03",
+        "numeric_role": "sole source of all 430 primary rows if and only if the exact full plan and every gate pass",
+        "source": "exact H4 whole-attempt successor"
+      }
+    ],
+    "non_censoring": [
+      "retain every r02 and r03 planned row and its exact terminal, interrupted, unstarted, or abort state",
+      "retain every r02 terminal and incremental artifact plus the unpaired started unit",
+      "retain all 20 r03 repetitions of every one of the seven fault families",
+      "retain all r03 latency, timeout, accounting, resource, persistence, offline, soak, and fault samples",
+      "retain every missing, duplicate, unexpected, failed, running, provenance-mismatched, and cross-project record",
+      "retain every fatal lifecycle line, optional exact caught-exception envelope, fatal-result receipt, invalid partial result, and result/exit disagreement without inferring a cause",
+      "retain the preclaimed external supervisor start/closeout root for ordinary, fatal, prepublication, disagreement, finalization-failed, and supervisor-loss boundaries",
+      "publish exact raw-attempt, whole-attempt-validation, execution-role, and primary-source fields",
+      "never repeat or substitute a unit because of its observed value"
+    ]
+  },
+  "fatal_result_contract": {
+    "applies_to_raw_attempt_id": "formal-v3-20260831t051023z-r03",
+    "supervisor_closeout_root_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r03",
+    "supervisor_start_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r03/supervisor-start.json",
+    "supervisor_closeout_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r03/supervisor-closeout.json",
+    "supervisor_child_stdout_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r03/supervisor-child.stdout.log",
+    "supervisor_child_stderr_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r03/supervisor-child.stderr.log",
+    "ordinary_result_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r03/result.json",
+    "fatal_result_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r03/fatal-result.json",
+    "lifecycle_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r03/fatal-lifecycle.jsonl",
+    "exception_envelope_path_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r03/fatal-exception.json",
+    "scope_rule": "This contract is prospective for exact r03 only. It records a structural resultless-runner boundary and never classifies why the process exited. r02 predates this lifecycle, remains byte-for-byte unchanged, and must not receive a retroactive fatal receipt, exception envelope, lifecycle line, result, traceback, or inferred cause.",
+    "supervisor_start_fields_exactly": [
+      "schema_version",
+      "created_utc",
+      "raw_attempt_id",
+      "attempt_root",
+      "slurm_job_id",
+      "slurm_partition",
+      "supervisor_process",
+      "child_argv",
+      "child_environment",
+      "child_environment_sha256",
+      "child_stream_paths"
+    ],
+    "supervisor_closeout_fields_exactly": [
+      "schema_version",
+      "created_utc",
+      "raw_attempt_id",
+      "attempt_root",
+      "start_receipt",
+      "observed_runner_exit",
+      "quiescence",
+      "attempt_root_state",
+      "ordinary_result",
+      "fatal_result",
+      "disposition",
+      "final_supervisor_exit_code",
+      "validation_errors"
+    ],
+    "attempt_root_states_exactly": [
+      "not_published",
+      "published",
+      "present_invalid"
+    ],
+    "supervisor_dispositions_exactly": [
+      "ordinary_result_exit_agrees",
+      "ordinary_result_exit_disagrees",
+      "ordinary_result_closeout_invalid",
+      "fatal_result_published",
+      "prepublication_or_unpublished_failure",
+      "fatal_finalization_failed"
+    ],
+    "terminal_product_observation_fields_exactly": [
+      "state",
+      "receipt",
+      "validation_error"
+    ],
+    "terminal_product_states_exactly": [
+      "absent",
+      "valid",
+      "present_invalid"
+    ],
+    "child_stream_paths_fields_exactly": [
+      "stdout",
+      "stderr"
+    ],
+    "drained_supervisor_streams_fields_exactly": [
+      "stdout",
+      "stderr"
+    ],
+    "supervisor_start_rule": "I4's existing run_scaling_faults.py becomes the outer Python subprocess supervisor; the hash-pinned sbatch launcher must not exec the measured child. Before spawning it, exclusively create supervisor_closeout_root_exact with owner-only mode and no pre-existing entry, then exclusively precreate supervisor-child.stdout.log and supervisor-child.stderr.log, then create C(supervisor-start)+LF at supervisor_start_path_exact with O_EXCL, fsync the start file and directory, and verify exact bytes. The start receipt has schema_version=1, timezone-aware UTC created_utc, raw_attempt_id=formal-v3-20260831t051023z-r03, the exact intended attempt root, slurm_job_id as the nonempty decimal JSON string from SLURM_JOB_ID, slurm_partition=ALL, supervisor_process under process_identity_rule, the complete JSON-string argv array used to invoke a distinct supervised-child mode of the same H4 run_scaling_faults.py, child_environment as the complete exact JSON string-to-string mapping passed to Popen, SHA-256 of C(child_environment), and child_stream_paths exactly naming the two precreated external logs. child_environment contains PAW_CACHE_DIR at corrected_direct_paw_cache_contract.r03_paw_cache_dir_exact, omits PROGRAMASWEIGHTS_CACHE_DIR, contains SLURM_JOB_ID/SLURM_JOB_PARTITION/SLURM_JOB_NODELIST exactly agreeing with the start receipt and allocation, contains RAP_EACL_SUPERVISED_CHILD='1', and contains no key whose uppercase name includes any of API_KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTHORIZATION, or PRIVATE_KEY; no ambient key omitted from the recorded mapping may be passed to the child. Start the child in a new dedicated process group with stdout/stderr pipes drained concurrently and losslessly into those respective files from process creation through EOF. A collision, missing Slurm identity, exec-style replacement, stream-setup failure, or failed fsync blocks the child launch. A Popen/spawn failure after the durable start is represented by observed_runner_exit.state=not_started in the mandatory external closeout; it is not silently treated as a waited child.",
+    "supervisor_closeout_rule": "After the child wait or a caught spawn failure and the required quiescence, the still-live outer supervisor always attempts exactly one supervisor-closeout.json, even when the attempt root was never published, is partial, or cannot accept an in-tree fatal receipt. start_receipt uses file_receipt_fields_exactly and exactly binds supervisor-start.json. observed_runner_exit follows observed_runner_exit_rule. attempt_root_state is derived by lstat and the frozen publication checks without mutation. ordinary_result and fatal_result each use terminal_product_observation_fields_exactly: absent has null receipt/error; valid has an exact regular non-symlink file receipt and null error; present_invalid has the exact regular-file receipt when safely readable, otherwise null for a symlink/special/unreadable entry, and always a nonempty exact validation error that retains its lstat/read failure. disposition follows the exact decision table below; validation_errors is the lexicographically UTF-8-sorted exact array of distinct nonempty JSON strings and never suppresses raw bytes. Write C(closeout)+LF exclusively, fsync/reopen/rehash it, chmod supervisor-start.json, both complete child stream logs, and supervisor-closeout.json 0444, fsync all four files and the root, then seal the root 0500 and verify exact four-file membership, owner, modes, bytes, and hashes. If the supervisor itself is killed or storage prevents this write, the start and partial/full raw streams remain an incomplete boundary and promotion fails; never synthesize closeout later.",
+    "supervisor_exit_decision_rule": "If an ordinary result is durably valid, fatal must be absent. Derive the inherited expected child exit from the exact ordinary status mapping {completed:0, completed_with_system_violations:3, incomplete_harness_error:2, incomplete_infrastructure_error:4, incomplete_unclassified_failure:5}; no other status is valid. ordinary_result_exit_agrees requires observed_runner_exit.state=waited with exactly that nonnegative exit code, quiescence.passed=true, descendants_before=[], termination_actions=[], both writer scans=[], and no closeout validation error; final_supervisor_exit_code equals the expected code. A signal or different child code with otherwise clean closeout yields ordinary_result_exit_disagrees and exit=5. Any remedial descendant termination, failed/dirty quiescence, stream/tree instability, or other closeout validation error with a valid ordinary result yields ordinary_result_closeout_invalid and exit=5; preserve rather than relabel the ordinary result. If no valid ordinary result and a valid in-tree fatal exists, disposition=fatal_result_published and exit=5; freshly parse it and require raw_attempt_id=formal-v3-20260831t051023z-r03, attempt_root equal the closeout attempt_root, its observed_runner_exit and quiescence objects byte-for-byte equal the closeout objects, canonical_process_exit_code=5, and its exact file receipt equal fatal_result.receipt. If observed_runner_exit.state=not_started or the attempt was not published, disposition=prepublication_or_unpublished_failure and exit=5. If a published/partial attempt lacks both valid products or fatal creation/validation failed, disposition=fatal_finalization_failed and exit=5. The outer process exits only after closeout is durable; terminal Slurm sacct must later match this exact code before analysis/promotion.",
+    "lifecycle_line_fields_exactly": [
+      "schema_version",
+      "sequence",
+      "created_utc",
+      "raw_attempt_id",
+      "phase",
+      "plan_index",
+      "component",
+      "unit_id"
+    ],
+    "phases_in_order": [
+      "attempt_published",
+      "post_publication_gate_started",
+      "post_publication_gate_passed",
+      "unit_started",
+      "evaluation_started",
+      "unit_terminal",
+      "finalizing_result",
+      "result_published"
+    ],
+    "lifecycle_rule": "Create fatal-lifecycle.jsonl exclusively immediately after AttemptRecorder has atomically published the attempt and before any post-publication gate, daemon, warmup, hook, or measured event. Append one C(line)+LF record with O_APPEND, flush, fsync, and cross-check the new byte count after each declared transition outside the measured query interval. Every line has exactly lifecycle_line_fields_exactly, schema_version=1, sequence as a positive integer starting at 1 and increasing by one, timezone-aware UTC created_utc values that are nondecreasing, and exact r03 raw_attempt_id. attempt_published, post_publication_gate_started, post_publication_gate_passed, finalizing_result, and result_published have null plan_index/component/unit_id and occur at most once in that order. Then follow an explicit plan-ordered per-unit automaton: unit_started exactly after that row's started receipt is durable; optional evaluation_started exactly before its first measured evaluation; and unit_terminal exactly after its terminal receipt and units line are durable. Each per-unit line has the exact zero-based integer plan_index, component, and unit_id from the immutable plan. A later plan row cannot start before the prior row is terminal. No daemon/warmup phase is recorded because those operations repeat within units and their exact evidence remains in the unit payloads. finalizing_result is allowed after the runner irrevocably stops starting units, including after an interrupted unit or pre-complete abort; no later unit phase may follow it. result_published is terminal and occurs only after any inherited valid complete or incomplete ordinary result plus attempt-root fsync. Primary promotion separately requires all 430 terminals. The lifecycle phase used by the exception/fatal receipts is the phase from the last line of the longest complete strict prefix satisfying this entire automaton; a malformed or invalid line ends that prefix and later valid-looking lines cannot be skipped into it. An absent/empty journal or a first invalid line yields unavailable_before_first_lifecycle_record. A partial final line, gap, duplicate sequence, post-result line, unrecognized phase, or automaton violation is retained by fatal closeout but blocks ordinary primary promotion. This journal never supplies an exception cause.",
+    "exception_envelope_fields_exactly": [
+      "schema_version",
+      "created_utc",
+      "raw_attempt_id",
+      "phase",
+      "exception_type",
+      "exception_message",
+      "traceback_utf8"
+    ],
+    "exception_envelope_rule": "A top-level caught BaseException that will escape without a durably valid ordinary result may create fatal-exception.json exactly once with O_CREAT|O_EXCL. Store C(object)+LF, reject duplicate keys/non-finite values, fsync the complete file, fsync the attempt root, and never overwrite, truncate, append, rename, or delete it. schema_version=1; created_utc is timezone-aware UTC; raw_attempt_id is exact r03; phase equals the maximal-valid-prefix lifecycle phase defined by lifecycle_rule or unavailable_before_first_lifecycle_record; exception_type is the fully qualified Python module and qualname; exception_message is exact str(exception); and traceback_utf8 is the complete untruncated UTF-8 join of traceback.TracebackException.from_exception(exception).format(chain=True), including chaining and every final LF. Empty, summarized, parsed-from-stderr, or synthesized traceback text is forbidden. The envelope is optional because os._exit, native termination, a signal, or supervisor-observed process disappearance may bypass Python exception handling; absence must remain absence.",
+    "receipt_fields_exactly": [
+      "schema_version",
+      "receipt_type",
+      "created_utc",
+      "raw_attempt_id",
+      "attempt_root",
+      "producer",
+      "phase",
+      "observed_runner_exit",
+      "quiescence",
+      "exception",
+      "result_observation",
+      "plan",
+      "execution_counts",
+      "journals",
+      "core_artifacts",
+      "pre_fatal_tree",
+      "canonical_process_exit_code"
+    ],
+    "observed_runner_exit_fields_exactly": [
+      "state",
+      "returncode",
+      "exit_code",
+      "signal",
+      "spawn_error"
+    ],
+    "observed_runner_exit_states_exactly": [
+      "not_started",
+      "waited"
+    ],
+    "spawn_error_fields_exactly": [
+      "type",
+      "message",
+      "traceback_utf8"
+    ],
+    "observed_runner_exit_rule": "state=waited requires spawn_error=null and the exact signed Python subprocess returncode after wait: returncode>=0 has exit_code=returncode and signal=null, while returncode<0 has exit_code=null and signal=-returncode as a positive integer. state=not_started is permitted only when Popen failed before returning a child object; returncode/exit_code/signal are all null and spawn_error has exactly spawn_error_fields_exactly with fully qualified exception type, exact str(exception), and the complete untruncated UTF-8 TracebackException chain. A started child must always be waited and may never be represented as not_started.",
+    "exception_fields_exactly": [
+      "observed",
+      "type",
+      "message",
+      "traceback_utf8",
+      "envelope_state",
+      "envelope",
+      "validation_error"
+    ],
+    "exception_envelope_states_exactly": [
+      "absent",
+      "valid",
+      "present_invalid"
+    ],
+    "quiescence_fields_exactly": [
+      "process_group_id",
+      "bounded_settle_seconds",
+      "descendants_before",
+      "termination_actions",
+      "descendants_after",
+      "open_attempt_writers_first_scan",
+      "open_attempt_writers_second_scan",
+      "writer_scan_separation_ms",
+      "drained_supervisor_streams",
+      "fsynced_attempt_sinks",
+      "stable_attempt_tree",
+      "passed"
+    ],
+    "process_identity_fields_exactly": [
+      "pid",
+      "proc_start_ticks",
+      "command_sha256"
+    ],
+    "process_identity_rule": "pid and proc_start_ticks are positive JSON integers read from the same stable /proc identity; command_sha256 is lowercase SHA-256 of the exact /proc/<pid>/cmdline bytes, including NUL separators. Re-read proc_start_ticks after cmdline and reject the identity if the process vanished or the ticks changed. Every process list is strictly increasing by (pid,proc_start_ticks,command_sha256) and contains no duplicate pid or identity.",
+    "termination_action_fields_exactly": [
+      "process",
+      "signal",
+      "sent_monotonic_ns",
+      "result"
+    ],
+    "open_writer_fields_exactly": [
+      "process",
+      "fd",
+      "resolved_path",
+      "open_flags_octal"
+    ],
+    "result_observation_fields_exactly": [
+      "state",
+      "receipt",
+      "validation_error"
+    ],
+    "result_observation_states_exactly": [
+      "absent",
+      "present_invalid_or_not_durable"
+    ],
+    "ordinary_result_durable_rule": "An ordinary result is durably valid only when result.json is a regular non-symlink strict-JSON file with the inherited exact schema, raw attempt/study/plan identities and complete file hash validation; its status/count/unit-index rules pass; its writer fsynced the file and attempt root; fatal-result.json and fatal-exception.json are absent; and the final complete lifecycle line is result_published, appended only after those fsyncs. File presence or parseability alone is insufficient.",
+    "plan_fields_exactly": [
+      "unit_count",
+      "bytes",
+      "stored_sha256",
+      "canonical_sha256",
+      "ordered_membership_sha256"
+    ],
+    "execution_count_fields_exactly": [
+      "planned",
+      "started",
+      "terminal",
+      "started_without_terminal",
+      "never_started",
+      "units_journal_terminal_lines",
+      "validation_errors"
+    ],
+    "journals_fields_exactly": [
+      "lifecycle",
+      "units",
+      "incremental_jsonl"
+    ],
+    "journal_item_fields_exactly": [
+      "relative_path",
+      "bytes",
+      "sha256",
+      "complete_lf_terminated_line_count",
+      "strict_valid_complete_line_count",
+      "invalid_complete_line_count",
+      "trailing_fragment_bytes",
+      "trailing_fragment_sha256"
+    ],
+    "core_artifact_fields_exactly": [
+      "launch",
+      "plan",
+      "publication",
+      "streams",
+      "stdout",
+      "stderr"
+    ],
+    "core_artifact_observation_fields_exactly": [
+      "relative_path",
+      "state",
+      "receipt",
+      "validation_error"
+    ],
+    "core_artifact_states_exactly": [
+      "absent",
+      "valid_regular",
+      "present_invalid"
+    ],
+    "file_receipt_fields_exactly": [
+      "path",
+      "bytes",
+      "sha256",
+      "type"
+    ],
+    "pre_fatal_tree_fields_exactly": [
+      "first",
+      "second",
+      "stable"
+    ],
+    "tree_snapshot_fields_exactly": [
+      "entry_count",
+      "regular_file_count",
+      "regular_file_bytes",
+      "canonical_json_bytes",
+      "sha256"
+    ],
+    "receipt_rule": "Only the launcher supervisor, after observed_runner_exit.state=waited has made the exact runner return status final and quiescence has passed, may create in-tree fatal-result.json, and only when attempt_root_state is published or present_invalid, the exact root is a resolved owner-held non-symlink directory with stable double inventory, and result.json is absent or fails the frozen ordinary-result durability/schema/hash checks. A not_started child, not_published root, or unsafe/symlink/special root is represented exclusively by the preclaimed external supervisor closeout; do not create a directory or fatal file post hoc. The supervisor must launch the runner in a dedicated process group and obtain returncode through Python waitpid/subprocess semantics rather than infer a signal from shell status. Store exactly C(receipt)+LF with schema_version=1, receipt_type=formal_fatal_result_v1, a timezone-aware UTC created_utc, raw_attempt_id=formal-v3-20260831t051023z-r03, the exact attempt_root, producer=launcher_supervisor_after_runner_exit, and canonical_process_exit_code=5. phase equals the maximal-valid-prefix lifecycle phase defined by lifecycle_rule or the exact literal unavailable_before_first_lifecycle_record. observed_runner_exit follows observed_runner_exit_rule and is necessarily waited. This structural receipt never maps that status to a harness, infrastructure, or measured-system cause.",
+    "quiescence_rule": "Concurrent drain workers copy both child pipes losslessly into the precreated external logs from process creation onward. For observed_runner_exit.state=not_started, process_group_id=null, every descendant/termination array is empty, both precreated stream logs are durably bound as zero-byte receipts, and the process portion may pass only after proving no child object or process group was created. For a waited child, process_group_id is its exact positive process-group integer. After the main child wait, and before validating an ordinary result or reading any in-tree core byte, enumerate every still-live member of that dedicated process group plus every still-live descendant identity retained by the supervisor's process registry under process_identity_rule; retain their sorted union in descendants_before and every TERM/KILL action/result. One monotonic bounded_settle_seconds interval is exactly 30.0: send TERM once to each still-live identity, wait at most 5.0 seconds from interval start, then KILL each still-live identical pid/start-time identity and wait only the remainder; descendants_after is a fresh sorted union and must equal []. Only then join both drain workers through pipe EOF within the same overall interval, close every pipe/log descriptor, fsync/reopen/rehash both complete external logs, and bind them under drained_supervisor_streams_fields_exactly as exact file receipts; this ordering prevents a descendant-held pipe from deadlocking closeout. If the attempt root is absent by lstat, both writer scans and fsynced_attempt_sinks are exactly [], stable_attempt_tree=null, and no root is created. If the root is a symlink, special entry, unowned, unresolved, or otherwise unsafe, the same arrays/tree are null or empty, quiescence.passed=false, and no entry is followed or mutated. Otherwise scan /proc for every same-user open writable file descriptor resolving beneath the exact attempt root twice with writer_scan_separation_ms exactly 250 monotonic milliseconds between completed scans. Each sorted scan item has open_writer_fields_exactly: process under process_identity_rule, nonnegative integer fd, resolved absolute path, and kernel open flags as a zero-prefixed octal string; require both arrays empty. After the first empty writer scan, fsynced_attempt_sinks is the exact UTF-8-relative-path-sorted array of file_receipt_fields_exactly receipts for every regular non-symlink file in the complete stable attempt-root inventory, excluding only the not-yet-created fatal-result.json; fsync every such file and every containing directory bottom-up. Then perform the 250-ms-separated second writer scan and recompute the second complete inventory. stable_attempt_tree has exactly pre_fatal_tree_fields_exactly and records both tree snapshots plus their exact equality. quiescence.passed=true only when every drain, close, identity, termination, double-writer-scan, all-file fsync, directory-sync, and double-inventory check passes. Failure forbids result acceptance, a valid fatal receipt, and primary promotion; it never permits an unstable snapshot.",
+    "exception_rule": "If a valid exclusive fatal-exception.json exists, envelope_state=valid, exception.observed=true, type/message/traceback_utf8 exactly equal its three fields, envelope is its exact file receipt, validation_error=null, and the envelope phase/raw ID/UTC obey the envelope contract. If the path is absent by lstat, envelope_state=absent, observed=false, type/message/traceback_utf8/envelope/validation_error are all null. If a regular non-symlink path exists but fails strict envelope validation, envelope_state=present_invalid, observed=false, type/message/traceback_utf8 are null, envelope is its exact raw file receipt, and validation_error is the exact nonempty validator error; this preserves rather than launders the malformed bytes. A symlink/special path blocks stable closeout. The supervisor must not parse stderr, synthesize an exception class, or infer a traceback.",
+    "result_interaction_rule": "A durably valid ordinary result.json and fatal-result.json are mutually exclusive. result_observation.state=absent requires receipt=null and validation_error=null plus fresh lstat absence. present_invalid_or_not_durable requires the exact existing regular non-symlink result receipt and an exact nonempty validation_error; it does not authorize overwrite or deletion. The supervisor checks the ordinary result first: if it is durably valid, fatal creation is forbidden even when the child exit status disagrees, and that disagreement is separately retained as a launch failure. If it is not valid, fatal creation is mandatory when the supervisor remains alive and storage permits; a partial result may coexist only as immutable invalid evidence. Before ordinary result publication, the runner must require fatal-result.json absent.",
+    "plan_and_count_rule": "plan records the immutable expected identity exactly as unit_count=430, bytes=122245, stored_sha256=cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434, canonical_sha256=4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c, and ordered_membership_sha256=cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162; core_artifacts.plan separately records whether the raw file is present and valid. Recompute execution_counts against the immutable expected plan and complete tree: planned=430; started is the exact set of plan keys with one valid started path/payload; terminal is the exact subset of started keys with one valid terminal path/payload; started_without_terminal is the exact set difference; never_started is the exact expected-plan complement; and units_journal_terminal_lines counts complete strictly valid unique journal rows cross-bound one-to-one to terminal files. Reject extra/duplicate started or terminal filenames, path escapes, payload/plan-key mismatches, terminal keys not in started, extra/duplicate journal keys, and path/hash/status disagreement by retaining each exact issue in sorted validation_errors; none may be hidden by scalar count equality. validation_errors may be nonempty in a fatal receipt but always blocks promotion. The structural valid-set counts remain independently reportable even when raw journals/artifacts were interrupted; no result unit index, status inheritance, exception, or favorability may supply a count.",
+    "journal_and_tree_rule": "journals.lifecycle is null only when fatal-lifecycle.jsonl is absent; otherwise it is the exact journal item, including a valid empty file with all line/fragment counts zero. journals.units is null only if units.jsonl is absent; the normally precreated empty units.jsonl before the first unit is a valid item with all counts zero. journals.incremental_jsonl is the complete strictly UTF-8-relative-path-sorted array of every other regular non-symlink *.jsonl file in the pre-fatal tree, including empty and interrupted files, with no duplicate path or identity. Each journal item binds exact raw bytes/SHA-256, the count of complete LF-terminated lines, counts of strict valid versus invalid complete JSON lines whose sum equals that complete-line count, and the exact final non-LF trailing fragment byte count/SHA-256; a zero-byte fragment has the standard empty SHA-256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855. malformed, partial, or absent expected bytes are retained in validation_errors rather than preventing stable fatal closeout, while always blocking promotion. core_artifacts has exactly its declared fields; each value has core_artifact_observation_fields_exactly and the exact expected relative path for launch.json, plan.json, publication.json, streams.json, stdout.log, or stderr.log. absent uses null receipt plus null error; valid_regular uses an exact file receipt plus null error; present_invalid preserves the exact safely readable regular receipt plus nonempty error. Symlink/special entries block stable closeout. pre_fatal_tree is byte-for-byte equal to quiescence.stable_attempt_tree. Its first snapshot is the complete predecessor-tree-style inventory computed after the first empty writer scan and all-file fsync; its second is independently recomputed after the exact 250-ms separation and second empty writer scan. Both canonicalize the exact same lexicographically UTF-8-path-sorted projection of every entry beneath the root, with the inherited predecessor receipt fields and no timestamps, exclude only the not-yet-existing fatal-result.json, and record exact counts/bytes/canonical size/SHA-256 under tree_snapshot_fields_exactly. stable=true requires byte-for-byte equality of the two canonical inventory arrays, not merely equal aggregate counts. Any change blocks fatal publication.",
+    "exclusive_fsync_rule": "Open the exact final fatal-result.json path with O_WRONLY|O_CREAT|O_EXCL and owner-only mode, write all canonical bytes in a checked loop, flush, fsync the file, close it, fsync the attempt root, reopen without following symlinks, and require exact byte/hash/strict-parse equality before returning. Any pre-existing path, short write, fsync/close/reopen/hash/parse failure, symlink, duplicate invocation, or later byte change is terminal and never permits overwrite, cleanup, retry under the same raw ID, or primary promotion. After successful fatal publication, no further path beneath r03 may be created or mutated. Verification success selects planned supervisor exit 5; the supervisor must then durably write/seal the external closeout that binds the fatal receipt and only afterward return exit 5. If fatal verification cannot finish, record fatal_finalization_failed in the external closeout when possible and return 5 without claiming a valid fatal receipt.",
+    "implementation_and_test_gate": "Before H4 and r03 setup, I4 must implement this exact outer Python subprocess supervisor and pass focused tests for: exclusive preclaimed start/closeout creation; exact recorded child environment/hash with required fields and secret-name rejection; Popen failure represented as not_started plus full spawn traceback and sealed prepublication closeout; prepublication child exit with external closeout and no invented attempt root; valid complete and valid incomplete ordinary results suppress fatal and require exact child/expected/sacct agreement; ordinary-result exit disagreement and remediated/failed quiescence use their distinct dispositions and canonical supervisor exit 5; caught chained exception preserves exact type/message/full traceback envelope; os._exit(5) or an equivalent child bypass yields observed=false without invented exception; signal return status is losslessly encoded; absent, regular-invalid, and symlink/special result states; exact 430 plan-key started/terminal/journal set correspondence and extra/disjoint artifact rejection; empty pre-unit units.jsonl and the empty-fragment SHA; partial/malformed JSONL preservation with raw hash, trailing fragment, validation_errors, and nonprimary analysis; missing/empty/malformed lifecycle maximal-prefix phase handling without skipping later valid-looking lines; interrupted-unit incomplete-result lifecycle; late descendant/writer detection, nondeadlocking concurrent stream drain, bounded group termination, double stable inventory, and all-file fsync; exclusive duplicate/no-overwrite behavior; write/fsync/reopen/hash/seal failures; fatal/result mutual exclusion and fatal-to-closeout cross-binding; fatal-finalization-failed closeout; canonical supervisor exit decision; analyzer reports every closeout/fatal state as incomplete except exact agreed complete ordinary results; and archival retention contains the sealed external closeout root plus every lifecycle/envelope/fatal/partial byte. Tests must exercise the real I4 runner/launcher/analyzer/retention helpers, not a second permissive model.",
+    "retention_and_analysis_rule": "The external attempt/publication index and archive retain the exact sealed supervisor-start.json and supervisor-closeout.json beside the complete r03 raw tree; the latter retains fatal-lifecycle.jsonl, optional fatal-exception.json, fatal-result.json or ordinary result.json, every invalid/partial journal/core byte, and the final complete-tree receipt. Cross-bind raw ID, attempt root, child return, terminal product receipts, final supervisor exit, and terminal Slurm sacct. Reducers accept primary data only from a durably valid complete ordinary result, disposition=ordinary_result_exit_agrees, matching terminal sacct, and absent fatal/envelope. A valid fatal receipt makes r03 explicitly incomplete, publishes its structural counts/phase/child-exit evidence, contributes no primary numeric row, and does not authorize r04 from outcome favorability. A missing closeout, resultless prepublication failure, invalid fatal, or supervisor loss also remains incomplete and non-primary.",
+    "claim_limits": [
+      "The fatal receipt proves only the structural boundary, durable raw anchors, and observed child return status; it does not prove why the child exited.",
+      "An unobserved exception remains null even when stderr resembles a traceback; no exception or r02 cause is inferred.",
+      "A node failure, SIGKILL of the supervisor, storage failure, or Slurm termination may prevent finalization; absence then fails closed and is never repaired post hoc.",
+      "This prospective r03 contract does not alter, relabel, or add a byte to r01 or r02."
+    ]
+  },
+  "formal_attempt_retention": {
+    "claims": "Never modify or replace an existing attempt directory, hard-link publication claim, or supervisor-closeout root. r03 first exclusively preclaims its exact external supervisor-closeout root; that collision-resistant start burns the raw ID even if the child never publishes the attempt. The child then exclusively claims its attempt ID and publication receipt before daemon start or measurement.",
+    "r01": "Preserve amendment-007 r01 tree, claim, raw result, replacement evidence, and adjudication unchanged.",
+    "r02": "Preserve the complete immutable r02 tree, claim, exact missing result, all 430 plan rows, 279 terminal ledger rows, one interrupted start, 150 unstarted rows, runtime/cache bytes, external terminal archive, scheduler evidence, and inherited replacement retention. Publish it as failed incomplete sensitivity evidence.",
+    "r03": "Use the new immutable raw attempt ID and existing bounded complete-tree replacement/publication machinery. Before its child starts, exclusively preclaim and fsync the external supervisor-closeout root. Its raw plan is exactly the complete 430-row frozen plan and its unit ledger/result must cover every row. Retain launch, publication, whole-attempt-correction receipt, complete r02 inventory/copies, all nine evidence items including expanded canary and terminal archive, every unit/result/stream, runtime/cache evidence, fatal-lifecycle.jsonl, any fatal-exception.json, exactly one valid in-tree terminal product when the published-root supervisor can finalize, every incremental artifact, and the sealed supervisor start/closeout receipts. A valid ordinary result forbids fatal-result.json; a valid fatal-result.json, prepublication closeout, closeout disagreement, or missing/invalid terminal product makes r03 incomplete and non-primary.",
+    "publication": "Publish raw r01, r02, and r03 archives plus claim/tree receipts and exact r03 supervisor start/closeout receipts outside Git with durable byte-verified URIs. Commit only reduced r03-primary JSON, the separately labeled r02 sensitivity summary, and a machine-readable attempt/publication index after remote verification. No raw archive or external closeout may be rewritten to reconcile a child/result/scheduler disagreement."
+  },
+  "freeze_action": {
+    "required_checks": [
+      "r02 terminal tree and claim are immutable and completely inventoried, with result.json exactly absent",
+      "r02 exact 430/280/279/1/150 plan-start-terminal boundary and all frozen memberships reproduce",
+      "all nine evidence kinds occur exactly once and every file receipt matches",
+      "ALL-partition direct-PAW canary passed under the corrected exact environment and its full 28-file archive validates",
+      "historical validation independently reproduces full-plan, partial-boundary, cache, scheduler, and uniform-source identities",
+      "all 279 terminal rows are retained and classified; the interrupted start and 150 unstarted rows are preserved without invented terminal values",
+      "no primary-source rule consulted measured values, status favorability, or any r03 outcome",
+      "the unexplained r02 exit-5 cause remains explicitly unclassified",
+      "the explicit amendment-007 overrides are implemented literally without mutating or relabeling raw r01/r02",
+      "the prospective r03 fatal-result schema is exact, result/fatal mutual exclusion is explicit, r02 remains untouched, and I4's mandatory implementation/test gate is frozen without claiming it has already run",
+      "freeze_state and top-level status equal their exact reviewed frozen strings",
+      "frozen status explicitly says outcome-aware after observing r02",
+      "full_attempt_plan.status equals its exact final frozen value",
+      "frozen_utc is set once to a timezone-aware timestamp",
+      "recursive pending-placeholder count is zero",
+      "the final amendment parses as strict JSON and P4 changes only its effective repository path"
+    ],
+    "required_replacements": "Replace every exact PENDING_TERMINAL_ placeholder with exact canary, evidence, or validation values. Set freeze_state exactly to 'frozen_outcome_aware_full_430_whole_attempt_correction'; set full_attempt_plan.status exactly to 'frozen after independent terminal r02 validation reproduced the full-plan, partial-boundary, cache, scheduler, and uniform-r03-source identities'; set top-level status exactly to 'frozen outcome-aware full-430 whole-attempt correction after terminal r02; exact r03 is the sole primary numeric source'; and set frozen_utc once. Do not guess or self-reference. Future P4/I4/H4 identities remain external and are bound acyclically after freeze.",
+    "single_freeze_rule": "After all checks pass, set a non-draft frozen status and frozen_utc once and commit the exact reviewed bytes as P4. Any later protocol, implementation, plan, runtime-lock, cache, evidence-schema, or replacement-semantic change requires a new amendment and a new attempt ID."
+  },
+  "claim_limits": [
+    "Amendment 008 is outcome-aware after observing r02 and must never be described as outcome-blind preregistration.",
+    "r03 is one complete 430-row successor and the sole primary numeric attempt; the primary result is not assembled across attempts.",
+    "The 279 repeated rows are eligible only because the launch failed to bind their direct ProgramAsWeights dependencies, never because of their observed values; 71 direct rows seek their first terminal completion and 80 deterministic rows their first executions.",
+    "r02 remains a failed incomplete raw attempt with absent result.json; its unexplained exit-5 cause is not classified.",
+    "A passing direct-PAW canary validates cache lookup and one local inference path only.",
+    "The canary's injected Python socket/_socket guard covers only its named construction, guarded connect/send, and name-resolution APIs; it is not an OS network namespace, general offline execution, air-gap, or security boundary.",
+    "Query-visible evaluation latency excludes Codex scheduling, UI rendering, and human-perceived latency.",
+    "No comprehensive fault-tolerance, long-term stability, broad hardware, or broad workload claim is authorized.",
+    "A complete r03 result with system violations is a valid non-censored system outcome and does not authorize r04 by itself.",
+    "A valid r03 fatal-result receipt proves a resultless structural boundary and raw anchors only, not its cause; it is incomplete, non-primary, and does not itself authorize r04.",
+    "Supervisor death, node loss, or storage failure can prevent both ordinary and fatal finalization; that absence fails closed and may never be filled by a post-hoc receipt.",
+    "Raw r01/r02/r03 statuses and all evidence remain visible; r02 sensitivity is reported separately and never substituted into the r03 primary result.",
+    "Any unresolved exact pending placeholder makes this document a non-launchable draft."
+  ]
+}
