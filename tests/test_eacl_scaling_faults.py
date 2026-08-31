@@ -89,6 +89,260 @@ def test_matrix_plan_covers_fixed_factorial_with_fresh_daemons():
     assert all(item["fresh_daemon"] and item["fresh_state"] for item in plan)
 
 
+def test_socket_path_override_preserves_default_state_layout(monkeypatch, tmp_path):
+    state = tmp_path / "durable-state"
+    override = tmp_path / "short.sock"
+    monkeypatch.setenv("RAP_STATE_DIR", str(state))
+    monkeypatch.delenv("RAP_SOCKET_PATH", raising=False)
+
+    assert systems.rap_config.socket_path() == state / "daemon.sock"
+    monkeypatch.setenv("RAP_SOCKET_PATH", "")
+    assert systems.rap_config.socket_path() == state / "daemon.sock"
+    monkeypatch.setenv("RAP_SOCKET_PATH", str(override))
+    assert systems.rap_config.socket_path() == override
+    assert systems.rap_config.db_path() == state / "verdicts.db"
+
+
+def test_formal_unit_socket_receipt_is_deterministic_and_restores_environment(
+    monkeypatch, tmp_path
+):
+    attempt = (tmp_path / "formal-r02").resolve()
+    retained = attempt / "runtime" / "matrix" / "matrix-unit"
+    retained.mkdir(parents=True)
+    (attempt / "launch.json").write_text("{}\n", encoding="utf-8")
+    job_id = str(int(hashlib.sha256(str(tmp_path).encode()).hexdigest()[:14], 16))
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o700)
+    monkeypatch.setenv("RAP_SOCKET_PATH", "/tmp/original-rap.sock")
+    environment = {
+        "RAP_EACL_SOCKET_ROOT": str(socket_root),
+        "RAP_STATE_DIR": str(retained / "state"),
+        "SLURM_JOB_ID": job_id,
+        "SLURM_JOB_PARTITION": "ALL",
+        "SLURM_JOB_NODELIST": "watgpu108",
+    }
+    try:
+        with systems._unit_socket_environment(
+            retained,
+            environment,
+            component="matrix",
+            unit_id="matrix-unit",
+        ) as unit_environment:
+            endpoint = Path(unit_environment["RAP_SOCKET_PATH"])
+            assert endpoint.parent == socket_root
+            assert endpoint.name.endswith(".sock")
+            assert len(endpoint.stem) == 64
+            assert len(os.fsencode(endpoint)) <= systems.MAX_AF_UNIX_PATHNAME_BYTES
+            assert systems.rap_config.socket_path() == endpoint
+            assert unit_environment["RAP_STATE_DIR"] == str(retained / "state")
+        assert os.environ["RAP_SOCKET_PATH"] == "/tmp/original-rap.sock"
+
+        receipt_path = retained / "socket-endpoint.json"
+        receipt_bytes = receipt_path.read_bytes()
+        assert receipt_bytes.endswith(b"\n")
+        receipt = json.loads(receipt_bytes)
+        digest_input = {
+            "schema_version": 1,
+            "raw_attempt_id": "formal-r02",
+            "component": "matrix",
+            "unit_id": "matrix-unit",
+            "retained_runtime_root": str(retained),
+        }
+        expected_digest = hashlib.sha256(
+            json.dumps(
+                digest_input,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        assert receipt["digest_input"] == digest_input
+        assert receipt["endpoint_digest"] == expected_digest
+        assert receipt["endpoint"] == str(socket_root / f"{expected_digest}.sock")
+        assert receipt["rap_state_dir"] == str(retained / "state")
+        assert receipt["socket_root"]["owner_uid"] == os.geteuid()
+        assert receipt["socket_root"]["mode"] == 0o700
+        assert receipt["slurm"] == {
+            "job_id": job_id,
+            "partition": "ALL",
+            "node_list": "watgpu108",
+        }
+        with pytest.raises(systems.SystemsHarnessError, match="receipt collision"):
+            with systems._unit_socket_environment(
+                retained,
+                environment,
+                component="matrix",
+                unit_id="matrix-unit",
+            ):
+                pass
+    finally:
+        socket_root.rmdir()
+
+
+def test_formal_unit_socket_rejects_wrong_root_mode_before_receipt(
+    monkeypatch, tmp_path
+):
+    attempt = (tmp_path / "formal-r02").resolve()
+    retained = attempt / "runtime" / "faults" / "daemon-crash-rep1"
+    retained.mkdir(parents=True)
+    (attempt / "launch.json").write_text("{}\n", encoding="utf-8")
+    job_id = str(
+        int(hashlib.sha256((str(tmp_path) + "-mode").encode()).hexdigest()[:14], 16)
+    )
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o755)
+    environment = {
+        "RAP_EACL_SOCKET_ROOT": str(socket_root),
+        "RAP_STATE_DIR": str(retained / "state"),
+        "SLURM_JOB_ID": job_id,
+        "SLURM_JOB_PARTITION": "ALL",
+        "SLURM_JOB_NODELIST": "watgpu108",
+    }
+    try:
+        with pytest.raises(systems.SystemsHarnessError, match="mode 0700"):
+            with systems._unit_socket_environment(retained, environment):
+                pass
+        assert not (retained / "socket-endpoint.json").exists()
+    finally:
+        socket_root.chmod(0o700)
+        socket_root.rmdir()
+
+
+def test_running_fixture_propagates_socket_to_daemon_and_hook_environment(
+    monkeypatch, tmp_path
+):
+    attempt = (tmp_path / "formal-r02").resolve()
+    unit_id = "r1-p1-round_robin_across_projects-sequential20-rep1"
+    retained = attempt / "runtime" / "matrix" / unit_id
+    retained.parent.mkdir(parents=True)
+    (attempt / "launch.json").write_text("{}\n", encoding="utf-8")
+    job_id = str(
+        int(hashlib.sha256((str(tmp_path) + "-fixture").encode()).hexdigest()[:14], 16)
+    )
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o700)
+    monkeypatch.setenv("RAP_EACL_SOCKET_ROOT", str(socket_root))
+    monkeypatch.setenv("SLURM_JOB_ID", job_id)
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
+    monkeypatch.delenv("RAP_SOCKET_PATH", raising=False)
+    observed = {}
+
+    class FakeDaemon:
+        pid = 123
+
+    def start(environment, _diagnostics, _timeout):
+        observed["daemon_environment"] = dict(environment)
+        observed["client_socket"] = str(systems.rap_config.socket_path())
+        return FakeDaemon(), {"pid": 123}
+
+    monkeypatch.setattr(systems, "_install_projects", lambda *_a, **_k: [])
+    monkeypatch.setattr(systems.integrated, "_start_daemon", start)
+    monkeypatch.setattr(systems.integrated, "_stop_daemon", lambda _daemon: None)
+    monkeypatch.setattr(systems.ipc, "send_request", lambda *_a, **_k: None)
+    try:
+        with systems._running_fixture(
+            (_artifact("systemstest00001", "Socket fixture"),),
+            1,
+            retained_root=retained,
+            component="matrix",
+            unit_id=unit_id,
+        ) as fixture:
+            observed["hook_environment"] = dict(fixture.environment)
+            assert str(systems.rap_config.socket_path()) == fixture.environment[
+                "RAP_SOCKET_PATH"
+            ]
+        assert "RAP_SOCKET_PATH" not in os.environ
+        assert observed["daemon_environment"]["RAP_SOCKET_PATH"] == observed[
+            "hook_environment"
+        ]["RAP_SOCKET_PATH"]
+        assert observed["client_socket"] == observed["hook_environment"][
+            "RAP_SOCKET_PATH"
+        ]
+        assert (retained / "socket-endpoint.json").is_file()
+    finally:
+        socket_root.rmdir()
+
+
+@pytest.mark.parametrize("body_raises", [False, True])
+def test_running_fixture_records_stale_socket_without_masking_body_error(
+    monkeypatch, tmp_path, body_raises
+):
+    attempt = (tmp_path / "formal-r02").resolve()
+    unit_id = "r1-p1-round_robin_across_projects-sequential1-rep0"
+    retained = attempt / "runtime" / "matrix" / unit_id
+    retained.parent.mkdir(parents=True)
+    (attempt / "launch.json").write_text("{}\n", encoding="utf-8")
+    job_id = str(
+        int(
+            hashlib.sha256(
+                (str(tmp_path) + f"-cleanup-{body_raises}").encode()
+            ).hexdigest()[:14],
+            16,
+        )
+    )
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o700)
+    monkeypatch.setenv("RAP_EACL_SOCKET_ROOT", str(socket_root))
+    monkeypatch.setenv("SLURM_JOB_ID", job_id)
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
+    monkeypatch.setattr(systems, "SOCKET_CLEANUP_TIMEOUT_SECONDS", 0.0)
+
+    class FakeDaemon:
+        pid = 123
+
+    def start(environment, _diagnostics, _timeout):
+        Path(environment["RAP_SOCKET_PATH"]).touch()
+        return FakeDaemon(), {"pid": 123}
+
+    monkeypatch.setattr(systems, "_install_projects", lambda *_a, **_k: [])
+    monkeypatch.setattr(systems.integrated, "_start_daemon", start)
+    monkeypatch.setattr(systems.integrated, "_stop_daemon", lambda _daemon: None)
+    monkeypatch.setattr(systems.ipc, "send_request", lambda *_a, **_k: None)
+    expected_exception = ValueError if body_raises else systems.SystemsHarnessError
+    expected_message = "original workload error" if body_raises else "remained"
+    try:
+        with pytest.raises(expected_exception, match=expected_message):
+            with systems._running_fixture(
+                (_artifact("systemstest00001", "Cleanup fixture"),),
+                1,
+                retained_root=retained,
+                component="matrix",
+                unit_id=unit_id,
+            ):
+                if body_raises:
+                    raise ValueError("original workload error")
+        failure = json.loads(
+            (
+                retained
+                / "socket-cleanup-failure-final-daemon-shutdown.json"
+            ).read_text()
+        )
+        assert failure["status"] == (
+            "socket_endpoint_persisted_after_verified_shutdown"
+        )
+        assert failure["endpoint"]["type"] == "regular_file"
+        assert failure["active_exception"] == {
+            "present": body_raises,
+            "type": "ValueError" if body_raises else None,
+        }
+    finally:
+        for endpoint in socket_root.glob("*.sock"):
+            endpoint.unlink()
+        socket_root.rmdir()
+
+
+def test_offline_replay_checks_endpoint_after_both_verified_shutdowns():
+    source = inspect.getsource(systems.run_offline_after_prepare)
+
+    assert 'stage="online-daemon-shutdown"' in source
+    assert 'stage="offline-daemon-shutdown"' in source
+    assert source.rindex("integrated._stop_daemon(offline)") < source.rindex(
+        'stage="offline-daemon-shutdown"'
+    )
+
+
 def test_formal_study_plan_enumerates_all_430_units():
     config = systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS)
     faults = tuple(
@@ -247,7 +501,7 @@ def test_formal_gate_requires_exact_design_and_all_partition(monkeypatch):
     )
     monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
     contract = json.loads(systems.FORMAL_AMENDMENT.read_text())
-    contract["freeze_state"] = "frozen_outcome_blind"
+    contract["freeze_state"] = "frozen_outcome_aware_repair"
     contract["frozen_utc"] = "2026-08-30T17:45:00Z"
     monkeypatch.setattr(systems, "_formal_contract", lambda: contract)
 
@@ -927,6 +1181,19 @@ def test_offline_daemon_start_failure_retains_completed_online_arm(
     monkeypatch, tmp_path
 ):
     artifact = _artifact("systemstest00001", "Offline fixture")
+    attempt = (tmp_path / "formal-r02").resolve()
+    retained_root = attempt / "runtime" / "offline"
+    (attempt / "runtime").mkdir(parents=True)
+    (attempt / "launch.json").write_text("{}\n", encoding="utf-8")
+    job_id = str(
+        int(hashlib.sha256((str(tmp_path) + "-offline").encode()).hexdigest()[:14], 16)
+    )
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o700)
+    monkeypatch.setenv("RAP_EACL_SOCKET_ROOT", str(socket_root))
+    monkeypatch.setenv("SLURM_JOB_ID", job_id)
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
     projects = []
     for index in range(2):
         root = (tmp_path / f"project-{index}").resolve()
@@ -939,15 +1206,16 @@ def test_offline_daemon_start_failure_retains_completed_online_arm(
 
     @systems.contextmanager
     def isolated(_root):
-        yield {}
+        yield dict(os.environ)
 
-    starts = {"count": 0}
+    starts = {"count": 0, "socket_paths": []}
 
     class FakeDaemon:
         pid = 123
 
     def start(_environment, diagnostics, _timeout):
         starts["count"] += 1
+        starts["socket_paths"].append(_environment.get("RAP_SOCKET_PATH"))
         diagnostics.write_text(f"start-{starts['count']}\n")
         if starts["count"] == 2:
             raise RuntimeError("offline daemon blocked during startup")
@@ -989,12 +1257,15 @@ def test_offline_daemon_start_failure_retains_completed_online_arm(
         lambda *_a, **_k: {"retained": "online-evidence"},
     )
 
-    result = systems.run_offline_after_prepare(
-        (artifact,),
-        rule_count=1,
-        timeout=1.0,
-        retained_root=tmp_path / "offline-retained",
-    )
+    try:
+        result = systems.run_offline_after_prepare(
+            (artifact,),
+            rule_count=1,
+            timeout=1.0,
+            retained_root=retained_root,
+        )
+    finally:
+        socket_root.rmdir()
 
     assert result["status"] == "system_violation"
     assert result["online"]["sample"]["event_to_all_query_visible_evaluations_ns"] == 12
@@ -1004,6 +1275,9 @@ def test_offline_daemon_start_failure_retains_completed_online_arm(
     assert "offline daemon blocked" in result["offline"]["error"]["message"]
     assert result["offline"]["sample"] is None
     assert result["paired_event_to_all_latency"]["offline_ns"] is None
+    assert starts["socket_paths"][0] == starts["socket_paths"][1]
+    assert starts["socket_paths"][0].startswith(str(socket_root) + os.sep)
+    assert (retained_root / "socket-endpoint.json").is_file()
 
 
 def test_soak_post_settle_snapshot_precedes_global_journal_scan():
@@ -1497,7 +1771,7 @@ def test_formal_gate_pins_every_latency_affecting_config_field(monkeypatch):
     )
     monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
     contract = json.loads(systems.FORMAL_AMENDMENT.read_text())
-    contract["freeze_state"] = "frozen_outcome_blind"
+    contract["freeze_state"] = "frozen_outcome_aware_repair"
     contract["frozen_utc"] = "2026-08-30T17:45:00Z"
     monkeypatch.setattr(systems, "_formal_contract", lambda: contract)
     systems._validate_formal_config(
@@ -1522,7 +1796,7 @@ def test_formal_gate_pins_every_latency_affecting_config_field(monkeypatch):
 
 def test_formal_contract_refuses_draft_even_when_hash_matches(monkeypatch, tmp_path):
     draft = json.loads(systems.FORMAL_AMENDMENT.read_text(encoding="utf-8"))
-    draft["freeze_state"] = "draft_outcome_blind"
+    draft["freeze_state"] = "draft_outcome_aware_repair"
     draft["frozen_utc"] = None
     draft_path = tmp_path / "draft-amendment.json"
     draft_path.write_text(json.dumps(draft, sort_keys=True) + "\n", encoding="utf-8")
@@ -1977,3 +2251,43 @@ def test_deterministic_production_path_smoke_has_exact_multi_project_accounting(
     assert accounting["provenance_mismatch_count"] == 0
     assert result["resources"]["peak_sampled_rss_bytes"] > 0
     assert result["storage"]["delta"]["total_runtime_bytes"] > 0
+
+
+def test_node_local_socket_override_runs_real_production_path(monkeypatch, tmp_path):
+    artifact = _artifact("systemstest00001", "Short socket production rule")
+    attempt = (tmp_path / "formal-r02").resolve()
+    unit_id = "r1-p1-round_robin_across_projects-sequential1-rep0"
+    retained = attempt / "runtime" / "matrix" / unit_id
+    retained.parent.mkdir(parents=True)
+    (attempt / "launch.json").write_text("{}\n", encoding="utf-8")
+    job_id = str(
+        int(hashlib.sha256((str(tmp_path) + "-real").encode()).hexdigest()[:14], 16)
+    )
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o700)
+    monkeypatch.setenv("RAP_EACL_SOCKET_ROOT", str(socket_root))
+    monkeypatch.setenv("SLURM_JOB_ID", job_id)
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
+    try:
+        result = systems.run_condition(
+            (artifact,),
+            rule_count=1,
+            project_count=1,
+            mode="sequential",
+            event_count=1,
+            repeat=0,
+            warmups_per_project=0,
+            timeout=10.0,
+            max_hook_workers=1,
+            retained_root=retained,
+        )
+        receipt = json.loads((retained / "socket-endpoint.json").read_text())
+        assert result["status"] == "completed"
+        assert result["accounting"]["evaluations_expected"] == 1
+        assert result["accounting"]["loss_count"] == 0
+        assert receipt["endpoint"].startswith(str(socket_root) + os.sep)
+        assert receipt["encoded_pathname_bytes"] <= 107
+        assert not os.path.lexists(receipt["endpoint"])
+    finally:
+        socket_root.rmdir()

@@ -1,4 +1,4 @@
-"""Outcome-blind runtime and cache receipt for the formal systems study."""
+"""Runtime and cache receipts for the formal systems study."""
 
 from __future__ import annotations
 
@@ -28,6 +28,86 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_socket_preflight_receipt(
+    value: Mapping[str, Any],
+    *,
+    socket_root: Path,
+    raw_attempt_id: str,
+    job_id: str,
+    retained_runtime_root: Path,
+) -> dict[str, Any]:
+    """Recompute the amendment-007 pre-launch AF_UNIX capability receipt."""
+    expected_root = Path(f"/tmp/rf3-{job_id}")
+    if socket_root != expected_root:
+        raise RuntimeContractError(
+            f"formal socket root must equal {expected_root}, got {socket_root}"
+        )
+    try:
+        root_stat = socket_root.lstat()
+    except OSError as exc:
+        raise RuntimeContractError(
+            f"formal socket root is unavailable: {socket_root}: {exc}"
+        ) from exc
+    if (
+        stat_module.S_ISLNK(root_stat.st_mode)
+        or not stat_module.S_ISDIR(root_stat.st_mode)
+        or int(root_stat.st_uid) != os.geteuid()
+        or stat_module.S_IMODE(root_stat.st_mode) != 0o700
+    ):
+        raise RuntimeContractError(
+            "formal socket root must be a non-symlink directory owned by the "
+            "effective user with mode 0700"
+        )
+    digest_input = {
+        "schema_version": 1,
+        "raw_attempt_id": raw_attempt_id,
+        "component": "preflight",
+        "unit_id": "socket-canary",
+        "retained_runtime_root": str(retained_runtime_root),
+    }
+    endpoint_digest = hashlib.sha256(
+        json.dumps(
+            digest_input,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    endpoint = socket_root / f"{endpoint_digest}.sock"
+    expected = {
+        "schema_version": 1,
+        "digest_input": digest_input,
+        "endpoint_digest": endpoint_digest,
+        "endpoint": str(endpoint),
+        "encoded_pathname_bytes": len(os.fsencode(endpoint)),
+        "maximum_encoded_pathname_bytes": 107,
+        "socket_root": {
+            "path": str(socket_root),
+            "owner_uid": int(root_stat.st_uid),
+            "mode": stat_module.S_IMODE(root_stat.st_mode),
+            "device": int(root_stat.st_dev),
+        },
+        "bind_connect_accept_payload_equal": True,
+        "endpoint_removed_after_probe": True,
+    }
+    if expected["encoded_pathname_bytes"] > 107:
+        raise RuntimeContractError(
+            "formal socket canary endpoint exceeds the AF_UNIX pathname limit"
+        )
+    if os.path.lexists(endpoint):
+        raise RuntimeContractError(
+            f"formal socket canary endpoint still exists after preflight: {endpoint}"
+        )
+    if dict(value) != expected:
+        raise RuntimeContractError(
+            "formal socket preflight receipt mismatch: "
+            + json.dumps(
+                {"expected": expected, "observed": dict(value)}, sort_keys=True
+            )
+        )
+    return expected
 
 
 def _file_receipt(path: Path, *, relative_to: Path | None = None) -> dict[str, Any]:
@@ -900,6 +980,12 @@ def formal_runtime_receipt(
                 "expected": str(node_root / "home"),
                 "observed": env.get("HOME"),
             }
+        expected_socket_root = Path(f"/tmp/rf3-{job_id}")
+        if env.get("RAP_EACL_SOCKET_ROOT") != str(expected_socket_root):
+            mismatches["RAP_EACL_SOCKET_ROOT"] = {
+                "expected": str(expected_socket_root),
+                "observed": env.get("RAP_EACL_SOCKET_ROOT"),
+            }
     if mismatches:
         raise RuntimeContractError(
             "formal process environment mismatch: " + json.dumps(mismatches, sort_keys=True)
@@ -932,6 +1018,20 @@ def formal_runtime_receipt(
         setup_value = json.loads(setup_receipt.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeContractError(f"invalid setup receipt JSON: {exc}") from exc
+    socket_root = Path(str(env.get("RAP_EACL_SOCKET_ROOT", "")))
+    retained_preflight_root = (
+        Path(dependency["formal_attempt_root"]).resolve()
+        / raw_attempt_id
+        / "runtime"
+        / "preflight"
+    )
+    socket_preflight = validate_socket_preflight_receipt(
+        dict(setup_value.get("socket_preflight") or {}),
+        socket_root=socket_root,
+        raw_attempt_id=raw_attempt_id,
+        job_id=job_id,
+        retained_runtime_root=retained_preflight_root,
+    )
     expected_invocation = str(profile["python"]["invoked_executable_template"]).replace(
         "${SLURM_JOB_ID}", job_id
     )
@@ -953,6 +1053,8 @@ def formal_runtime_receipt(
         "launch_script_path": str(launch_script.resolve()),
         "node_runtime_root": str(Path(expected_invocation).parents[2]),
         "home": str(Path(expected_invocation).parents[2] / "home"),
+        "socket_root": str(socket_root),
+        "socket_preflight": socket_preflight,
         "replacement_chain": dict(expected_replacement_chain),
     }
     for name, expected in required_setup.items():
@@ -1006,6 +1108,7 @@ def formal_runtime_receipt(
                 "PAW_CACHE_DIR",
                 "PAW_GPU_LAYERS",
                 "HOME",
+                "RAP_EACL_SOCKET_ROOT",
                 *profile["thread_environment"].keys(),
             )
         },

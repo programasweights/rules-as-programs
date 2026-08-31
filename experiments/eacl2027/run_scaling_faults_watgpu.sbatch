@@ -93,6 +93,7 @@ fi
 
 readonly ATTEMPT_DIR="${RAW_ATTEMPTS_ROOT}/${RAP_EACL_ATTEMPT_ID}"
 readonly NODE_RUNTIME_ROOT="/tmp/rap-eacl-systems-formal-v3-${SLURM_JOB_ID}"
+readonly SOCKET_ROOT="/tmp/rf3-${SLURM_JOB_ID}"
 readonly HOME_ROOT="${NODE_RUNTIME_ROOT}/home"
 readonly VENV_ROOT="${NODE_RUNTIME_ROOT}/venv"
 readonly SETUP_LOG="${SCHEDULER_ROOT}/${RAP_EACL_ATTEMPT_ID}-${SLURM_JOB_ID}.setup.log"
@@ -149,6 +150,10 @@ if [[ -e "${NODE_RUNTIME_ROOT}" ]]; then
     echo "refusing to reuse node-local runtime: ${NODE_RUNTIME_ROOT}" >&2
     exit 73
 fi
+if [[ -e "${SOCKET_ROOT}" || -L "${SOCKET_ROOT}" ]]; then
+    echo "refusing to reuse node-local socket root: ${SOCKET_ROOT}" >&2
+    exit 73
+fi
 if [[ -e "${SETUP_LOG}" || -e "${SETUP_RECEIPT}" ]]; then
     echo "refusing to replace durable setup evidence for this attempt and job" >&2
     exit 73
@@ -161,6 +166,7 @@ for required_wheel in "${PIP_WHEEL}" "${PACKAGE_WHEELS[@]}"; do
 done
 
 /usr/bin/mkdir --mode=700 -- "${NODE_RUNTIME_ROOT}"
+/usr/bin/mkdir --mode=700 -- "${SOCKET_ROOT}"
 /usr/bin/mkdir --mode=700 -- "${HOME_ROOT}"
 export HOME="${HOME_ROOT}"
 : >"${SETUP_LOG}"
@@ -206,7 +212,10 @@ readonly -a IMPORT_PREFLIGHT_ARGV=(
 import datetime
 import hashlib
 import json
+import os
 import pathlib
+import socket
+import stat
 import subprocess
 import sys
 
@@ -220,9 +229,10 @@ venv_executable = pathlib.Path(sys.argv[8])
 base_executable = pathlib.Path(sys.argv[9]).resolve(strict=True)
 setup_log = pathlib.Path(sys.argv[10]).resolve(strict=True)
 node_runtime_root = pathlib.Path(sys.argv[11])
-launch_script = pathlib.Path(sys.argv[12]).resolve(strict=True)
+socket_root = pathlib.Path(sys.argv[12])
+launch_script = pathlib.Path(sys.argv[13]).resolve(strict=True)
 marker = sys.argv.index("--receipt-import-argv")
-offline_pip_argv = sys.argv[13:marker]
+offline_pip_argv = sys.argv[14:marker]
 import_preflight_argv = sys.argv[marker + 1:]
 
 sys.path.insert(0, str(repo_root))
@@ -239,6 +249,96 @@ replacement_chain = replacement_launch_binding(
     raw_attempts_root / raw_attempt_id,
     replacement_argument or None,
 )
+
+expected_socket_root = pathlib.Path(f"/tmp/rf3-{job_id}")
+if socket_root != expected_socket_root:
+    raise SystemExit(
+        f"socket root must equal {expected_socket_root}, got {socket_root}"
+    )
+socket_root_stat = socket_root.lstat()
+if (
+    stat.S_ISLNK(socket_root_stat.st_mode)
+    or not stat.S_ISDIR(socket_root_stat.st_mode)
+    or socket_root_stat.st_uid != os.geteuid()
+    or stat.S_IMODE(socket_root_stat.st_mode) != 0o700
+):
+    raise SystemExit(
+        "socket root must be a non-symlink directory owned by the effective "
+        "user with mode 0700"
+    )
+socket_digest_input = {
+    "schema_version": 1,
+    "raw_attempt_id": raw_attempt_id,
+    "component": "preflight",
+    "unit_id": "socket-canary",
+    "retained_runtime_root": str(
+        raw_attempts_root / raw_attempt_id / "runtime" / "preflight"
+    ),
+}
+socket_digest = hashlib.sha256(
+    json.dumps(
+        socket_digest_input,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+).hexdigest()
+socket_endpoint = socket_root / f"{socket_digest}.sock"
+socket_endpoint_bytes = len(os.fsencode(socket_endpoint))
+if socket_endpoint_bytes > 107 or os.path.lexists(socket_endpoint):
+    raise SystemExit(
+        "socket canary endpoint is too long or already exists: "
+        f"{socket_endpoint_bytes} bytes at {socket_endpoint}"
+    )
+payload = b"rap-eacl-socket-canary-v1"
+received = b""
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.settimeout(5.0)
+client.settimeout(5.0)
+accepted = None
+try:
+    server.bind(str(socket_endpoint))
+    server.listen(1)
+    client.connect(str(socket_endpoint))
+    client.sendall(payload)
+    accepted, _ = server.accept()
+    accepted.settimeout(5.0)
+    while len(received) < len(payload):
+        chunk = accepted.recv(len(payload) - len(received))
+        if not chunk:
+            break
+        received += chunk
+finally:
+    if accepted is not None:
+        accepted.close()
+    client.close()
+    server.close()
+    if os.path.lexists(socket_endpoint):
+        socket_endpoint.unlink()
+socket_root_fd = os.open(socket_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(socket_root_fd)
+finally:
+    os.close(socket_root_fd)
+socket_preflight = {
+    "schema_version": 1,
+    "digest_input": socket_digest_input,
+    "endpoint_digest": socket_digest,
+    "endpoint": str(socket_endpoint),
+    "encoded_pathname_bytes": socket_endpoint_bytes,
+    "maximum_encoded_pathname_bytes": 107,
+    "socket_root": {
+        "path": str(socket_root),
+        "owner_uid": socket_root_stat.st_uid,
+        "mode": stat.S_IMODE(socket_root_stat.st_mode),
+        "device": socket_root_stat.st_dev,
+    },
+    "bind_connect_accept_payload_equal": received == payload,
+    "endpoint_removed_after_probe": not os.path.lexists(socket_endpoint),
+}
+if not socket_preflight["bind_connect_accept_payload_equal"]:
+    raise SystemExit("socket canary payload mismatch")
 
 wheelhouse_files = []
 for path in sorted(wheelhouse.rglob("*")):
@@ -277,6 +377,8 @@ receipt = {
     "venv_executable": str(venv_executable),
     "base_executable_resolved": str(base_executable),
     "node_runtime_root": str(node_runtime_root),
+    "socket_root": str(socket_root),
+    "socket_preflight": socket_preflight,
     "home": str(node_runtime_root / "home"),
     "launch_script_path": str(launch_script),
     "setup_log_path": str(setup_log),
@@ -313,6 +415,7 @@ if import_result.returncode or freeze_result.returncode:
     /usr/bin/python3.10 \
     "${SETUP_LOG}" \
     "${NODE_RUNTIME_ROOT}" \
+    "${SOCKET_ROOT}" \
     "${LAUNCH_SCRIPT}" \
     "${OFFLINE_PIP_ARGV[@]}" \
     --receipt-import-argv \
@@ -322,6 +425,7 @@ export PATH="${VENV_ROOT}/bin:/usr/local/bin:/usr/bin:/bin"
 export RAP_EACL_LAUNCH_SCRIPT="${LAUNCH_SCRIPT}"
 export RAP_EACL_SETUP_LOG="${SETUP_LOG}"
 export RAP_EACL_SETUP_RECEIPT="${SETUP_RECEIPT}"
+export RAP_EACL_SOCKET_ROOT="${SOCKET_ROOT}"
 
 cd "${REPO_ROOT}"
 exec "${VENV_ROOT}/bin/python" "${RUNNER}" \

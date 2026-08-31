@@ -616,6 +616,190 @@ def test_started_aborted_unit_is_valid_but_not_numeric(tmp_path):
     assert report["eligible"] is False
 
 
+def test_amendment_007_socket_endpoint_receipt_is_recomputed(tmp_path):
+    root = tmp_path / "formal-v3-r02"
+    retained = root / "runtime" / "faults" / "synthetic-rep0"
+    retained.mkdir(parents=True)
+    identity = {
+        "attempt_id": root.name,
+        "slurm": {"job_id": "1524435", "partition": "ALL", "node_list": "watgpu108"},
+        "formal_runtime": {
+            "setup_preflight_receipt": {
+                "content": {"socket_preflight": {"socket_root": {
+                    "path": "/tmp/rf3-1524435",
+                    "owner_uid": 1000,
+                    "mode": 0o700,
+                    "device": 123,
+                }}}
+            }
+        },
+    }
+    unit = {
+        "component": "faults",
+        "unit_id": "synthetic-rep0",
+        "started": True,
+    }
+    socket_root = {
+        "path": "/tmp/rf3-1524435",
+        "owner_uid": 1000,
+        "mode": 0o700,
+        "device": 123,
+    }
+    receipt = analyzer._socket_endpoint_receipt_expected(
+        root=root,
+        component="faults",
+        unit_id="synthetic-rep0",
+        raw_attempt_id=root.name,
+        slurm=identity["slurm"],
+        socket_root=socket_root,
+        retained_runtime_root=retained,
+    )
+    (retained / "socket-endpoint.json").write_text(json.dumps(receipt))
+
+    analyzer._validate_socket_endpoint_receipts(root, identity, [unit])
+
+    receipt["endpoint"] = "/tmp/forged.sock"
+    (retained / "socket-endpoint.json").write_text(json.dumps(receipt))
+    with pytest.raises(analyzer.AnalysisValidationError, match="recomputed runner schema"):
+        analyzer._validate_socket_endpoint_receipts(root, identity, [unit])
+
+    receipt["endpoint"] = analyzer._socket_endpoint_receipt_expected(
+        root=root,
+        component="faults",
+        unit_id="synthetic-rep0",
+        raw_attempt_id=root.name,
+        slurm=identity["slurm"],
+        socket_root=socket_root,
+        retained_runtime_root=retained,
+    )["endpoint"]
+    receipt["socket_root"]["device"] = 999
+    (retained / "socket-endpoint.json").write_text(json.dumps(receipt))
+    with pytest.raises(analyzer.AnalysisValidationError, match="recomputed runner schema"):
+        analyzer._validate_socket_endpoint_receipts(root, identity, [unit])
+
+
+def test_amendment_007_socket_cleanup_failure_receipt_rejects_attempt(tmp_path):
+    root = tmp_path / "formal-v3-r02"
+    failure = root / "runtime" / "faults" / "synthetic-rep0" / "socket-cleanup-failure-daemon.json"
+    failure.parent.mkdir(parents=True)
+    failure.write_text("{}")
+
+    with pytest.raises(analyzer.AnalysisValidationError, match="socket cleanup failure receipt"):
+        analyzer._validate_socket_endpoint_receipts(
+            root,
+            {"attempt_id": root.name, "slurm": {"job_id": "1524435"}},
+            [],
+        )
+
+
+def test_amendment_007_setup_socket_preflight_is_recomputed(tmp_path):
+    root = tmp_path / "formal-v3-r02"
+    identity = {"attempt_id": root.name, "slurm": {"job_id": "1524435"}}
+    retained = root / "runtime" / "preflight"
+    digest_input = {
+        "schema_version": 1,
+        "raw_attempt_id": root.name,
+        "component": "preflight",
+        "unit_id": "socket-canary",
+        "retained_runtime_root": str(retained),
+    }
+    digest = sha256(_canonical(digest_input)).hexdigest()
+    endpoint = f"/tmp/rf3-1524435/{digest}.sock"
+    root_receipt = {
+        "path": "/tmp/rf3-1524435",
+        "owner_uid": 1000,
+        "mode": 0o700,
+        "device": 123,
+    }
+    setup = {
+        "socket_root": root_receipt["path"],
+        "socket_preflight": {
+            "schema_version": 1,
+            "digest_input": digest_input,
+            "endpoint_digest": digest,
+            "endpoint": endpoint,
+            "encoded_pathname_bytes": len(os.fsencode(endpoint)),
+            "maximum_encoded_pathname_bytes": 107,
+            "socket_root": root_receipt,
+            "bind_connect_accept_payload_equal": True,
+            "endpoint_removed_after_probe": True,
+        },
+    }
+
+    analyzer._validate_setup_socket_preflight(root, identity, setup)
+
+    setup["socket_preflight"]["endpoint_removed_after_probe"] = False
+    with pytest.raises(analyzer.AnalysisValidationError, match="preflight receipt mismatch"):
+        analyzer._validate_setup_socket_preflight(root, identity, setup)
+
+
+def test_anchored_r01_uses_repair_raw_result_and_core_artifact_hashes(tmp_path):
+    root = tmp_path / "formal-v3-20260831t051023z-r01"
+    root.mkdir()
+    launch_path = root / "launch.json"
+    result_path = root / "result.json"
+    launch_path.write_text("anchored launch\n")
+    result_path.write_text("anchored result\n")
+    core = {
+        name: {"bytes": path.stat().st_size, "sha256": sha256(path.read_bytes()).hexdigest()}
+        for name, path in (("launch.json", launch_path), ("result.json", result_path))
+    }
+    anchor = {
+        "identity_sha256": "a" * 64,
+        "git_commit": "b" * 40,
+        "slurm": {"job_id": "1524424", "partition": "ALL", "node_list": "watgpu108"},
+    }
+    identity = {
+        "git": {"commit": anchor["git_commit"]},
+        "slurm": anchor["slurm"],
+    }
+    result = {"status": "completed_with_system_violations", "primary_numeric_eligible": True}
+    launch = {"identity_sha256": anchor["identity_sha256"]}
+    contract = {
+        "outcome_aware_repair": {
+            "raw_result": {
+                "status": result["status"],
+                "raw_primary_numeric_eligible": True,
+            },
+            "core_artifacts": core,
+        }
+    }
+
+    analyzer._validate_anchored_r01(identity, result, launch, anchor, contract, root)
+
+    result_path.write_text("mutated\n")
+    with pytest.raises(analyzer.AnalysisValidationError, match="core artifact differs"):
+        analyzer._validate_anchored_r01(identity, result, launch, anchor, contract, root)
+
+
+def test_anchored_r01_alone_cannot_be_promoted(monkeypatch, tmp_path):
+    raw_attempt_id = "formal-v3-20260831t051023z-r01"
+    attempt = tmp_path / raw_attempt_id
+    attempt.mkdir()
+    (attempt / "launch.json").write_text(
+        json.dumps({"created_utc": "2026-08-31T05:10:23+00:00"})
+    )
+
+    def anchored_report(*_args, **_kwargs):
+        return {
+            "numeric_candidate": {"candidate_eligible": False},
+            "raw_attempt": {
+                "status": "completed_with_system_violations",
+                "input_sha256": {},
+            },
+            "analysis_binding_sha256": "a" * 64,
+            "endpoints": None,
+        }
+
+    monkeypatch.setattr(analyzer, "analyze", anchored_report)
+    report = analyzer.analyze_attempts_root(
+        tmp_path, "r01-alone", _expected_component_counts={"faults": 1}
+    )
+
+    assert report["primary_numeric"]["promoted"] is False
+    assert report["primary_numeric"]["selection_blocked_by"] == raw_attempt_id
+
+
 def test_terminal_unit_must_be_marked_started(tmp_path):
     root = _make_attempt(tmp_path, "attempt-terminal-not-started")
     path = root / "result.json"

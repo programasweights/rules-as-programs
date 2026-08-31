@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and reduce one immutable amendment-006 systems attempt."""
+"""Validate and reduce immutable amendment-007 systems attempts."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from experiments.eacl2027 import scaling_faults_runtime as runtime_contract
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS_VERSION = "protocol-v3-amendment-006-systems-reducer-v1"
+ANALYSIS_VERSION = "protocol-v3-amendment-007-systems-reducer-v1"
 ANALYSIS_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 FORMAL_ATTEMPT_PATTERN = re.compile(
     r"(?P<prefix>[a-z0-9][a-z0-9._-]{0,59})-r(?P<ordinal>[0-9]{2})"
@@ -36,6 +36,7 @@ PROTOCOL_PATHS = (
     "experiments/eacl2027/protocol-v3-amendment-004.json",
     "experiments/eacl2027/protocol-v3-amendment-005.json",
     "experiments/eacl2027/protocol-v3-amendment-006.json",
+    "experiments/eacl2027/protocol-v3-amendment-007.json",
 )
 TERMINAL_STATUSES = frozenset(
     {
@@ -61,11 +62,16 @@ REDUCER_CONFIG = {
     "terminal_statuses": sorted(TERMINAL_STATUSES),
     "numeric_promotion": "only_complete_primary_eligible_attempt",
     "formal_component_counts": FORMAL_COMPONENT_COUNTS,
+    "outcome_aware_r01_overlay": "superseded_premeasurement_harness_error",
     "replacement_policy": (
         "launch order; only an immutable pre-launch replacement receipt for an "
         "earlier positively evidenced harness/infrastructure failure may be crossed"
     ),
 }
+
+_FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_007"
+_FORMAL_PROTOCOL_STATUS = _FORMAL_STUDY_MODE
+_SOCKET_ENDPOINT_MAX_BYTES = 107
 
 
 class AnalysisValidationError(ValueError):
@@ -843,7 +849,9 @@ def _validate_jsonl_receipt(
     return summary
 
 
-def _validate_sources(identity: Mapping[str, Any]) -> list[dict[str, str]]:
+def _validate_sources(
+    identity: Mapping[str, Any], *, legacy_r01: Mapping[str, Any] | None = None
+) -> list[dict[str, str]]:
     raw_documents = identity.get("protocol_documents")
     if not isinstance(raw_documents, list) or not all(
         isinstance(item, dict) for item in raw_documents
@@ -853,7 +861,10 @@ def _validate_sources(identity: Mapping[str, Any]) -> list[dict[str, str]]:
         {"path": str(item.get("path", "")), "sha256": str(item.get("sha256", ""))}
         for item in raw_documents
     ]
-    if [item["path"] for item in documents] != list(PROTOCOL_PATHS):
+    expected_paths = (
+        list(PROTOCOL_PATHS[:-1]) if legacy_r01 is not None else list(PROTOCOL_PATHS)
+    )
+    if [item["path"] for item in documents] != expected_paths:
         raise AnalysisValidationError("launch does not bind the ordered protocol set")
     for item in documents:
         path = (REPO_ROOT / item["path"]).resolve()
@@ -864,19 +875,233 @@ def _validate_sources(identity: Mapping[str, Any]) -> list[dict[str, str]]:
         if not path.is_file() or _sha256(path) != item["sha256"]:
             raise AnalysisValidationError(f"protocol hash mismatch: {item['path']}")
     runner = _require_dict(identity.get("runner"), "launch identity runner")
-    imported = Path(systems.__file__).resolve()
-    if runner.get("path") != str(imported.relative_to(REPO_ROOT)):
-        raise AnalysisValidationError("launch runner path differs from imported reducer")
-    if runner.get("sha256") != _sha256(imported):
-        raise AnalysisValidationError("launch runner hash differs from imported reducer")
-    runner_bytes = imported.read_bytes()
-    runner_blob = hashlib.sha1(
-        f"blob {len(runner_bytes)}\0".encode("ascii") + runner_bytes,
-        usedforsecurity=False,
-    ).hexdigest()
-    if runner.get("git_blob") != runner_blob:
-        raise AnalysisValidationError("launch runner Git blob differs from exact bytes")
+    if legacy_r01 is not None:
+        if runner != {
+            "path": "experiments/eacl2027/run_scaling_faults.py",
+            "sha256": legacy_r01["runner_sha256"],
+            "git_blob": legacy_r01["runner_git_blob"],
+        }:
+            raise AnalysisValidationError("legacy r01 runner identity differs from anchor")
+    else:
+        imported = Path(systems.__file__).resolve()
+        if runner.get("path") != str(imported.relative_to(REPO_ROOT)):
+            raise AnalysisValidationError("launch runner path differs from imported reducer")
+        if runner.get("sha256") != _sha256(imported):
+            raise AnalysisValidationError("launch runner hash differs from imported reducer")
+        runner_bytes = imported.read_bytes()
+        runner_blob = hashlib.sha1(
+            f"blob {len(runner_bytes)}\0".encode("ascii") + runner_bytes,
+            usedforsecurity=False,
+        ).hexdigest()
+        if runner.get("git_blob") != runner_blob:
+            raise AnalysisValidationError("launch runner Git blob differs from exact bytes")
     return documents
+
+
+def _is_anchored_r01(
+    raw_attempt_id: str, contract: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    repair = _require_dict(contract.get("outcome_aware_repair"), "amendment-007 repair")
+    if raw_attempt_id != repair.get("predecessor_raw_attempt_id"):
+        return None
+    return _require_dict(repair.get("predecessor_launch"), "amendment-007 r01 anchor")
+
+
+def _validate_anchored_r01(
+    identity: Mapping[str, Any], result: Mapping[str, Any], launch: Mapping[str, Any],
+    anchor: Mapping[str, Any], contract: Mapping[str, Any], root: Path
+) -> None:
+    repair = _require_dict(contract.get("outcome_aware_repair"), "amendment-007 repair")
+    raw_result = _require_dict(repair.get("raw_result"), "amendment-007 r01 result")
+    core_artifacts = _require_dict(
+        repair.get("core_artifacts"), "amendment-007 r01 core artifacts"
+    )
+    for name, expected_value in core_artifacts.items():
+        expected = _require_dict(expected_value, f"amendment-007 r01 {name}")
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            raise AnalysisValidationError(f"anchored r01 core artifact is missing: {name}")
+        byte_count, digest = _stream_file_identity(path)
+        if expected.get("bytes") != byte_count or expected.get("sha256") != digest:
+            raise AnalysisValidationError(
+                f"anchored r01 core artifact differs from amendment-007 anchor: {name}"
+            )
+    if (
+        launch.get("identity_sha256") != anchor.get("identity_sha256")
+        or identity.get("git", {}).get("commit") != anchor.get("git_commit")
+        or identity.get("slurm")
+        != {key: anchor["slurm"][key] for key in ("job_id", "partition", "node_list")}
+        or result.get("status") != raw_result.get("status")
+        or result.get("primary_numeric_eligible")
+        is not raw_result.get("raw_primary_numeric_eligible")
+    ):
+        raise AnalysisValidationError("raw r01 differs from the amendment-007 anchor")
+
+
+def _is_exact_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _socket_runtime_root(root: Path, unit: Mapping[str, Any]) -> Path:
+    component = str(unit["component"])
+    unit_id = str(unit["unit_id"])
+    if component in {"matrix", "faults"}:
+        return root / "runtime" / component / unit_id
+    if component == "soak":
+        return root / "runtime" / "soak"
+    if component == "offline":
+        return root / "runtime" / "offline"
+    raise AnalysisValidationError(f"socket endpoint has unknown component: {component}")
+
+
+def _socket_endpoint_receipt_expected(
+    *,
+    root: Path,
+    component: str,
+    unit_id: str,
+    raw_attempt_id: str,
+    slurm: Mapping[str, Any],
+    socket_root: Mapping[str, Any],
+    retained_runtime_root: Path,
+) -> dict[str, Any]:
+    job_id = str(slurm.get("job_id", ""))
+    if not job_id.isdecimal():
+        raise AnalysisValidationError("socket endpoint lacks a numeric Slurm job ID")
+    if socket_root.get("path") != f"/tmp/rf3-{job_id}":
+        raise AnalysisValidationError("socket endpoint root differs from the Slurm job")
+    if (
+        not _is_exact_int(socket_root.get("owner_uid"))
+        or int(socket_root["owner_uid"]) < 0
+        or socket_root.get("mode") != 0o700
+        or not _is_exact_int(socket_root.get("device"))
+        or int(socket_root["device"]) < 0
+    ):
+        raise AnalysisValidationError("socket endpoint root receipt is invalid")
+    digest_input = {
+        "schema_version": 1,
+        "raw_attempt_id": raw_attempt_id,
+        "component": component,
+        "unit_id": unit_id,
+        "retained_runtime_root": str(retained_runtime_root),
+    }
+    digest = _sha256_bytes(_canonical_json_bytes(digest_input))
+    endpoint = Path(str(socket_root["path"])) / f"{digest}.sock"
+    encoded_length = len(os.fsencode(endpoint))
+    if encoded_length > _SOCKET_ENDPOINT_MAX_BYTES:
+        raise AnalysisValidationError("socket endpoint exceeds the AF_UNIX limit")
+    return {
+        "schema_version": 1,
+        "digest_input": digest_input,
+        "endpoint_digest": digest,
+        "endpoint": str(endpoint),
+        "encoded_pathname_bytes": encoded_length,
+        "maximum_encoded_pathname_bytes": _SOCKET_ENDPOINT_MAX_BYTES,
+        "socket_root": dict(socket_root),
+        "rap_state_dir": str(retained_runtime_root / "state"),
+        "component": component,
+        "unit_id": unit_id,
+        "raw_attempt_id": raw_attempt_id,
+        "slurm": dict(slurm),
+    }
+
+
+def _validate_socket_endpoint_receipts(
+    root: Path, identity: Mapping[str, Any], units: Sequence[Mapping[str, Any]]
+) -> None:
+    """Recompute every amendment-007 per-unit AF_UNIX endpoint receipt."""
+    runtime = root / "runtime"
+    if runtime.is_dir():
+        failures = sorted(runtime.rglob("socket-cleanup-failure-*.json"))
+        if failures:
+            raise AnalysisValidationError(
+                "socket cleanup failure receipt retained: "
+                + str(failures[0].relative_to(root))
+            )
+    raw_attempt_id = str(identity.get("attempt_id", ""))
+    slurm = _require_dict(identity.get("slurm"), "formal Slurm identity")
+    formal_runtime = _require_dict(
+        identity.get("formal_runtime"), "formal runtime receipt"
+    )
+    setup_receipt = _require_dict(
+        formal_runtime.get("setup_preflight_receipt"), "formal setup receipt"
+    )
+    setup = _require_dict(setup_receipt.get("content"), "formal setup receipt content")
+    setup_socket_root = _require_dict(
+        _require_dict(setup.get("socket_preflight"), "formal socket preflight").get(
+            "socket_root"
+        ),
+        "formal socket preflight root",
+    )
+    for unit in units:
+        if unit.get("started") is not True:
+            continue
+        retained = _socket_runtime_root(root, unit)
+        receipt_path = retained / "socket-endpoint.json"
+        if receipt_path.is_symlink() or not receipt_path.is_file():
+            raise AnalysisValidationError(
+                "started formal unit lacks socket-endpoint.json: "
+                f"{unit['component']}/{unit['unit_id']}"
+            )
+        receipt = _require_dict(_load_json(receipt_path), "socket endpoint receipt")
+        expected = _socket_endpoint_receipt_expected(
+            root=root,
+            component=str(unit["component"]),
+            unit_id=str(unit["unit_id"]),
+            raw_attempt_id=raw_attempt_id,
+            slurm=slurm,
+            socket_root=setup_socket_root,
+            retained_runtime_root=retained,
+        )
+        if receipt != expected:
+            raise AnalysisValidationError(
+                "socket-endpoint.json differs from the recomputed runner schema: "
+                f"{unit['component']}/{unit['unit_id']}"
+            )
+
+
+def _validate_setup_socket_preflight(
+    root: Path, identity: Mapping[str, Any], setup: Mapping[str, Any]
+) -> None:
+    """Validate the already retained pre-launch socket canary without local I/O."""
+    slurm = _require_dict(identity.get("slurm"), "formal Slurm identity")
+    job_id = str(slurm.get("job_id", ""))
+    socket_root_path = str(setup.get("socket_root", ""))
+    receipt = _require_dict(setup.get("socket_preflight"), "formal socket preflight")
+    root_receipt = _require_dict(receipt.get("socket_root"), "formal socket root")
+    retained = root / "runtime" / "preflight"
+    digest_input = {
+        "schema_version": 1,
+        "raw_attempt_id": str(identity.get("attempt_id", "")),
+        "component": "preflight",
+        "unit_id": "socket-canary",
+        "retained_runtime_root": str(retained),
+    }
+    digest = _sha256_bytes(_canonical_json_bytes(digest_input))
+    endpoint = Path(f"/tmp/rf3-{job_id}") / f"{digest}.sock"
+    if (
+        not job_id.isdecimal()
+        or socket_root_path != str(endpoint.parent)
+        or root_receipt.get("path") != socket_root_path
+        or not _is_exact_int(root_receipt.get("owner_uid"))
+        or int(root_receipt["owner_uid"]) < 0
+        or root_receipt.get("mode") != 0o700
+        or not _is_exact_int(root_receipt.get("device"))
+        or int(root_receipt["device"]) < 0
+    ):
+        raise AnalysisValidationError("formal socket preflight root is invalid")
+    expected = {
+        "schema_version": 1,
+        "digest_input": digest_input,
+        "endpoint_digest": digest,
+        "endpoint": str(endpoint),
+        "encoded_pathname_bytes": len(os.fsencode(endpoint)),
+        "maximum_encoded_pathname_bytes": _SOCKET_ENDPOINT_MAX_BYTES,
+        "socket_root": dict(root_receipt),
+        "bind_connect_accept_payload_equal": True,
+        "endpoint_removed_after_probe": True,
+    }
+    if expected["encoded_pathname_bytes"] > _SOCKET_ENDPOINT_MAX_BYTES or receipt != expected:
+        raise AnalysisValidationError("formal socket preflight receipt mismatch")
 
 
 def _validate_file_receipt_shape(value: Any, label: str) -> dict[str, Any]:
@@ -1332,17 +1557,29 @@ def _validate_replacement_retention(
             raise AnalysisValidationError(
                 "retained predecessor status differs from replacement binding"
             )
-        if attempts_contract._result_contains_system_violation(predecessor_result):
+        exact_outcome_aware_edge = (
+            replacement.get("predecessor_raw_attempt_id")
+            == "formal-v3-20260831t051023z-r01"
+            and replacement.get("successor_raw_attempt_id")
+            == "formal-v3-20260831t051023z-r02"
+            and classification == "harness_error"
+            and original_status == "completed_with_system_violations"
+        )
+        if (
+            attempts_contract._result_contains_system_violation(predecessor_result)
+            and not exact_outcome_aware_edge
+        ):
             raise AnalysisValidationError(
                 "retained predecessor contains a non-replaceable system violation"
             )
-        allowed_statuses = {f"incomplete_{classification}"}
-        if classification == "infrastructure_error":
-            allowed_statuses.add("incomplete_unclassified_failure")
-        if predecessor_status not in allowed_statuses:
-            raise AnalysisValidationError(
-                "retained predecessor status is not replacement-eligible"
-            )
+        if not exact_outcome_aware_edge:
+            allowed_statuses = {f"incomplete_{classification}"}
+            if classification == "infrastructure_error":
+                allowed_statuses.add("incomplete_unclassified_failure")
+            if predecessor_status not in allowed_statuses:
+                raise AnalysisValidationError(
+                    "retained predecessor status is not replacement-eligible"
+                )
     elif original_status != "missing" or classification != "infrastructure_error":
         raise AnalysisValidationError(
             "missing retained predecessor result is not infrastructure-eligible"
@@ -1747,11 +1984,13 @@ def _validate_formal_runtime(
         "launch_script_path": str(launcher_formal),
         "node_runtime_root": f"/tmp/rap-eacl-systems-formal-v3-{job_id}",
         "home": f"/tmp/rap-eacl-systems-formal-v3-{job_id}/home",
+        "socket_root": f"/tmp/rf3-{job_id}",
         "setup_log_path": setup_log["resolved_path"],
         "setup_log_sha256": setup_log["sha256"],
     }
     if any(setup.get(name) != expected for name, expected in required_setup.items()):
         raise AnalysisValidationError("formal setup receipt differs from runtime identity")
+    _validate_setup_socket_preflight(root, identity, setup)
     setup_log_content = setup.get("setup_log_content")
     if (
         not isinstance(setup_log_content, str)
@@ -2113,12 +2352,12 @@ def _validate_formal_plan(
     result: Mapping[str, Any],
     plan: Sequence[dict[str, Any]],
 ) -> None:
-    if identity.get("study_mode") != "formal":
-        raise AnalysisValidationError("launch identity is not formal")
-    if result.get("study_mode") != "formal":
-        raise AnalysisValidationError("result study_mode is not formal")
-    if result.get("protocol_status") != "formal_protocol_v3_amendment_006":
-        raise AnalysisValidationError("result protocol status is not amendment 006")
+    if identity.get("study_mode") != _FORMAL_STUDY_MODE:
+        raise AnalysisValidationError("launch identity is not amendment-007 formal")
+    if result.get("study_mode") != _FORMAL_STUDY_MODE:
+        raise AnalysisValidationError("result study_mode is not amendment-007 formal")
+    if result.get("protocol_status") != _FORMAL_PROTOCOL_STATUS:
+        raise AnalysisValidationError("result protocol status is not amendment 007")
     if not isinstance(identity.get("formal_runtime"), dict):
         raise AnalysisValidationError("formal launch lacks runtime identity")
     git = _require_dict(identity.get("git"), "launch Git identity")
@@ -2129,12 +2368,12 @@ def _validate_formal_plan(
     if set(config_value) != names:
         raise AnalysisValidationError("launch config does not bind every MatrixConfig field")
     contract = _require_dict(
-        _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 006"
+        _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 007"
     )
-    if contract.get("freeze_state") != "frozen_outcome_blind" or not contract.get(
+    if contract.get("freeze_state") != "frozen_outcome_aware_repair" or not contract.get(
         "frozen_utc"
     ):
-        raise AnalysisValidationError("formal amendment was not outcome-blind frozen")
+        raise AnalysisValidationError("formal amendment 007 was not frozen")
     required_git = _require_dict(
         _require_dict(
             _require_dict(
@@ -5059,7 +5298,11 @@ def validate_attempt(
         raise AnalysisValidationError("launch raw attempt ID differs from directory")
     if result.get("raw_attempt_id") != raw_attempt_id:
         raise AnalysisValidationError("result raw attempt ID differs from launch")
-    protocols = _validate_sources(identity)
+    amendment_007 = _require_dict(
+        _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 007"
+    )
+    legacy_r01 = _is_anchored_r01(raw_attempt_id, amendment_007)
+    protocols = _validate_sources(identity, legacy_r01=legacy_r01)
     observed_counts = dict(Counter(_component(item) for item in plan))
     if observed_counts != dict(_expected_component_counts):
         raise AnalysisValidationError(
@@ -5067,9 +5310,7 @@ def validate_attempt(
             f"expected {dict(_expected_component_counts)}, observed {observed_counts}"
         )
     if dict(_expected_component_counts) == FORMAL_COMPONENT_COUNTS:
-        contract = _require_dict(
-            _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 006"
-        )
+        contract = amendment_007
         try:
             launched = datetime.fromisoformat(
                 str(launch.get("created_utc", "")).replace("Z", "+00:00")
@@ -5082,16 +5323,26 @@ def validate_attempt(
                 "formal launch/freeze timestamp is invalid"
             ) from exc
         if (
+            legacy_r01 is None
+            and (
             launched.tzinfo is None
             or frozen.tzinfo is None
             or launched < frozen
+            )
         ):
             raise AnalysisValidationError(
-                "formal attempt launch predates outcome-blind freeze"
+                "formal attempt launch predates amendment-007 freeze"
             )
-        _validate_formal_plan(root, identity, result, plan)
+        if legacy_r01 is not None:
+            _validate_anchored_r01(
+                identity, result, launch, legacy_r01, contract, root
+            )
+        else:
+            _validate_formal_plan(root, identity, result, plan)
     units, plan_accounting = _validate_units(root, plan, result)
     _validate_unit_plan_bindings(units)
+    if identity.get("study_mode") == _FORMAL_STUDY_MODE:
+        _validate_socket_endpoint_receipts(root, identity, units)
     for unit in units:
         _validate_component_internal_consistency(unit, root)
     _validate_matrix_evidence(root, units)
@@ -5246,6 +5497,7 @@ def validate_attempt(
         "input_hashes": input_hashes,
         "input_receipts": input_receipts,
         "protocol_documents": protocols,
+        "anchored_r01": legacy_r01 is not None,
         "units": units,
         "plan_accounting": plan_accounting,
         "eligible": eligible,
@@ -5277,12 +5529,16 @@ def analyze(
         record = dict(unit["value"])
         record.setdefault("condition_id", unit["unit_id"])
         matrix_records.append(record)
-    endpoints = {
-        "matrix": systems.reduce_matrix_attempts(matrix_plan, matrix_records),
-        "soak": _component_endpoint("soak", plan, units),
-        "offline": _component_endpoint("offline", plan, units),
-        "faults": _fault_endpoint(plan, units),
-    }
+    endpoints = (
+        None
+        if validated["anchored_r01"]
+        else {
+            "matrix": systems.reduce_matrix_attempts(matrix_plan, matrix_records),
+            "soak": _component_endpoint("soak", plan, units),
+            "offline": _component_endpoint("offline", plan, units),
+            "faults": _fault_endpoint(plan, units),
+        }
+    )
     binding = {
         **_static_analysis_binding(analysis_id),
         "raw_attempt_id": validated["identity"]["attempt_id"],
@@ -5292,6 +5548,7 @@ def analyze(
         "protocol_documents": validated["protocol_documents"],
     }
     eligible = validated["eligible"]
+    candidate_eligible = eligible and not validated["anchored_r01"]
     return {
         "schema_version": 2,
         "analysis_id": analysis_id,
@@ -5304,6 +5561,7 @@ def analyze(
             "input_sha256": validated["input_hashes"],
             "input_receipts": validated["input_receipts"],
             "status": validated["result"].get("status"),
+            "startup_only_numeric_aggregate_excluded": validated["anchored_r01"],
             "plan_accounting": validated["plan_accounting"],
             "global_statuses": validated["global_statuses"],
             "source_unchanged_during_attempt": validated["source_unchanged"],
@@ -5329,14 +5587,16 @@ def analyze(
             for unit in units
         ],
         "endpoints": endpoints,
-        "analysis": endpoints["matrix"],
+        "analysis": endpoints["matrix"] if endpoints is not None else None,
         "numeric_candidate": {
-            "candidate_eligible": eligible,
+            "candidate_eligible": candidate_eligible,
             "promoted": False,
             "requires": "launch-ordered --attempts-root ledger",
             "reason": (
-                "complete plan with only completed/system_violation outcomes and unchanged source"
-                if eligible
+                "anchored r01 is startup-only and awaits the exact authorized r02 replacement"
+                if validated["anchored_r01"]
+                else "complete plan with only completed/system_violation outcomes and unchanged source"
+                if candidate_eligible
                 else "incomplete or harness/infrastructure/unclassified/integrity failure; numeric promotion forbidden"
             ),
         },
@@ -5554,7 +5814,26 @@ def analyze_attempts_root(
                         "replacement_retention": retention,
                     },
                 )
-                recomputed = binding
+                exact_outcome_aware_edge = (
+                    predecessor["raw_attempt_id"]
+                    == "formal-v3-20260831t051023z-r01"
+                    and successor["raw_attempt_id"]
+                    == "formal-v3-20260831t051023z-r02"
+                )
+                if exact_outcome_aware_edge:
+                    if not receipt_path:
+                        raise AnalysisValidationError(
+                            "successor does not bind a replacement receipt"
+                        )
+                    recomputed = systems.replacement_launch_binding(
+                        root / successor["raw_attempt_id"], str(receipt_path)
+                    )
+                    if binding != recomputed:
+                        raise AnalysisValidationError(
+                            "successor replacement binding differs from live revalidation"
+                        )
+                else:
+                    recomputed = binding
             else:
                 if not receipt_path:
                     raise AnalysisValidationError(
@@ -5589,6 +5868,21 @@ def analyze_attempts_root(
             successor["replacement_validation_error"] = None
             successor["validated_replacement_binding"] = recomputed
             predecessor["replacement_authorized_by_successor"] = True
+            if (
+                predecessor["raw_attempt_id"]
+                == "formal-v3-20260831t051023z-r01"
+                and successor["raw_attempt_id"]
+                == "formal-v3-20260831t051023z-r02"
+                and recomputed.get("classification") == "harness_error"
+                and recomputed.get("original_status")
+                == "completed_with_system_violations"
+            ):
+                predecessor["adjudicated_status"] = (
+                    "superseded_premeasurement_harness_error"
+                )
+                predecessor["raw_status_preserved"] = predecessor["status"]
+                predecessor["numeric_aggregate_excluded"] = True
+                predecessor["candidate_eligible"] = False
     if replacement_blocker is not None and chain_error is None:
         chain_error = (
             "attempt ledger contains an invalid replacement edge at "
@@ -5646,7 +5940,12 @@ def analyze_attempts_root(
                 raw_id: report["endpoints"]
                 for raw_id, report in sorted(reports.items())
                 if raw_id != selected_id
-                and report["numeric_candidate"]["candidate_eligible"]
+                and next(
+                    item["candidate_eligible"]
+                    for item in ledger
+                    if item["raw_attempt_id"] == raw_id
+                )
+                and report["endpoints"] is not None
             }
             if chain_error is None
             else {}

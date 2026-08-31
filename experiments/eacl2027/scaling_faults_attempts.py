@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import sys
 import tempfile
@@ -48,6 +49,9 @@ _MAX_FORMAL_ATTEMPT_ORDINAL = 5
 _MAX_PREDECESSOR_TREE_ENTRIES = 250_000
 _MAX_PREDECESSOR_TREE_REGULAR_BYTES = 8 * 1024**3
 _MIN_STAGING_FREE_RESERVE_BYTES = 1024**3
+_FORMAL_STUDY_MODES = frozenset(
+    {"formal", "formal_protocol_v3_amendment_007"}
+)
 _PREDECESSOR_ARTIFACT_NAMES = (
     "launch.json",
     "plan.json",
@@ -58,6 +62,195 @@ _PREDECESSOR_ARTIFACT_NAMES = (
     "streams.json",
     "units.jsonl",
 )
+
+
+# Amendment 007 permits exactly one outcome-aware replacement.  These values
+# intentionally duplicate the frozen protocol anchors: the validator must not
+# learn a broader exception from a mutable label or from evidence supplied by
+# the replacement author.
+_OUTCOME_AWARE_REPAIR: dict[str, Any] = {
+    "predecessor_raw_attempt_id": "formal-v3-20260831t051023z-r01",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r02",
+    "receipt_overrides": {
+        "classification": "harness_error",
+        "original_status": "completed_with_system_violations",
+        "reason": (
+            "The amendment-006 harness constructed every r01 daemon socket "
+            "pathname beyond the Linux pathname-form AF_UNIX limit; every unit "
+            "stopped at socket bind before readiness, warmup, hook invocation, "
+            "or a measured event."
+        ),
+        "affected_boundary": (
+            "harness runtime-path construction and UnixStreamServer bind before "
+            "daemon readiness and before any warmup or measured event"
+        ),
+        "scheduler_adjudication": None,
+    },
+    "launch": {
+        "identity_sha256": (
+            "512438c9034c3edd4057c9ac30cc0c183f669e2d90c104fedff4af9bc751ee72"
+        ),
+        "git_commit": "d33e7dafeaf687838ebe009fa1426a9a6c2323b8",
+        "runner_sha256": (
+            "9d226d20d90924f58627fddeb940b18a46a12df74e7a4382663f64367ed486dc"
+        ),
+        "runner_git_blob": "3584b1831c3d07b6b86fed13c03ef601998f1a2f",
+        "runtime_lock_sha256": (
+            "7915c35700a1bb984d576a070c484e89c16c99ab456323e7a8b65ebd8fafd495"
+        ),
+        "slurm": {
+            "job_id": "1524424",
+            "partition": "ALL",
+            "node_list": "watgpu108",
+            "terminal_state": "FAILED",
+            "exit_code": "3:0",
+            "elapsed": "00:02:08",
+        },
+    },
+    "core_artifacts": {
+        "launch.json": {
+            "bytes": 310922,
+            "sha256": (
+                "9c1352dcea9b76e0c1adb2d64f606710ae6563c1f0ebe0a559529136804995e1"
+            ),
+        },
+        "plan.json": {
+            "bytes": 122245,
+            "sha256": (
+                "cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434"
+            ),
+        },
+        "publication.json": {
+            "bytes": 580,
+            "sha256": (
+                "f29155947be45afd636aea6489f7c1ce5f1f05fcaa616177e2b997a26ba4d8eb"
+            ),
+        },
+        "result.json": {
+            "bytes": 3500920,
+            "sha256": (
+                "24b8f562e8d0c4b9fa8dd152f3afd8a16c93b2f5a4e17e75d502f815519f82c3"
+            ),
+        },
+        "stdout.log": {
+            "bytes": 321,
+            "sha256": (
+                "b3adb8cbd99cbd74aacd14c2796b84b7586df75b2431d81929353dd412afd464"
+            ),
+        },
+        "stderr.log": {
+            "bytes": 0,
+            "sha256": (
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            ),
+        },
+        "streams.json": {
+            "bytes": 212,
+            "sha256": (
+                "208d1fd5d724657b664ff706f656a55e5e0df94a3eaef04659a9e7885d5ccdc4"
+            ),
+        },
+        "units.jsonl": {
+            "bytes": 124974,
+            "sha256": (
+                "1717fded3508fde976782961a34121361473a4fd1d7770ca1cb4d3db443eedad"
+            ),
+        },
+    },
+    "publication_claim": {
+        "path": (
+            "/u4/yuntian/rap-eacl-systems-formal-v3/.attempts.staging/"
+            ".publication-claims/formal-v3-20260831t051023z-r01.launch.json"
+        ),
+        "bytes": 310922,
+        "sha256": (
+            "9c1352dcea9b76e0c1adb2d64f606710ae6563c1f0ebe0a559529136804995e1"
+        ),
+    },
+    "tree": {
+        "entries_excluding_root": 34670,
+        "regular_file_bytes": 56010761,
+        "type_counts": {
+            "directory": 17926,
+            "regular_file": 16744,
+            "symlink": 0,
+            "socket": 0,
+            "fifo": 0,
+            "other": 0,
+        },
+    },
+    "result": {
+        "status": "completed_with_system_violations",
+        "primary_numeric_eligible": True,
+        "complete_plan": True,
+        "all_planned_units_terminal": True,
+        "planned_unit_count": 430,
+        "terminal_unit_count": 430,
+        "system_violation_units": 430,
+        "unit_status_histogram": {"system_violation": 430},
+    },
+    "gate": {
+        "terminal_status": "system_violation",
+        "error_type": "SystemViolationError",
+        "error_message_fragment": "OSError: AF_UNIX path too long",
+        "bind_frame": "self.socket.bind(self.server_address)",
+        "socket_path_min_bytes": 109,
+        "socket_path_max_bytes": 163,
+        "pathname_limit_bytes": 107,
+        "verdict_database_count": 430,
+        "verdict_rows": 0,
+        "attention_rows": 0,
+        "evaluation_journal_records": 0,
+        "audit_journal_records": 0,
+    },
+    "evidence": {
+        "root": (
+            "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/"
+            "formal-v3-20260831t051023z-r02"
+        ),
+        "required_kinds": {
+            "premeasurement_harness_adjudication",
+            "af_unix_socket_probe",
+            "scheduler_sacct",
+            "scheduler_stdout",
+            "scheduler_stderr",
+        },
+        "files": {
+            "premeasurement_harness_adjudication": {
+                "name": "premeasurement-harness-adjudication.json"
+            },
+            "af_unix_socket_probe": {
+                "name": "af-unix-socket-probe.json",
+                "bytes": 1509,
+                "sha256": (
+                    "6422013790bf3b63666497c35d71f0e2615aeac92b33bab90d647e95579e9ec4"
+                ),
+            },
+            "scheduler_sacct": {
+                "name": "scheduler-sacct.txt",
+                "bytes": 176,
+                "sha256": (
+                    "0cffb5809d32bb190c2d14b1e4d6c4f63cbc9d904aad390df75cf3c1576bc957"
+                ),
+            },
+            "scheduler_stdout": {
+                "name": "scheduler-stdout.log",
+                "bytes": 0,
+                "sha256": (
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                ),
+            },
+            "scheduler_stderr": {
+                "name": "scheduler-stderr.log",
+                "bytes": 0,
+                "sha256": (
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                ),
+            },
+        },
+        "host": "watgpu",
+    },
+}
 
 
 def _contains_system_violation(value: Any) -> bool:
@@ -245,6 +438,595 @@ def _predecessor_tree_receipts(root: Path) -> list[dict[str, Any]]:
     return receipts
 
 
+def _outcome_aware_error(message: str) -> SystemsHarnessError:
+    return SystemsHarnessError(
+        f"amendment-007 outcome-aware replacement gate failed: {message}"
+    )
+
+
+def _walk_named_values(value: Any):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield str(key), child
+            yield from _walk_named_values(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_named_values(child)
+
+
+def _outcome_aware_units(result: dict[str, Any]) -> list[dict[str, Any]]:
+    matrix = result.get("matrix")
+    faults = result.get("faults")
+    if not isinstance(matrix, list) or not isinstance(faults, dict):
+        raise _outcome_aware_error("result does not retain the frozen unit topology")
+    units: list[Any] = [*matrix, result.get("soak"), result.get("offline_after_prepare")]
+    for fault in faults.values():
+        if not isinstance(fault, dict):
+            raise _outcome_aware_error(
+                "result does not retain the frozen fault-attempt topology"
+            )
+        attempts = fault.get("attempts") or []
+        if not isinstance(attempts, list):
+            raise _outcome_aware_error(
+                "result does not retain the frozen fault-attempt topology"
+            )
+        units.extend(attempts)
+    if not all(isinstance(unit, dict) for unit in units):
+        raise _outcome_aware_error("result contains a non-object terminal unit")
+    return units
+
+
+def _outcome_aware_tree_summary(
+    tree: list[dict[str, Any]],
+) -> dict[str, Any]:
+    counts = {
+        "directory": 0,
+        "regular_file": 0,
+        "symlink": 0,
+        "socket": 0,
+        "fifo": 0,
+        "other": 0,
+    }
+    regular_bytes = 0
+    for item in tree:
+        entry_type = str(item.get("type"))
+        if entry_type in counts:
+            counts[entry_type] += 1
+        else:
+            counts["other"] += 1
+        if entry_type == "regular_file":
+            regular_bytes += int(item["bytes"])
+    return {
+        "entries_excluding_root": len(tree),
+        "regular_file_bytes": regular_bytes,
+        "type_counts": counts,
+    }
+
+
+def _read_outcome_aware_json(path: Path, *, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _outcome_aware_error(f"{label} is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise _outcome_aware_error(f"{label} must be a JSON object")
+    return value
+
+
+def _outcome_aware_journal_records(
+    predecessor_root: Path,
+) -> tuple[int, int]:
+    evaluation_records = 0
+    audit_records = 0
+    runtime = predecessor_root / "runtime"
+    for path in runtime.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        name = path.name
+        if name != "audit.jsonl" and not (
+            name == "evaluations.jsonl"
+            or name.startswith("evaluations.jsonl.")
+        ):
+            continue
+        try:
+            records = sum(bool(line.strip()) for line in path.read_bytes().splitlines())
+        except OSError as exc:
+            raise _outcome_aware_error(
+                f"could not read retained journal {path}"
+            ) from exc
+        if name == "audit.jsonl":
+            audit_records += records
+        else:
+            evaluation_records += records
+    return evaluation_records, audit_records
+
+
+def _validate_outcome_aware_replacement(
+    *,
+    receipt: dict[str, Any],
+    predecessor_root: Path,
+    predecessor_result: dict[str, Any],
+    validated_artifacts: dict[str, dict[str, Any] | None],
+    validated_tree: list[dict[str, Any]],
+    validated_evidence: list[dict[str, Any]],
+) -> None:
+    """Recompute the one frozen amendment-007 premeasurement adjudication."""
+
+    repair = _OUTCOME_AWARE_REPAIR
+    overrides = repair["receipt_overrides"]
+    for name in (
+        "classification",
+        "original_status",
+        "reason",
+        "affected_boundary",
+        "scheduler_adjudication",
+    ):
+        if receipt.get(name) != overrides[name]:
+            raise _outcome_aware_error(
+                f"replacement receipt {name} does not match the frozen override"
+            )
+
+    for name, expected in repair["core_artifacts"].items():
+        observed = validated_artifacts.get(name)
+        if observed is None or {
+            "bytes": observed["bytes"],
+            "sha256": observed["sha256"],
+        } != expected:
+            raise _outcome_aware_error(f"{name} does not match its frozen anchor")
+
+    launch = _read_outcome_aware_json(
+        predecessor_root / "launch.json", label="predecessor launch"
+    )
+    identity = launch.get("identity")
+    launch_anchor = repair["launch"]
+    if not isinstance(identity, dict):
+        raise _outcome_aware_error("predecessor launch lacks identity")
+    formal_runtime = identity.get("formal_runtime")
+    runtime_lock = (
+        formal_runtime.get("runtime_lock")
+        if isinstance(formal_runtime, dict)
+        else None
+    )
+    runtime_lock_file = (
+        runtime_lock.get("file") if isinstance(runtime_lock, dict) else None
+    )
+    if (
+        launch.get("identity_sha256") != launch_anchor["identity_sha256"]
+        or identity.get("attempt_id") != repair["predecessor_raw_attempt_id"]
+        or identity.get("git")
+        != {
+            "commit": launch_anchor["git_commit"],
+            "dirty": False,
+            "scope": [
+                "rules_as_programs",
+                "experiments/eacl2027",
+                "pyproject.toml",
+            ],
+        }
+        or identity.get("runner")
+        != {
+            "git_blob": launch_anchor["runner_git_blob"],
+            "path": "experiments/eacl2027/run_scaling_faults.py",
+            "sha256": launch_anchor["runner_sha256"],
+        }
+        or identity.get("slurm")
+        != {
+            "job_id": launch_anchor["slurm"]["job_id"],
+            "node_list": launch_anchor["slurm"]["node_list"],
+            "partition": launch_anchor["slurm"]["partition"],
+        }
+        or not isinstance(runtime_lock_file, dict)
+        or runtime_lock_file.get("sha256")
+        != launch_anchor["runtime_lock_sha256"]
+    ):
+        raise _outcome_aware_error("predecessor launch identity does not match r01")
+
+    claim_anchor = repair["publication_claim"]
+    claim_path = Path(claim_anchor["path"])
+    _reject_symlink_components(claim_path, label="r01 publication claim")
+    if claim_path.is_symlink() or not claim_path.is_file():
+        raise _outcome_aware_error("r01 publication claim is missing or not regular")
+    claim_receipt = _file_receipt(claim_path.resolve(strict=True))
+    if {
+        "bytes": claim_receipt["bytes"],
+        "sha256": claim_receipt["sha256"],
+    } != {
+        "bytes": claim_anchor["bytes"],
+        "sha256": claim_anchor["sha256"],
+    } or not os.path.samestat(
+        claim_path.stat(follow_symlinks=False),
+        (predecessor_root / "launch.json").stat(follow_symlinks=False),
+    ):
+        raise _outcome_aware_error(
+            "r01 publication claim is not inode-identical to launch.json"
+        )
+
+    if _outcome_aware_tree_summary(validated_tree) != repair["tree"]:
+        raise _outcome_aware_error("predecessor tree aggregates do not match r01")
+
+    for name, expected in repair["result"].items():
+        if predecessor_result.get(name) != expected:
+            raise _outcome_aware_error(f"result {name} does not match r01")
+    units = _outcome_aware_units(predecessor_result)
+    expected_count = int(repair["result"]["terminal_unit_count"])
+    if len(units) != expected_count:
+        raise _outcome_aware_error("result does not contain all 430 terminal units")
+    gate = repair["gate"]
+    for unit in units:
+        error = unit.get("error")
+        if (
+            unit.get("status") != gate["terminal_status"]
+            or not isinstance(error, dict)
+            or error.get("type") != gate["error_type"]
+            or gate["error_message_fragment"] not in str(error.get("message", ""))
+            or gate["bind_frame"] not in str(error.get("message", ""))
+        ):
+            raise _outcome_aware_error(
+                "a result unit does not retain the exact pre-readiness bind failure"
+            )
+
+    sample_lists = [
+        child
+        for key, child in _walk_named_values(predecessor_result)
+        if key == "samples" and isinstance(child, list)
+    ]
+    accounting_values = [
+        child
+        for key, child in _walk_named_values(predecessor_result)
+        if key == "accounting"
+    ]
+    daemon_identities = [
+        child
+        for key, child in _walk_named_values(predecessor_result)
+        if "daemon_identity" in key
+    ]
+    hook_activity = [
+        child
+        for key, child in _walk_named_values(predecessor_result)
+        if key in {"hook", "hooks", "faulting_hook"} and bool(child)
+    ]
+    if (
+        sum(len(value) for value in sample_lists) != 0
+        or any(bool(value) for value in accounting_values)
+        or any(value is not None for value in daemon_identities)
+    ):
+        raise _outcome_aware_error(
+            "result contains a measured sample, accounting value, or daemon identity"
+        )
+    if hook_activity:
+        raise _outcome_aware_error(
+            "result contains a hook invocation before the frozen bind failure"
+        )
+    offline_result = predecessor_result.get("offline_after_prepare")
+    if not isinstance(offline_result, dict) or any(
+        bool(offline_result.get(name))
+        for name in ("online", "offline", "comparison", "comparisons")
+    ):
+        raise _outcome_aware_error(
+            "result contains offline replay activity before the frozen bind failure"
+        )
+    for fault in predecessor_result["faults"].values():
+        for fault_attempt in fault.get("attempts") or []:
+            standardized = fault_attempt.get("standardized_outcomes")
+            if (
+                fault_attempt.get("passed") is not False
+                or not isinstance(standardized, dict)
+                or any(
+                    standardized.get(name) is not None
+                    for name in (
+                        "fail_open_hook_contract_and_latency",
+                        "current_event_survival",
+                        "loss_and_duplication",
+                        "healthy_recovery",
+                        "previous_deployment_continuity",
+                        "persistent_state_integrity",
+                    )
+                )
+                or bool(standardized.get("operator_visible_incident_records"))
+            ):
+                raise _outcome_aware_error(
+                    "result contains an injected fault action before the frozen bind "
+                    "failure"
+                )
+
+    unit_index = predecessor_result.get("unit_index")
+    if not isinstance(unit_index, list) or len(unit_index) != expected_count:
+        raise _outcome_aware_error("result unit_index is not complete")
+    seen_terminal_paths: set[str] = set()
+    for item in unit_index:
+        if (
+            not isinstance(item, dict)
+            or item.get("started") is not True
+            or item.get("status") != gate["terminal_status"]
+            or not isinstance(item.get("terminal_record"), str)
+            or not isinstance(item.get("terminal_record_sha256"), str)
+        ):
+            raise _outcome_aware_error("unit_index contains a non-r01 terminal entry")
+        relative = Path(item["terminal_record"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise _outcome_aware_error("unit_index terminal path escapes r01")
+        terminal_path = predecessor_root / relative
+        _reject_symlink_components(terminal_path, label="r01 terminal record")
+        try:
+            resolved_terminal = terminal_path.resolve(strict=True)
+            resolved_terminal.relative_to(predecessor_root.resolve(strict=True))
+        except (OSError, ValueError) as exc:
+            raise _outcome_aware_error("unit_index terminal path escapes r01") from exc
+        if terminal_path.is_symlink() or not terminal_path.is_file():
+            raise _outcome_aware_error("unit_index terminal record is not regular")
+        terminal_receipt = _file_receipt(resolved_terminal)
+        if terminal_receipt["sha256"] != item["terminal_record_sha256"]:
+            raise _outcome_aware_error("unit_index terminal record digest changed")
+        terminal_key = str(resolved_terminal)
+        if terminal_key in seen_terminal_paths:
+            raise _outcome_aware_error("unit_index repeats a terminal record")
+        seen_terminal_paths.add(terminal_key)
+        terminal = _read_outcome_aware_json(
+            resolved_terminal, label="r01 terminal record"
+        )
+        error = terminal.get("error")
+        terminal_sample_lists = [
+            child
+            for key, child in _walk_named_values(terminal)
+            if key == "samples" and isinstance(child, list)
+        ]
+        terminal_accounting = [
+            child
+            for key, child in _walk_named_values(terminal)
+            if key == "accounting"
+        ]
+        terminal_daemon_identities = [
+            child
+            for key, child in _walk_named_values(terminal)
+            if "daemon_identity" in key
+        ]
+        if (
+            terminal.get("status") != gate["terminal_status"]
+            or not isinstance(error, dict)
+            or error.get("type") != gate["error_type"]
+            or gate["error_message_fragment"] not in str(error.get("message", ""))
+            or gate["bind_frame"] not in str(error.get("message", ""))
+            or sum(len(value) for value in terminal_sample_lists) != 0
+            or any(bool(value) for value in terminal_accounting)
+            or any(value is not None for value in terminal_daemon_identities)
+        ):
+            raise _outcome_aware_error(
+                "a retained terminal record is not the exact pre-readiness failure"
+            )
+
+    socket_paths: list[str] = []
+    for unit in units:
+        retained_root = (unit.get("error") or {}).get("retained_runtime_root")
+        if not isinstance(retained_root, str):
+            raise _outcome_aware_error("a unit lacks its retained runtime root")
+        retained_path = Path(retained_root)
+        try:
+            retained_path.relative_to(predecessor_root / "runtime")
+        except ValueError as exc:
+            raise _outcome_aware_error("a retained runtime root escapes r01") from exc
+        socket_paths.append(str(retained_path / "state" / "daemon.sock"))
+    socket_lengths = [len(os.fsencode(path)) for path in socket_paths]
+    if (
+        min(socket_lengths) != gate["socket_path_min_bytes"]
+        or max(socket_lengths) != gate["socket_path_max_bytes"]
+        or any(length <= gate["pathname_limit_bytes"] for length in socket_lengths)
+    ):
+        raise _outcome_aware_error(
+            "generated socket path lengths do not match the frozen AF_UNIX defect"
+        )
+
+    database_rows = {"databases": 0, "verdicts": 0, "attention": 0}
+    for database in sorted((predecessor_root / "runtime").rglob("verdicts.db")):
+        if database.is_symlink() or not database.is_file():
+            raise _outcome_aware_error("retained verdict database is not regular")
+        try:
+            connection = sqlite3.connect(
+                f"file:{database}?mode=ro&immutable=1", uri=True
+            )
+            try:
+                database_rows["databases"] += 1
+                database_rows["verdicts"] += int(
+                    connection.execute("SELECT COUNT(*) FROM verdicts").fetchone()[0]
+                )
+                database_rows["attention"] += int(
+                    connection.execute("SELECT COUNT(*) FROM attention").fetchone()[0]
+                )
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error, TypeError) as exc:
+            raise _outcome_aware_error(
+                f"could not verify retained verdict database {database}"
+            ) from exc
+    if database_rows != {
+        "databases": gate["verdict_database_count"],
+        "verdicts": gate["verdict_rows"],
+        "attention": gate["attention_rows"],
+    }:
+        raise _outcome_aware_error("retained verdict databases are not measurement-empty")
+    evaluation_records, audit_records = _outcome_aware_journal_records(
+        predecessor_root
+    )
+    if (
+        evaluation_records != gate["evaluation_journal_records"]
+        or audit_records != gate["audit_journal_records"]
+    ):
+        raise _outcome_aware_error("retained evaluation or audit journal is nonempty")
+
+    evidence_anchor = repair["evidence"]
+    evidence_by_kind = {item["kind"]: item for item in validated_evidence}
+    counts = Counter(item["kind"] for item in validated_evidence)
+    required_kinds = set(evidence_anchor["required_kinds"])
+    if set(evidence_by_kind) != required_kinds or any(
+        counts[kind] != 1 for kind in required_kinds
+    ):
+        raise _outcome_aware_error(
+            "replacement evidence kinds do not exactly match amendment 007"
+        )
+    evidence_root = Path(evidence_anchor["root"])
+    for kind, expected in evidence_anchor["files"].items():
+        observed = evidence_by_kind[kind]
+        expected_path = str((evidence_root / expected["name"]).resolve(strict=True))
+        if observed["path"] != expected_path:
+            raise _outcome_aware_error(f"{kind} does not use its frozen evidence path")
+        if "bytes" in expected and {
+            "bytes": observed["bytes"],
+            "sha256": observed["sha256"],
+        } != {"bytes": expected["bytes"], "sha256": expected["sha256"]}:
+            raise _outcome_aware_error(f"{kind} does not match its frozen receipt")
+
+    sacct_path = Path(evidence_by_kind["scheduler_sacct"]["path"])
+    try:
+        sacct_lines = sacct_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _outcome_aware_error("scheduler_sacct is not exact UTF-8 text") from exc
+    expected_parent_fields = [
+        launch_anchor["slurm"]["job_id"],
+        "rap-eacl-systems-v3",
+        launch_anchor["slurm"]["partition"],
+        launch_anchor["slurm"]["terminal_state"],
+        launch_anchor["slurm"]["exit_code"],
+        launch_anchor["slurm"]["elapsed"],
+        launch_anchor["slurm"]["node_list"],
+    ]
+    parent_rows = [
+        line.split("|")
+        for line in sacct_lines
+        if line.split("|", 1)[0] == launch_anchor["slurm"]["job_id"]
+    ]
+    if len(parent_rows) != 1 or parent_rows[0][:7] != expected_parent_fields:
+        raise _outcome_aware_error("scheduler_sacct does not retain exact r01 state")
+
+    adjudication_path = Path(
+        evidence_by_kind["premeasurement_harness_adjudication"]["path"]
+    )
+    scheduler_receipts = {
+        "sacct": {
+            key: evidence_by_kind["scheduler_sacct"][key]
+            for key in ("path", "bytes", "sha256")
+        },
+        "stdout": {
+            key: evidence_by_kind["scheduler_stdout"][key]
+            for key in ("path", "bytes", "sha256")
+        },
+        "stderr": {
+            key: evidence_by_kind["scheduler_stderr"][key]
+            for key in ("path", "bytes", "sha256")
+        },
+    }
+    expected_adjudication = {
+        "schema_version": 1,
+        "classification": "harness_error",
+        "attempt_id": repair["predecessor_raw_attempt_id"],
+        "successor_attempt_id": repair["successor_raw_attempt_id"],
+        "job": {
+            "job_id": launch_anchor["slurm"]["job_id"],
+            "partition": launch_anchor["slurm"]["partition"],
+            "node": launch_anchor["slurm"]["node_list"],
+            "state": launch_anchor["slurm"]["terminal_state"],
+            "exit_code": launch_anchor["slurm"]["exit_code"],
+            "elapsed": launch_anchor["slurm"]["elapsed"],
+        },
+        "git_commit": launch_anchor["git_commit"],
+        "runner_sha256": launch_anchor["runner_sha256"],
+        "runner_git_blob": launch_anchor["runner_git_blob"],
+        "runtime_lock_sha256": launch_anchor["runtime_lock_sha256"],
+        "launch_identity_sha256": launch_anchor["identity_sha256"],
+        "result": {
+            "status": predecessor_result["status"],
+            "primary_numeric_eligible_raw": predecessor_result[
+                "primary_numeric_eligible"
+            ],
+            "planned_units": predecessor_result["planned_unit_count"],
+            "terminal_units": predecessor_result["terminal_unit_count"],
+            "system_violation_labels": predecessor_result[
+                "system_violation_units"
+            ],
+            "matrix_samples": sum(len(value) for value in sample_lists),
+            "nonempty_accounting_values": sum(
+                bool(value) for value in accounting_values
+            ),
+            "non_null_daemon_identities": sum(
+                value is not None for value in daemon_identities
+            ),
+            "state_database_rows": database_rows,
+        },
+        "failure": {
+            "stage": (
+                "AF_UNIX bind before daemon readiness, warmup, wrapper invocation, "
+                "or measured event"
+            ),
+            "error_signature": gate["error_message_fragment"],
+            "units_with_exact_stage_signature": len(units),
+            "linux_pathname_payload_limit_bytes": gate["pathname_limit_bytes"],
+            "generated_socket_path_bytes": {
+                "minimum": min(socket_lengths),
+                "maximum": max(socket_lengths),
+            },
+            "example_socket_path": socket_paths[0],
+        },
+        "reason": (
+            "the frozen harness constructed every daemon socket beyond the "
+            "AF_UNIX pathname limit"
+        ),
+        "affected_boundary": (
+            "socket-path construction and daemon bind before readiness, warmup, "
+            "hook invocation, or measured event"
+        ),
+        "core_artifacts": {
+            name: validated_artifacts[name]
+            for name in _PREDECESSOR_ARTIFACT_NAMES
+        },
+        "tree": _outcome_aware_tree_summary(validated_tree),
+        "scheduler_evidence": scheduler_receipts,
+        "host": evidence_anchor["host"],
+    }
+    expected_adjudication_bytes = (
+        json.dumps(expected_adjudication, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    try:
+        observed_adjudication_bytes = adjudication_path.read_bytes()
+    except OSError as exc:
+        raise _outcome_aware_error(
+            "could not read premeasurement adjudication"
+        ) from exc
+    if observed_adjudication_bytes != expected_adjudication_bytes:
+        raise _outcome_aware_error(
+            "premeasurement adjudication does not equal the recomputed r01 scan"
+        )
+
+    probe = _read_outcome_aware_json(
+        Path(evidence_by_kind["af_unix_socket_probe"]["path"]),
+        label="AF_UNIX socket probe",
+    )
+    proposed = probe.get("proposed_transport")
+    frozen_failure = probe.get("frozen_failure_reproduction")
+    slurm = probe.get("slurm")
+    if (
+        probe.get("schema_version") != 1
+        or probe.get("status") != "passed"
+        or probe.get("rap_inference_started") is not False
+        or probe.get("r01_modified") is not False
+        or probe.get("linux_pathname_payload_limit_bytes")
+        != gate["pathname_limit_bytes"]
+        or not isinstance(slurm, dict)
+        or slurm
+        != {"job_id": "1524434", "node": "watgpu108", "partition": "ALL"}
+        or not isinstance(frozen_failure, dict)
+        or frozen_failure.get("bind_failed") is not True
+        or frozen_failure.get("encoded_path_bytes") != 163
+        or (frozen_failure.get("error") or {}).get("type") != "OSError"
+        or (frozen_failure.get("error") or {}).get("message")
+        != "AF_UNIX path too long"
+        or not isinstance(proposed, dict)
+        or proposed.get("encoded_path_bytes") != 86
+        or proposed.get("bind_connect_accept_payload_equal") is not True
+        or proposed.get("endpoint_removed_after_probe") is not True
+        or proposed.get("socket_root_mode") != "0700"
+        or proposed.get("socket_root_symlink") is not False
+    ):
+        raise _outcome_aware_error("AF_UNIX probe semantics do not match the freeze")
+
+
 def replacement_launch_binding(
     successor_attempt_dir: Path,
     receipt_value: str | None,
@@ -408,6 +1190,7 @@ def replacement_launch_binding(
         )
     predecessor_result = validated_artifacts["result.json"]
     predecessor_result_value: dict[str, Any] | None = None
+    outcome_aware_override = False
     declared_original_status = str(receipt.get("original_status", ""))
     if predecessor_result is not None:
         try:
@@ -431,18 +1214,29 @@ def replacement_launch_binding(
             raise SystemsHarnessError(
                 "replacement original_status disagrees with predecessor result"
             )
-        if _result_contains_system_violation(predecessor_result_value):
+        exact_outcome_aware_edge = (
+            predecessor_id
+            == _OUTCOME_AWARE_REPAIR["predecessor_raw_attempt_id"]
+            and successor_id
+            == _OUTCOME_AWARE_REPAIR["successor_raw_attempt_id"]
+            and predecessor_status
+            == _OUTCOME_AWARE_REPAIR["receipt_overrides"]["original_status"]
+        )
+        if exact_outcome_aware_edge:
+            outcome_aware_override = True
+        elif _result_contains_system_violation(predecessor_result_value):
             raise SystemsHarnessError(
                 "predecessor result retains a system_violation and is not "
                 "replacement-eligible"
             )
-        allowed_statuses = {f"incomplete_{classification}"}
-        if classification == "infrastructure_error":
-            allowed_statuses.add("incomplete_unclassified_failure")
-        if predecessor_status not in allowed_statuses:
-            raise SystemsHarnessError(
-                "predecessor result is not eligible for outcome-independent replacement"
-            )
+        if not outcome_aware_override:
+            allowed_statuses = {f"incomplete_{classification}"}
+            if classification == "infrastructure_error":
+                allowed_statuses.add("incomplete_unclassified_failure")
+            if predecessor_status not in allowed_statuses:
+                raise SystemsHarnessError(
+                    "predecessor result is not eligible for outcome-independent replacement"
+                )
     elif declared_original_status != "missing":
         raise SystemsHarnessError(
             "replacement original_status must be 'missing' when result.json is absent"
@@ -583,6 +1377,16 @@ def replacement_launch_binding(
         raise SystemsHarnessError(
             "scheduler_adjudication is allowed only for independently adjudicated "
             "infrastructure replacements"
+        )
+    if outcome_aware_override:
+        assert predecessor_result_value is not None
+        _validate_outcome_aware_replacement(
+            receipt=receipt,
+            predecessor_root=predecessor_root,
+            predecessor_result=predecessor_result_value,
+            validated_artifacts=validated_artifacts,
+            validated_tree=validated_tree,
+            validated_evidence=validated_evidence,
         )
     canonical_receipt = json.dumps(
         receipt, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -1046,7 +1850,10 @@ class AttemptRecorder:
                 }
             )
         self.root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        formal = str((manifest.get("identity") or {}).get("study_mode", "")) == "formal"
+        formal = (
+            str((manifest.get("identity") or {}).get("study_mode", ""))
+            in _FORMAL_STUDY_MODES
+        )
         if formal:
             _require_private_owned_directory(
                 self.root.parent, label="formal attempt root"

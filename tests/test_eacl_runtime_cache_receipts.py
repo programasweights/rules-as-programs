@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat as stat_module
@@ -8,6 +9,89 @@ from pathlib import Path
 import pytest
 
 from experiments.eacl2027 import scaling_faults_runtime as runtime
+
+
+def _socket_preflight_fixture(tmp_path: Path) -> tuple[Path, str, Path, dict]:
+    job_id = str(int(hashlib.sha256(str(tmp_path).encode()).hexdigest()[:14], 16))
+    socket_root = Path("/tmp") / f"rf3-{job_id}"
+    socket_root.mkdir(mode=0o700)
+    retained = (tmp_path / "attempts" / "formal-r02" / "runtime" / "preflight").resolve()
+    digest_input = {
+        "schema_version": 1,
+        "raw_attempt_id": "formal-r02",
+        "component": "preflight",
+        "unit_id": "socket-canary",
+        "retained_runtime_root": str(retained),
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            digest_input,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    endpoint = socket_root / f"{digest}.sock"
+    root_stat = socket_root.lstat()
+    receipt = {
+        "schema_version": 1,
+        "digest_input": digest_input,
+        "endpoint_digest": digest,
+        "endpoint": str(endpoint),
+        "encoded_pathname_bytes": len(os.fsencode(endpoint)),
+        "maximum_encoded_pathname_bytes": 107,
+        "socket_root": {
+            "path": str(socket_root),
+            "owner_uid": os.geteuid(),
+            "mode": 0o700,
+            "device": root_stat.st_dev,
+        },
+        "bind_connect_accept_payload_equal": True,
+        "endpoint_removed_after_probe": True,
+    }
+    return socket_root, job_id, retained, receipt
+
+
+def test_socket_preflight_receipt_recomputes_exact_capability_binding(tmp_path):
+    socket_root, job_id, retained, receipt = _socket_preflight_fixture(tmp_path)
+    try:
+        assert runtime.validate_socket_preflight_receipt(
+            receipt,
+            socket_root=socket_root,
+            raw_attempt_id="formal-r02",
+            job_id=job_id,
+            retained_runtime_root=retained,
+        ) == receipt
+    finally:
+        socket_root.rmdir()
+
+
+def test_socket_preflight_receipt_rejects_tampering_and_live_endpoint(tmp_path):
+    socket_root, job_id, retained, receipt = _socket_preflight_fixture(tmp_path)
+    endpoint = Path(receipt["endpoint"])
+    try:
+        tampered = json.loads(json.dumps(receipt))
+        tampered["endpoint_digest"] = "0" * 64
+        with pytest.raises(runtime.RuntimeContractError, match="receipt mismatch"):
+            runtime.validate_socket_preflight_receipt(
+                tampered,
+                socket_root=socket_root,
+                raw_attempt_id="formal-r02",
+                job_id=job_id,
+                retained_runtime_root=retained,
+            )
+        endpoint.write_bytes(b"stale")
+        with pytest.raises(runtime.RuntimeContractError, match="still exists"):
+            runtime.validate_socket_preflight_receipt(
+                receipt,
+                socket_root=socket_root,
+                raw_attempt_id="formal-r02",
+                job_id=job_id,
+                retained_runtime_root=retained,
+            )
+    finally:
+        endpoint.unlink(missing_ok=True)
+        socket_root.rmdir()
 
 
 def _cache_fixture(tmp_path: Path) -> tuple[Path, Path, str]:

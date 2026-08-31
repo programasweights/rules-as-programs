@@ -2,8 +2,10 @@
 
 Two ideas live here:
 
-* **State** (socket, sqlite verdict store, per-conversation ledgers, logs) lives
-  under a single cache dir, overridable with ``RAP_STATE_DIR``.
+* **State** (sqlite verdict store, per-conversation ledgers, logs) lives under a
+  single cache dir, overridable with ``RAP_STATE_DIR``.  The transient daemon
+  socket may be placed elsewhere with ``RAP_SOCKET_PATH`` when a runtime needs
+  a bounded AF_UNIX pathname.
 * **Rules** are resolved from two scopes so users can keep constraints global or
   scope them to a single repo:
     - global:  ``~/.codex/rules-as-programs/rules/<id>/rule.py``
@@ -31,6 +33,9 @@ def state_dir() -> Path:
 
 
 def socket_path() -> Path:
+    override = os.environ.get("RAP_SOCKET_PATH")
+    if override:
+        return Path(override).expanduser()
     return state_dir() / "daemon.sock"
 
 

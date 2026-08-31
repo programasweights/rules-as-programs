@@ -26,6 +26,7 @@ import platform
 import re
 import signal
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -87,11 +88,12 @@ EXTERNAL_MANIFEST = (
 EXTERNAL_OUTPUT = ROOT / "outputs" / "frozen" / "external-paw-finetuned.jsonl"
 EXTERNAL_DATASET = ROOT / "data" / "public" / "external.jsonl"
 PROTOCOL_V3 = ROOT / "protocol-v3.json"
-FORMAL_PARENT_AMENDMENT = ROOT / "protocol-v3-amendment-005.json"
-FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-006.json"
+FORMAL_PARENT_AMENDMENT = ROOT / "protocol-v3-amendment-006.json"
+FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-007.json"
 FORMAL_AMENDMENT_SHA256 = (
-    "f2ce7848370630b82024bb84668600fcda765b34af734f0fe94392ed9a530a2f"
+    "540ee245cd025d3cb5c4146fb36ec30b7d54b40ccc74de78a3a4df9a06f4aa91"
 )
+FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_007"
 FROZEN_OUTPUT_DIR = (ROOT / "outputs" / "frozen").resolve()
 EXTERNAL_RULE_ORDER = (
     "3pcxewp5hggr1vsn",
@@ -127,6 +129,8 @@ EVALUATION_HISTORY_LIMIT = 5000
 EVALUATION_JOURNAL_ROTATION_BYTES = evaluation_log.MAX_LOG_BYTES
 EVALUATION_JOURNAL_ROTATION_BACKUPS = evaluation_log.MAX_BACKUPS
 SQLITE_BUSY_TIMEOUT_SECONDS = 5.0
+MAX_AF_UNIX_PATHNAME_BYTES = 107
+SOCKET_CLEANUP_TIMEOUT_SECONDS = 2.0
 FORMAL_RAW_ATTEMPT_ROOT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/attempts"
 )
@@ -371,6 +375,307 @@ def _subprocess_environment(
     }
     sanitized.update(overrides or {})
     return sanitized
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _formal_attempt_root(retained_runtime_root: Path) -> Path:
+    resolved = retained_runtime_root.expanduser().resolve()
+    for candidate in (resolved, *resolved.parents):
+        if (candidate / "launch.json").is_file():
+            try:
+                resolved.relative_to(candidate / "runtime")
+            except ValueError:
+                continue
+            return candidate
+    raise SystemsHarnessError(
+        "socket endpoint mapping requires a retained runtime root beneath an "
+        "immutable attempt containing launch.json"
+    )
+
+
+def _socket_unit_identity(
+    retained_runtime_root: Path,
+    *,
+    component: str | None,
+    unit_id: str | None,
+) -> tuple[Path, str, str]:
+    attempt_root = _formal_attempt_root(retained_runtime_root)
+    relative = retained_runtime_root.expanduser().resolve().relative_to(
+        attempt_root / "runtime"
+    )
+    parts = relative.parts
+    derived_component = ""
+    derived_unit_id = ""
+    if len(parts) == 2 and parts[0] in ("matrix", "faults"):
+        derived_component, derived_unit_id = parts
+    elif parts == ("offline",):
+        derived_component = "offline"
+        derived_unit_id = "online-offline-exact-replay"
+    elif parts == ("soak",):
+        derived_component = "soak"
+    else:
+        raise SystemsHarnessError(
+            f"unrecognized formal retained runtime layout for socket mapping: {relative}"
+        )
+    observed_component = component or derived_component
+    observed_unit_id = unit_id or derived_unit_id
+    if observed_component != derived_component or not observed_unit_id:
+        raise SystemsHarnessError(
+            "socket endpoint component/unit identity does not match its retained "
+            "runtime layout"
+        )
+    if derived_unit_id and observed_unit_id != derived_unit_id:
+        raise SystemsHarnessError(
+            "socket endpoint unit identity does not match its retained runtime layout"
+        )
+    return attempt_root, observed_component, observed_unit_id
+
+
+def _validated_socket_root(environment: Mapping[str, str]) -> tuple[Path, os.stat_result]:
+    configured = str(environment.get("RAP_EACL_SOCKET_ROOT", ""))
+    job_id = str(environment.get("SLURM_JOB_ID", ""))
+    expected = f"/tmp/rf3-{job_id}"
+    if not job_id.isdecimal() or configured != expected:
+        raise SystemsHarnessError(
+            "RAP_EACL_SOCKET_ROOT must be the exact /tmp/rf3-${SLURM_JOB_ID} path"
+        )
+    root = Path(configured)
+    try:
+        root_stat = root.lstat()
+    except OSError as exc:
+        raise SystemsHarnessError(f"socket root is unavailable: {root}: {exc}") from exc
+    if (
+        stat.S_ISLNK(root_stat.st_mode)
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or int(root_stat.st_uid) != os.geteuid()
+        or stat.S_IMODE(root_stat.st_mode) != 0o700
+    ):
+        raise SystemsHarnessError(
+            "socket root must be a non-symlink directory owned by the effective "
+            "user with mode 0700"
+        )
+    return root, root_stat
+
+
+def _require_socket_endpoint_available(
+    environment: Mapping[str, str], *, stage: str
+) -> None:
+    endpoint = str(environment.get("RAP_SOCKET_PATH", ""))
+    if endpoint and os.path.lexists(endpoint):
+        raise SystemsHarnessError(
+            f"socket endpoint collision before {stage}: {endpoint}"
+        )
+
+
+def _socket_entry_receipt(path: Path) -> dict[str, Any] | None:
+    try:
+        observed = path.lstat()
+    except FileNotFoundError:
+        return None
+    entry_type = (
+        "socket"
+        if stat.S_ISSOCK(observed.st_mode)
+        else "symlink"
+        if stat.S_ISLNK(observed.st_mode)
+        else "regular_file"
+        if stat.S_ISREG(observed.st_mode)
+        else "directory"
+        if stat.S_ISDIR(observed.st_mode)
+        else "other"
+    )
+    return {
+        "path": str(path),
+        "type": entry_type,
+        "owner_uid": int(observed.st_uid),
+        "mode": stat.S_IMODE(observed.st_mode),
+        "device": int(observed.st_dev),
+        "inode": int(observed.st_ino),
+    }
+
+
+def _enforce_socket_removed_after_shutdown(
+    environment: Mapping[str, str],
+    retained_runtime_root: Path,
+    *,
+    stage: str,
+    active_exception: BaseException | None = None,
+    timeout_seconds: float | None = None,
+) -> None:
+    """Fail closed on a socket left after a verified daemon shutdown.
+
+    If workload unwinding is already carrying an exception, preserve it and
+    retain this independent cleanup defect rather than masking the first cause.
+    """
+    endpoint_text = str(environment.get("RAP_SOCKET_PATH", ""))
+    if not endpoint_text:
+        return
+    endpoint = Path(endpoint_text)
+    timeout_seconds = (
+        SOCKET_CLEANUP_TIMEOUT_SECONDS
+        if timeout_seconds is None
+        else timeout_seconds
+    )
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while os.path.lexists(endpoint) and time.monotonic() < deadline:
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+    observed = _socket_entry_receipt(endpoint)
+    if observed is None:
+        return
+    cleanup_error = SystemsHarnessError(
+        f"socket endpoint remained after verified {stage}: {endpoint}"
+    )
+    safe_stage = re.sub(r"[^a-z0-9.-]+", "-", stage.lower()).strip("-.")
+    failure_path = (
+        retained_runtime_root.expanduser().resolve()
+        / f"socket-cleanup-failure-{safe_stage or 'shutdown'}.json"
+    )
+    failure = {
+        "schema_version": 1,
+        "status": "socket_endpoint_persisted_after_verified_shutdown",
+        "stage": stage,
+        "endpoint": observed,
+        "active_exception": (
+            {
+                "present": True,
+                "type": type(active_exception).__name__,
+            }
+            if active_exception is not None
+            else {"present": False, "type": None}
+        ),
+    }
+    try:
+        _write_immutable_evidence(
+            failure_path,
+            json.dumps(
+                failure,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            + b"\n",
+        )
+        _fsync_directory(failure_path.parent)
+    except BaseException as receipt_error:
+        if active_exception is None:
+            raise SystemsHarnessError(
+                f"{cleanup_error}; cleanup failure receipt could not be retained: "
+                f"{type(receipt_error).__name__}: {receipt_error}"
+            ) from cleanup_error
+        return
+    if active_exception is None:
+        raise cleanup_error
+
+
+@contextmanager
+def _unit_socket_environment(
+    retained_runtime_root: Path,
+    environment: Mapping[str, str],
+    *,
+    component: str | None = None,
+    unit_id: str | None = None,
+) -> Iterator[dict[str, str]]:
+    """Bind one formal top-level unit to its short node-local AF_UNIX path."""
+    configured_root = str(environment.get("RAP_EACL_SOCKET_ROOT", ""))
+    if not configured_root:
+        yield dict(environment)
+        return
+    retained = retained_runtime_root.expanduser().resolve()
+    attempt_root, component, unit_id = _socket_unit_identity(
+        retained, component=component, unit_id=unit_id
+    )
+    socket_root, root_stat = _validated_socket_root(environment)
+    state = Path(str(environment.get("RAP_STATE_DIR", ""))).expanduser().resolve()
+    expected_state = (retained / "state").resolve()
+    if state != expected_state:
+        raise SystemsHarnessError(
+            "node-local socket override must not move durable RAP_STATE_DIR away "
+            "from the retained runtime root"
+        )
+    digest_input = {
+        "schema_version": 1,
+        "raw_attempt_id": attempt_root.name,
+        "component": component,
+        "unit_id": unit_id,
+        "retained_runtime_root": str(retained),
+    }
+    digest = _sha256_bytes(
+        json.dumps(
+            digest_input,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+    endpoint = socket_root / f"{digest}.sock"
+    encoded_length = len(os.fsencode(endpoint))
+    if encoded_length > MAX_AF_UNIX_PATHNAME_BYTES:
+        raise SystemsHarnessError(
+            f"node-local socket endpoint is {encoded_length} encoded bytes; "
+            f"maximum is {MAX_AF_UNIX_PATHNAME_BYTES}"
+        )
+    socket_environment = dict(environment)
+    socket_environment["RAP_SOCKET_PATH"] = str(endpoint)
+    _require_socket_endpoint_available(
+        socket_environment, stage="per-unit daemon start"
+    )
+    receipt = {
+        "schema_version": 1,
+        "digest_input": digest_input,
+        "endpoint_digest": digest,
+        "endpoint": str(endpoint),
+        "encoded_pathname_bytes": encoded_length,
+        "maximum_encoded_pathname_bytes": MAX_AF_UNIX_PATHNAME_BYTES,
+        "socket_root": {
+            "path": str(socket_root),
+            "owner_uid": int(root_stat.st_uid),
+            "mode": stat.S_IMODE(root_stat.st_mode),
+            "device": int(root_stat.st_dev),
+        },
+        "rap_state_dir": str(state),
+        "component": component,
+        "unit_id": unit_id,
+        "raw_attempt_id": attempt_root.name,
+        "slurm": {
+            "job_id": str(environment.get("SLURM_JOB_ID", "")),
+            "partition": str(environment.get("SLURM_JOB_PARTITION", "")),
+            "node_list": str(environment.get("SLURM_JOB_NODELIST", "")),
+        },
+    }
+    receipt_path = retained / "socket-endpoint.json"
+    receipt_bytes = (
+        json.dumps(
+            receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    try:
+        _write_immutable_evidence(receipt_path, receipt_bytes)
+    except FileExistsError as exc:
+        raise SystemsHarnessError(
+            f"socket endpoint receipt collision for {component}/{unit_id}: "
+            f"{receipt_path}"
+        ) from exc
+    _fsync_directory(receipt_path.parent)
+    previous = os.environ.get("RAP_SOCKET_PATH")
+    os.environ["RAP_SOCKET_PATH"] = str(endpoint)
+    try:
+        yield socket_environment
+    finally:
+        if previous is None:
+            os.environ.pop("RAP_SOCKET_PATH", None)
+        else:
+            os.environ["RAP_SOCKET_PATH"] = previous
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
@@ -739,40 +1044,55 @@ def _running_fixture(
     *,
     environment_overrides: dict[str, str] | None = None,
     retained_root: Path | None = None,
+    component: str | None = None,
+    unit_id: str | None = None,
 ) -> Iterator[RunningFixture]:
     with _fixture_directory(retained_root) as isolated_root:
         with integrated._isolated_environment(isolated_root) as base_environment:
-            environment = _subprocess_environment(
+            initial_environment = _subprocess_environment(
                 base_environment, environment_overrides
             )
-            projects = _install_projects(isolated_root, artifacts, project_count)
-            diagnostics = isolated_root / "daemon-output.log"
-            try:
-                daemon, identity = integrated._start_daemon(
-                    environment, diagnostics, DEFAULT_TIMEOUT_SECONDS
-                )
-            except Exception as exc:
-                raise SystemViolationError(str(exc)) from None
-            fixture = RunningFixture(
-                isolated_root=isolated_root,
-                environment=environment,
-                projects=projects,
-                artifacts=tuple(artifacts),
-                diagnostics=diagnostics,
-                daemon=daemon,
-                identity=identity,
-                retained=retained_root is not None,
-            )
-            try:
-                yield fixture
-            finally:
-                # This also shuts down an auto-respawned daemon because the parent
-                # process still points at the fixture's isolated socket.
+            with _unit_socket_environment(
+                isolated_root,
+                initial_environment,
+                component=component,
+                unit_id=unit_id,
+            ) as environment:
+                projects = _install_projects(isolated_root, artifacts, project_count)
+                diagnostics = isolated_root / "daemon-output.log"
                 try:
-                    ipc.send_request({"type": "shutdown"}, timeout=1.0)
-                except Exception:
-                    pass
-                integrated._stop_daemon(daemon)
+                    daemon, identity = integrated._start_daemon(
+                        environment, diagnostics, DEFAULT_TIMEOUT_SECONDS
+                    )
+                except Exception as exc:
+                    raise SystemViolationError(str(exc)) from None
+                fixture = RunningFixture(
+                    isolated_root=isolated_root,
+                    environment=environment,
+                    projects=projects,
+                    artifacts=tuple(artifacts),
+                    diagnostics=diagnostics,
+                    daemon=daemon,
+                    identity=identity,
+                    retained=retained_root is not None,
+                )
+                try:
+                    yield fixture
+                finally:
+                    active_exception = sys.exc_info()[1]
+                    # This also shuts down an auto-respawned daemon because the
+                    # parent process still points at this unit's isolated socket.
+                    try:
+                        ipc.send_request({"type": "shutdown"}, timeout=1.0)
+                    except Exception:
+                        pass
+                    integrated._stop_daemon(fixture.daemon)
+                    _enforce_socket_removed_after_shutdown(
+                        fixture.environment,
+                        fixture.isolated_root,
+                        stage="final-daemon-shutdown",
+                        active_exception=active_exception,
+                    )
 
 
 def _invoke_payload(
@@ -2691,7 +3011,11 @@ def run_condition(
         f"r{rule_count}-p{project_count}-{schedule}-{mode}{event_count}-rep{repeat}"
     )
     with _running_fixture(
-        selected, project_count, retained_root=retained_root
+        selected,
+        project_count,
+        retained_root=retained_root,
+        component="matrix",
+        unit_id=condition_id,
     ) as fixture:
         _warm_fixture(fixture, warmups_per_project, timeout)
         baseline_rows = {
@@ -3241,7 +3565,11 @@ def run_soak(
     if batch_size * rule_count >= EVALUATION_HISTORY_LIMIT:
         raise ValueError("soak batch is too large for exact online accounting")
     with _running_fixture(
-        selected, project_count, retained_root=retained_root
+        selected,
+        project_count,
+        retained_root=retained_root,
+        component="soak",
+        unit_id=f"soak-r{rule_count}-p{project_count}",
     ) as fixture:
         _warm_fixture(fixture, warmups_per_project, timeout)
         baseline_rows = {
@@ -3681,6 +4009,11 @@ def run_soak(
                     "restart was marked eligible without a complete projection"
                 )
             integrated._stop_daemon(fixture.daemon)
+            _enforce_socket_removed_after_shutdown(
+                fixture.environment,
+                fixture.isolated_root,
+                stage="pre-restart-daemon-shutdown",
+            )
             try:
                 restarted, restarted_identity = integrated._start_daemon(
                     fixture.environment, fixture.diagnostics, timeout
@@ -4190,7 +4523,17 @@ def run_offline_after_prepare(
 ) -> dict[str, Any]:
     selected = tuple(artifacts[:rule_count])
     with _fixture_directory(retained_root) as isolated_root:
-        with integrated._isolated_environment(isolated_root) as base_environment:
+        socket_base_environment = dict(os.environ)
+        socket_base_environment["RAP_STATE_DIR"] = str(isolated_root / "state")
+        with (
+            _unit_socket_environment(
+                isolated_root,
+                socket_base_environment,
+                component="offline",
+                unit_id="online-offline-exact-replay",
+            ),
+            integrated._isolated_environment(isolated_root) as base_environment,
+        ):
             base_environment = _subprocess_environment(base_environment)
             projects = _install_projects(isolated_root, selected, 2)
             online_diagnostics = isolated_root / "online-daemon-output.log"
@@ -4272,7 +4615,14 @@ def run_offline_after_prepare(
                     online_fixture, online_rows, online_findings
                 )
             finally:
+                online_exception = sys.exc_info()[1]
                 integrated._stop_daemon(online)
+                _enforce_socket_removed_after_shutdown(
+                    base_environment,
+                    isolated_root,
+                    stage="online-daemon-shutdown",
+                    active_exception=online_exception,
+                )
             blocker, block_log, activation_log, boundary_source_receipt = (
                 _network_blocker(isolated_root)
             )
@@ -4625,7 +4975,14 @@ def run_offline_after_prepare(
                     ),
                 }
             finally:
+                offline_exception = sys.exc_info()[1]
                 integrated._stop_daemon(offline)
+                _enforce_socket_removed_after_shutdown(
+                    offline_environment,
+                    isolated_root,
+                    stage="offline-daemon-shutdown",
+                    active_exception=offline_exception,
+                )
 
 
 def _wait_for_any_daemon(timeout: float) -> dict[str, Any]:
@@ -6658,11 +7015,11 @@ def run_study(
             "statuses": global_outcome_statuses,
         },
         "protocol_status": (
-            "formal_protocol_v3_amendment_006"
+            FORMAL_STUDY_MODE
             if formal
             else "candidate_noncanonical"
         ),
-        "study_mode": "formal" if formal else "candidate_noncanonical",
+        "study_mode": FORMAL_STUDY_MODE if formal else "candidate_noncanonical",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "measurement_boundary": _measurement_boundary(),
         "non_censoring_policy": (
@@ -6739,17 +7096,17 @@ def _validate_output_path(path: Path) -> Path:
 
 def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
     if _sha256_file(FORMAL_AMENDMENT) != FORMAL_AMENDMENT_SHA256:
-        raise SystemsHarnessError("protocol-v3 amendment 006 bytes changed")
+        raise SystemsHarnessError("protocol-v3 amendment 007 bytes changed")
     try:
         contract = json.loads(FORMAL_AMENDMENT.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemsHarnessError(f"invalid amendment 006: {exc}") from exc
-    if contract.get("amendment_id") != "protocol-v3-amendment-006":
+        raise SystemsHarnessError(f"invalid amendment 007: {exc}") from exc
+    if contract.get("amendment_id") != "protocol-v3-amendment-007":
         raise SystemsHarnessError("unexpected formal amendment identity")
     if require_frozen:
-        if contract.get("freeze_state") != "frozen_outcome_blind":
+        if contract.get("freeze_state") != "frozen_outcome_aware_repair":
             raise SystemsHarnessError(
-                "protocol-v3 amendment 006 is not frozen outcome-blind"
+                "protocol-v3 amendment 007 is not frozen outcome-aware repair"
             )
         frozen_utc = contract.get("frozen_utc")
         try:
@@ -6758,11 +7115,11 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
             )
         except ValueError as exc:
             raise SystemsHarnessError(
-                "protocol-v3 amendment 006 has no valid frozen_utc"
+                "protocol-v3 amendment 007 has no valid frozen_utc"
             ) from exc
         if frozen_at.tzinfo is None:
             raise SystemsHarnessError(
-                "protocol-v3 amendment 006 frozen_utc must be timezone-aware"
+                "protocol-v3 amendment 007 frozen_utc must be timezone-aware"
             )
     prefix = (
         (contract.get("effective_protocol_identity") or {}).get("frozen_prefix")
@@ -7133,7 +7490,7 @@ def _validate_formal_config(
         }
     if mismatches:
         raise SystemsHarnessError(
-            "formal configuration differs from protocol v3 amendment 006: "
+            "formal configuration differs from protocol v3 amendment 007: "
             + json.dumps(mismatches, sort_keys=True)
         )
     expected_partition = str(effective.get("slurm_partition", "ALL"))
@@ -7359,7 +7716,7 @@ def _launch_manifest(
     runner = Path(__file__).resolve()
     identity = {
         "attempt_id": attempt_id,
-        "study_mode": "formal" if formal else "candidate_noncanonical",
+        "study_mode": FORMAL_STUDY_MODE if formal else "candidate_noncanonical",
         "attempt_replacement": replacement,
         "replacement_retention": replacement_retention,
         "runtime_preflight_retention": runtime_retention,
@@ -7576,11 +7933,11 @@ def _aborted_attempt_result(
         "planned_unit_count": len(plan),
         "system_violation_units": int(unit_classification == "system_violation"),
         "protocol_status": (
-            "formal_protocol_v3_amendment_006"
+            FORMAL_STUDY_MODE
             if formal
             else "candidate_noncanonical"
         ),
-        "study_mode": "formal" if formal else "candidate_noncanonical",
+        "study_mode": FORMAL_STUDY_MODE if formal else "candidate_noncanonical",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config": asdict(config),
         "plan": list(plan),

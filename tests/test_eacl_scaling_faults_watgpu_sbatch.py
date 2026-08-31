@@ -96,6 +96,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     assert 'export RAP_EACL_LAUNCH_SCRIPT="${LAUNCH_SCRIPT}"' in source
     assert 'export RAP_EACL_SETUP_LOG="${SETUP_LOG}"' in source
     assert 'export RAP_EACL_SETUP_RECEIPT="${SETUP_RECEIPT}"' in source
+    assert 'export RAP_EACL_SOCKET_ROOT="${SOCKET_ROOT}"' in source
     assert (
         'readonly LAUNCH_SCRIPT="${REPO_ROOT}/'
         'experiments/eacl2027/run_scaling_faults_watgpu.sbatch"'
@@ -172,10 +173,13 @@ def test_launcher_builds_a_fresh_hashed_node_local_environment_offline():
         'readonly NODE_RUNTIME_ROOT="/tmp/rap-eacl-systems-formal-v3-'
         '${SLURM_JOB_ID}"'
     ) in source
+    assert 'readonly SOCKET_ROOT="/tmp/rf3-${SLURM_JOB_ID}"' in source
     assert 'readonly HOME_ROOT="${NODE_RUNTIME_ROOT}/home"' in source
     assert 'readonly VENV_ROOT="${NODE_RUNTIME_ROOT}/venv"' in source
     assert '[[ -e "${NODE_RUNTIME_ROOT}" ]]' in source
+    assert '[[ -e "${SOCKET_ROOT}" || -L "${SOCKET_ROOT}" ]]' in source
     assert '/usr/bin/mkdir --mode=700 -- "${NODE_RUNTIME_ROOT}"' in source
+    assert '/usr/bin/mkdir --mode=700 -- "${SOCKET_ROOT}"' in source
     assert '/usr/bin/mkdir --mode=700 -- "${HOME_ROOT}"' in source
     assert 'export HOME="${HOME_ROOT}"' in source
     assert "SLURM_TMPDIR" not in source
@@ -219,8 +223,24 @@ def test_launcher_builds_a_fresh_hashed_node_local_environment_offline():
         '"setup_log_path": str(setup_log)',
         '"setup_log_sha256": sha256_file(setup_log)',
         '"setup_log_content": setup_log.read_text(encoding="utf-8")',
+        '"socket_root": str(socket_root)',
+        '"socket_preflight": socket_preflight',
     ):
         assert required_json_field in source
+
+    receipt_code = _receipt_python(source)
+    for capability_check in (
+        'socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)',
+        'server.bind(str(socket_endpoint))',
+        'server.listen(1)',
+        'client.connect(str(socket_endpoint))',
+        'accepted, _ = server.accept()',
+        'socket_endpoint.unlink()',
+        '"maximum_encoded_pathname_bytes": 107',
+        '"bind_connect_accept_payload_equal": received == payload',
+        '"endpoint_removed_after_probe": not os.path.lexists(socket_endpoint)',
+    ):
+        assert capability_check in receipt_code
 
 
 def test_launcher_passes_the_exact_explicit_formal_cli():
