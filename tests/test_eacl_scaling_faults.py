@@ -16,6 +16,41 @@ from experiments.eacl2027 import scaling_faults_attempts as attempts_contract
 from experiments.eacl2027 import scaling_faults_runtime as systems_runtime
 
 
+def _amendment_008_contract() -> dict:
+    return {
+        "amendment_id": "protocol-v3-amendment-008",
+        "freeze_state": "frozen_whole_attempt_protocol_correction",
+        "frozen_utc": "2026-08-31T12:00:00Z",
+        "status": "frozen_whole_attempt_protocol_correction",
+        "effective_protocol_identity": {
+            "explicit_one_time_overrides": {
+                "formal_effective_config.study_mode": (
+                    systems.FORMAL_STUDY_MODE_OVERRIDE_TEXT
+                ),
+                "formal_effective_config.fault_names_in_order": (
+                    systems.FORMAL_FAULT_OVERRIDE_TEXT
+                )
+            }
+        },
+        "corrected_direct_paw_cache_contract": {
+            "r03_paw_cache_dir_exact": (
+                "/u4/yuntian/rap-eacl-systems-formal-v3/"
+                "runtime/cache/programasweights"
+            )
+        },
+        "full_attempt_plan": {
+            "full_plan": {
+                "unit_count": 430,
+                "canonical_sha256": systems.FORMAL_FULL_PLAN_SHA256,
+                "stored_json_sha256": systems.FORMAL_FULL_PLAN_STORED_SHA256,
+                "ordered_membership_sha256": (
+                    systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
+                ),
+            }
+        },
+    }
+
+
 def _artifact(rule_id: str, name: str) -> systems.RuleArtifact:
     raw_source = f'''from rules_as_programs import rule
 
@@ -364,6 +399,30 @@ def test_formal_study_plan_enumerates_all_430_units():
     assert len({(item["component"], item["unit_id"]) for item in plan}) == 430
 
 
+def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
+    planned = systems.build_full_attempt_plan(
+        systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS)
+    )
+
+    assert len(planned["full_plan"]) == 430
+    assert planned["canonical_sha256"] == systems.FORMAL_FULL_PLAN_SHA256
+    assert (
+        planned["ordered_membership_sha256"]
+        == systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
+    )
+    assert planned["primary_source_attempt_id"].endswith("-r03")
+    assert planned["full_plan"] == systems.build_study_plan(
+        systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),
+        fault_names=systems.FORMAL_FAULTS,
+        run_offline_probe=True,
+    )
+    assert planned["execution_roles"] == {
+        "provenance_rerun": {"start": 0, "stop": 279, "count": 279},
+        "direct_first_completion": {"start": 279, "stop": 350, "count": 71},
+        "deterministic_first_execution": {"start": 350, "stop": 430, "count": 80},
+    }
+
+
 def test_count_parser_and_soak_validation_reject_ambiguous_protocols():
     assert systems.parse_int_tuple("1, 2,8", allowed={1, 2, 4, 8}) == (1, 2, 8)
 
@@ -494,20 +553,19 @@ def test_fault_registry_marks_remote_compiler_outage_as_infeasible():
 
 def test_formal_gate_requires_exact_design_and_all_partition(monkeypatch):
     config = systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS)
-    feasible = tuple(
-        name
-        for name, capability in systems.FAULT_CAPABILITIES.items()
-        if capability["feasible"]
-    )
+    repair_faults = systems.FORMAL_FAULTS
     monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
-    contract = json.loads(systems.FORMAL_AMENDMENT.read_text())
-    contract["freeze_state"] = "frozen_outcome_aware_repair"
-    contract["frozen_utc"] = "2026-08-30T17:45:00Z"
+    contract = _amendment_008_contract()
     monkeypatch.setattr(systems, "_formal_contract", lambda: contract)
+    effective = systems._formal_effective_config()
+    assert effective["study_mode"] == "formal_protocol_v3_amendment_008"
+    assert effective["fault_names_in_order"] == list(
+        systems.FORMAL_FAULTS
+    )
 
     systems._validate_formal_config(
         config,
-        fault_names=feasible,
+        fault_names=repair_faults,
         run_offline_probe=True,
         strict=True,
         require_partition=True,
@@ -517,7 +575,7 @@ def test_formal_gate_requires_exact_design_and_all_partition(monkeypatch):
     with pytest.raises(systems.SystemsHarnessError, match="ALL"):
         systems._validate_formal_config(
             config,
-            fault_names=feasible,
+            fault_names=repair_faults,
             run_offline_probe=True,
             strict=True,
             require_partition=True,
@@ -1083,6 +1141,15 @@ def test_formal_main_captures_cache_end_after_run_study_abort(monkeypatch, tmp_p
                 "cache_and_dependency_receipt": {
                     "formal_attempt_root": str(attempts)
                 }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        systems,
+        "_formal_runtime_profile",
+        lambda: {
+            "cache_and_dependency_receipt": {
+                "formal_attempt_root": str(attempts)
             }
         },
     )
@@ -1764,19 +1831,13 @@ def test_reducer_retains_missing_and_censored_attempts_and_standalone_matches(tm
     )
 
 def test_formal_gate_pins_every_latency_affecting_config_field(monkeypatch):
-    feasible = tuple(
-        name
-        for name, capability in systems.FAULT_CAPABILITIES.items()
-        if capability["feasible"]
-    )
+    repair_faults = systems.FORMAL_FAULTS
     monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
-    contract = json.loads(systems.FORMAL_AMENDMENT.read_text())
-    contract["freeze_state"] = "frozen_outcome_aware_repair"
-    contract["frozen_utc"] = "2026-08-30T17:45:00Z"
+    contract = _amendment_008_contract()
     monkeypatch.setattr(systems, "_formal_contract", lambda: contract)
     systems._validate_formal_config(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),
-        fault_names=feasible,
+        fault_names=repair_faults,
         run_offline_probe=True,
         strict=True,
         require_partition=True,
@@ -1787,7 +1848,7 @@ def test_formal_gate_pins_every_latency_affecting_config_field(monkeypatch):
                 soak_events=systems.DEFAULT_SOAK_EVENTS,
                 warmups_per_project=2,
             ),
-            fault_names=feasible,
+            fault_names=repair_faults,
             run_offline_probe=True,
             strict=True,
             require_partition=True,
@@ -1795,17 +1856,14 @@ def test_formal_gate_pins_every_latency_affecting_config_field(monkeypatch):
 
 
 def test_formal_contract_refuses_draft_even_when_hash_matches(monkeypatch, tmp_path):
-    draft = json.loads(systems.FORMAL_AMENDMENT.read_text(encoding="utf-8"))
-    draft["freeze_state"] = "draft_outcome_aware_repair"
+    draft = json.loads(systems.FORMAL_BASE_AMENDMENT.read_text(encoding="utf-8"))
+    draft["amendment_id"] = "protocol-v3-amendment-008"
+    draft["freeze_state"] = "draft_outcome_aware_component_protocol_correction"
+    draft["status"] = "draft"
     draft["frozen_utc"] = None
     draft_path = tmp_path / "draft-amendment.json"
     draft_path.write_text(json.dumps(draft, sort_keys=True) + "\n", encoding="utf-8")
     monkeypatch.setattr(systems, "FORMAL_AMENDMENT", draft_path)
-    monkeypatch.setattr(
-        systems,
-        "FORMAL_AMENDMENT_SHA256",
-        hashlib.sha256(draft_path.read_bytes()).hexdigest(),
-    )
     with pytest.raises(systems.SystemsHarnessError, match="not frozen"):
         systems._formal_contract()
 
@@ -2014,6 +2072,156 @@ def test_replacement_launch_binding_requires_verified_immediate_predecessor(tmp_
         systems.replacement_launch_binding(successor, str(replacement_path))
 
 
+def test_whole_attempt_retention_expands_and_revalidates_sealed_canary_archive(
+    tmp_path,
+):
+    def file_receipt(path):
+        resolved = path.resolve()
+        return {
+            "path": str(resolved),
+            "bytes": resolved.stat().st_size,
+            "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+        }
+
+    replacement_path = tmp_path / "replacement.json"
+    replacement_path.write_bytes(b"{}\n")
+    predecessor = tmp_path / "formal-study-r02"
+    predecessor.mkdir()
+    predecessor_launch = predecessor / "launch.json"
+    predecessor_launch.write_bytes(b"{}\n")
+
+    archive = tmp_path / "canary-archive"
+    archive.mkdir()
+    canary_job_id = "123"
+    archive_member_names = [
+        template.replace("<job_id>", canary_job_id)
+        for template in attempts_contract._COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES
+    ]
+    for index, name in enumerate(archive_member_names):
+        (archive / name).write_bytes(f"member-{index}\n".encode())
+    member_paths = sorted(
+        (path.resolve() for path in archive.iterdir()),
+        key=lambda path: os.fsencode(str(path)),
+    )
+    manifest = archive / "evidence.sha256"
+    manifest.write_bytes(
+        b"".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}\n".encode()
+            for path in member_paths
+        )
+    )
+    sidecar = archive / "evidence.sha256.sha256"
+    sidecar.write_bytes(
+        f"{hashlib.sha256(manifest.read_bytes()).hexdigest()}  {manifest.resolve()}\n".encode()
+    )
+    archive_files = [
+        {"basename": path.name, **file_receipt(path)}
+        for path in sorted(archive.iterdir())
+    ]
+
+    evidence_kinds = [
+        "launch_wide_cache_root_adjudication",
+        "paw_cache_semantics_receipt",
+        "all_partition_paw_cache_canary",
+        "whole_attempt_replacement_validation",
+        "r02_effective_cache_forensic_inventory",
+        "r02_terminal_archive",
+        "scheduler_sacct",
+        "scheduler_stdout",
+        "scheduler_stderr",
+    ]
+    evidence = []
+    for index, kind in enumerate(evidence_kinds):
+        if kind == "all_partition_paw_cache_canary":
+            path = sidecar
+        else:
+            path = tmp_path / f"evidence-{index}.txt"
+            path.write_bytes(f"{kind}\n".encode())
+        evidence.append({"kind": kind, **file_receipt(path)})
+    selection = evidence[3]
+    replacement = {
+        "kind": "replacement_attempt",
+        "receipt_path": str(replacement_path.resolve()),
+        "receipt_bytes": replacement_path.stat().st_size,
+        "receipt_sha256": hashlib.sha256(replacement_path.read_bytes()).hexdigest(),
+        "predecessor_artifacts": {
+            "launch.json": file_receipt(predecessor_launch)
+        },
+        "predecessor_tree": [],
+        "evidence_receipts": evidence,
+        "whole_attempt_protocol_correction": {
+            "historical_validation": {
+                "receipt_path": selection["path"],
+                "receipt_bytes": selection["bytes"],
+                "receipt_sha256": selection["sha256"],
+            }
+        },
+        "r02_partial_terminal_forensics": {
+            "validated_canary_archive_files": archive_files
+        },
+    }
+
+    retention, copy_specs = systems._replacement_retention_plan(replacement)
+    canary_prefix = "replacement/evidence/002-all_partition_paw_cache_canary/"
+    canary_copies = [
+        item
+        for item in retention["copies"]
+        if item["retained_path"].startswith(canary_prefix)
+    ]
+    assert len(canary_copies) == 28
+    assert len({item["retained_path"] for item in canary_copies}) == 28
+    assert retention["references"] == [
+        {
+                "role": "gate:historical_validation",
+                "retained_path": (
+                    "replacement/evidence/"
+                    "003-whole_attempt_replacement_validation"
+                ),
+        }
+    ]
+    assert not any(
+        item["retained_path"] == "replacement/gates/historical-validation.json"
+        for item in retention["copies"]
+    )
+
+    successor = tmp_path / "formal-study-r03"
+    systems.AttemptRecorder(
+        successor,
+        {
+            "identity": {"replacement_retention": retention},
+            "plan": [],
+            "_prelaunch_copy_specs": copy_specs,
+        },
+    )
+    retained_archive = successor / canary_prefix.removesuffix("/")
+    assert retained_archive.is_dir()
+    assert len(list(retained_archive.iterdir())) == 28
+    retained_victim = retained_archive / "srun-client.stdout.log"
+    retained_victim.write_bytes(b"retained tamper\n")
+    with pytest.raises(
+        systems.SystemsHarnessError, match="basename mapping"
+    ):
+        attempts_contract._validate_retained_canary_archive_copy(
+            successor,
+            [
+                {"relative": Path(item["retained_path"])}
+                for item in canary_copies
+            ],
+        )
+
+    victim = archive / "srun-client.stderr.log"
+    original = victim.read_bytes()
+    victim.write_bytes(b"tampered\n")
+    with pytest.raises(systems.SystemsHarnessError, match="changed before copy"):
+        systems._replacement_retention_plan(replacement)
+    victim.write_bytes(original)
+    victim.unlink()
+    with pytest.raises(
+        systems.SystemsHarnessError, match="path collision or alias"
+    ):
+        systems._replacement_retention_plan(replacement)
+
+
 def test_replacement_binding_rejects_symlinked_attempt_ancestor(tmp_path):
     real_attempts = tmp_path / "real-attempts"
     real_attempts.mkdir()
@@ -2126,10 +2334,18 @@ def test_runtime_lock_rejects_any_external_inventory_change(tmp_path):
             paw_cache=cache,
         )
 
+    lock_path.write_text(
+        '{"schema_version":1,"schema_version":1,"wheelhouse":{},"paw_cache":{}}'
+    )
+    with pytest.raises(systems_runtime.RuntimeContractError, match="strict|invalid"):
+        systems_runtime.validate_runtime_lock(
+            lock_path, wheelhouse=wheelhouse, paw_cache=cache
+        )
 
-def test_cache_receipt_uses_nested_cache_and_gates_n_ctx(tmp_path):
-    cache = tmp_path / "cache"
-    content = cache / "programasweights"
+
+def test_cache_receipt_uses_direct_cache_root_and_gates_n_ctx(tmp_path):
+    cache = tmp_path / "cache" / "programasweights"
+    content = cache
     program_id = "program-1"
     program = content / "programs" / program_id
     program.mkdir(parents=True)
@@ -2153,7 +2369,13 @@ def test_cache_receipt_uses_nested_cache_and_gates_n_ctx(tmp_path):
     receipt = systems_runtime.cache_receipt(
         cache, [program_id], required_n_ctx=2048
     )
-    assert receipt["programasweights_subtree"] == str(content.resolve())
+    assert receipt["root"] == str(content.resolve())
+    assert receipt["required_direct_children"] == [
+        "base_models",
+        "programs",
+        "runtimes",
+    ]
+    assert "programasweights_subtree" not in receipt
     assert receipt["runtime_manifests"]["runtime-1"]["canonical_json_equal"]
     assert receipt["complete_tree"]["file_count"] == 5
     with pytest.raises(systems_runtime.RuntimeContractError, match="n_ctx mismatch"):
@@ -2291,3 +2513,76 @@ def test_node_local_socket_override_runs_real_production_path(monkeypatch, tmp_p
         assert not os.path.lexists(receipt["endpoint"])
     finally:
         socket_root.rmdir()
+
+
+def test_supervisor_observed_exit_preserves_exit_signal_and_spawn_traceback():
+    assert systems._supervisor_observed_exit(5, None) == {
+        "state": "waited",
+        "returncode": 5,
+        "exit_code": 5,
+        "signal": None,
+        "spawn_error": None,
+    }
+    assert systems._supervisor_observed_exit(-9, None) == {
+        "state": "waited",
+        "returncode": -9,
+        "exit_code": None,
+        "signal": 9,
+        "spawn_error": None,
+    }
+    try:
+        raise RuntimeError("synthetic spawn failure")
+    except RuntimeError as exc:
+        observed = systems._supervisor_observed_exit(None, exc)
+    assert observed["state"] == "not_started"
+    assert observed["spawn_error"]["type"] == "builtins.RuntimeError"
+    assert observed["spawn_error"]["message"] == "synthetic spawn failure"
+    assert "raise RuntimeError" in observed["spawn_error"]["traceback_utf8"]
+
+
+def test_supervisor_environment_is_complete_sanitized_and_all_partition(
+    monkeypatch,
+):
+    monkeypatch.setenv("SLURM_JOB_ID", "1524999")
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
+    monkeypatch.setenv("SPEECHIFY_API_KEY", "must-not-leak")
+    monkeypatch.setenv("PROGRAMASWEIGHTS_CACHE_DIR", "/wrong/cache")
+    monkeypatch.setattr(
+        systems,
+        "_formal_contract",
+        lambda: {
+            "corrected_direct_paw_cache_contract": {
+                "r03_paw_cache_dir_exact": "/formal/cache"
+            }
+        },
+    )
+
+    environment = systems._supervisor_environment()
+
+    assert environment["SLURM_JOB_ID"] == "1524999"
+    assert environment["SLURM_JOB_PARTITION"] == "ALL"
+    assert environment["SLURM_JOB_NODELIST"] == "watgpu108"
+    assert environment["PAW_CACHE_DIR"] == "/formal/cache"
+    assert environment["RAP_EACL_SUPERVISED_CHILD"] == "1"
+    assert "SPEECHIFY_API_KEY" not in environment
+    assert "PROGRAMASWEIGHTS_CACHE_DIR" not in environment
+    assert list(environment) == sorted(environment)
+
+
+def test_fatal_journal_item_preserves_invalid_complete_and_partial_bytes(tmp_path):
+    path = tmp_path / "interrupted.jsonl"
+    raw = b'{"ok":1}\nnot-json\n{"partial":'
+    path.write_bytes(raw)
+
+    item = systems._fatal_journal_item(path, tmp_path)
+
+    assert item["bytes"] == len(raw)
+    assert item["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert item["complete_lf_terminated_line_count"] == 2
+    assert item["strict_valid_complete_line_count"] == 1
+    assert item["invalid_complete_line_count"] == 1
+    assert item["trailing_fragment_bytes"] == len(b'{"partial":')
+    assert item["trailing_fragment_sha256"] == hashlib.sha256(
+        b'{"partial":'
+    ).hexdigest()

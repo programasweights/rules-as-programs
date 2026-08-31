@@ -62,6 +62,7 @@ from rules_as_programs.core.triggers import extract_input  # noqa: E402
 
 from experiments.eacl2027 import run_integrated as integrated  # noqa: E402
 from experiments.eacl2027.scaling_faults_attempts import (  # noqa: E402
+    _COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES,
     AttemptRecorder,
     SystemsHarnessError,
     UNIT_STATUSES,
@@ -89,11 +90,46 @@ EXTERNAL_OUTPUT = ROOT / "outputs" / "frozen" / "external-paw-finetuned.jsonl"
 EXTERNAL_DATASET = ROOT / "data" / "public" / "external.jsonl"
 PROTOCOL_V3 = ROOT / "protocol-v3.json"
 FORMAL_PARENT_AMENDMENT = ROOT / "protocol-v3-amendment-006.json"
-FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-007.json"
-FORMAL_AMENDMENT_SHA256 = (
+FORMAL_BASE_AMENDMENT = ROOT / "protocol-v3-amendment-007.json"
+FORMAL_BASE_AMENDMENT_SHA256 = (
     "540ee245cd025d3cb5c4146fb36ec30b7d54b40ccc74de78a3a4df9a06f4aa91"
 )
-FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_007"
+FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-008.json"
+FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
+FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
+    "For exact raw r03, study_mode is exactly "
+    "formal_protocol_v3_amendment_008 and is cross-bound without aliasing in "
+    "the effective-config receipt, setup receipt, launch identity, every "
+    "terminal result, raw result, and analyzer. study_mode is not inserted "
+    "into plan rows; r03 plan.json must be byte-for-byte equal to r02 plan.json "
+    "and retain the frozen canonical plan hash. The inherited "
+    "formal_protocol_v3_amendment_007 value remains exact for r01/r02 only."
+)
+FORMAL_FULL_PLAN_SHA256 = (
+    "4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c"
+)
+FORMAL_FULL_PLAN_STORED_SHA256 = (
+    "cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434"
+)
+FORMAL_FULL_PLAN_MEMBERSHIP_SHA256 = (
+    "cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162"
+)
+FORMAL_COMPONENT_ANALYSIS_ID = "protocol-v3-amendment-008-whole-attempt-replacement-v1"
+FORMAL_FAULTS = (
+    "daemon_crash",
+    "worker_exit",
+    "worker_timeout",
+    "sqlite_lock",
+    "malformed_payload",
+    "duplicate_delivery",
+    "deployment_failure",
+)
+FORMAL_FAULT_OVERRIDE_TEXT = (
+    "For exact r03, fault_names_in_order remains the complete inherited order "
+    "[daemon_crash, worker_exit, worker_timeout, sqlite_lock, malformed_payload, "
+    "duplicate_delivery, deployment_failure]. No family is omitted, synthesized, "
+    "or sourced from another attempt."
+)
 FROZEN_OUTPUT_DIR = (ROOT / "outputs" / "frozen").resolve()
 EXTERNAL_RULE_ORDER = (
     "3pcxewp5hggr1vsn",
@@ -131,8 +167,20 @@ EVALUATION_JOURNAL_ROTATION_BACKUPS = evaluation_log.MAX_BACKUPS
 SQLITE_BUSY_TIMEOUT_SECONDS = 5.0
 MAX_AF_UNIX_PATHNAME_BYTES = 107
 SOCKET_CLEANUP_TIMEOUT_SECONDS = 2.0
-FORMAL_RAW_ATTEMPT_ROOT = Path(
-    "/u4/yuntian/rap-eacl-systems-formal-v3/attempts"
+FORMAL_RAW_ATTEMPT_ROOT = Path("/u4/yuntian/rap-eacl-systems-formal-v3/attempts")
+FORMAL_SUPERVISOR_ROOT = Path(
+    "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/"
+    "formal-v3-20260831t051023z-r03"
+)
+FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r03"
+_SUPERVISOR_SENSITIVE_ENV_MARKERS = (
+    "API_KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "CREDENTIAL",
+    "AUTHORIZATION",
+    "PRIVATE_KEY",
 )
 PYTHON_SOCKET_BOUNDARY_ID = "cpython_socket_api_inet_v1"
 ACCOUNTING_FAILURE_KEYS = (
@@ -408,8 +456,10 @@ def _socket_unit_identity(
     unit_id: str | None,
 ) -> tuple[Path, str, str]:
     attempt_root = _formal_attempt_root(retained_runtime_root)
-    relative = retained_runtime_root.expanduser().resolve().relative_to(
-        attempt_root / "runtime"
+    relative = (
+        retained_runtime_root.expanduser()
+        .resolve()
+        .relative_to(attempt_root / "runtime")
     )
     parts = relative.parts
     derived_component = ""
@@ -439,7 +489,9 @@ def _socket_unit_identity(
     return attempt_root, observed_component, observed_unit_id
 
 
-def _validated_socket_root(environment: Mapping[str, str]) -> tuple[Path, os.stat_result]:
+def _validated_socket_root(
+    environment: Mapping[str, str],
+) -> tuple[Path, os.stat_result]:
     configured = str(environment.get("RAP_EACL_SOCKET_ROOT", ""))
     job_id = str(environment.get("SLURM_JOB_ID", ""))
     expected = f"/tmp/rf3-{job_id}"
@@ -519,9 +571,7 @@ def _enforce_socket_removed_after_shutdown(
         return
     endpoint = Path(endpoint_text)
     timeout_seconds = (
-        SOCKET_CLEANUP_TIMEOUT_SECONDS
-        if timeout_seconds is None
-        else timeout_seconds
+        SOCKET_CLEANUP_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     )
     deadline = time.monotonic() + max(0.0, timeout_seconds)
     while os.path.lexists(endpoint) and time.monotonic() < deadline:
@@ -920,6 +970,45 @@ def build_study_plan(
     return units
 
 
+def build_full_attempt_plan(config: MatrixConfig) -> dict[str, Any]:
+    """Build amendment-008's unchanged 430-row r03 plan and role partition.
+
+    Every primary row is sourced from r03.  The role labels describe why each
+    r03 execution occurs; they never select a value from r02 and never inspect
+    an observed r03 outcome.
+    """
+
+    full_plan = build_study_plan(
+        config,
+        fault_names=FORMAL_FAULTS,
+        run_offline_probe=True,
+    )
+    plan_keys = [
+        {
+            "plan_index": index,
+            "component": str(item["component"]),
+            "unit_id": str(item["unit_id"]),
+        }
+        for index, item in enumerate(full_plan)
+    ]
+    return {
+        "full_plan": full_plan,
+        "unit_count": len(full_plan),
+        "canonical_sha256": _sha256_bytes(_canonical_json_bytes(full_plan)),
+        "ordered_membership_sha256": _sha256_bytes(_canonical_json_bytes(plan_keys)),
+        "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+        "execution_roles": {
+            "provenance_rerun": {"start": 0, "stop": 279, "count": 279},
+            "direct_first_completion": {"start": 279, "stop": 350, "count": 71},
+            "deterministic_first_execution": {
+                "start": 350,
+                "stop": 430,
+                "count": 80,
+            },
+        },
+    }
+
+
 def _raw_event(
     project: Path,
     *,
@@ -1291,7 +1380,9 @@ class _IncrementalJsonlWriter:
 
     def receipt(self) -> dict[str, Any]:
         if not self.handle.closed:
-            raise SystemsHarnessError("incremental JSONL receipt requested before close")
+            raise SystemsHarnessError(
+                "incremental JSONL receipt requested before close"
+            )
         receipt = {
             "path": str(self.path),
             "records": self.count,
@@ -1303,9 +1394,7 @@ class _IncrementalJsonlWriter:
         # as provenance, but make the attempt-relative path authoritative.
         for parent in self.path.parents:
             if (parent / "launch.json").is_file():
-                receipt["attempt_relative_path"] = str(
-                    self.path.relative_to(parent)
-                )
+                receipt["attempt_relative_path"] = str(self.path.relative_to(parent))
                 break
         return receipt
 
@@ -1494,8 +1583,7 @@ class _EvaluationJournalTailer:
             "held_inode_count": len(held),
             "named_inode_count": len(named),
             "unreachable_inodes": [
-                {"device": device, "inode": inode}
-                for device, inode in unreachable
+                {"device": device, "inode": inode} for device, inode in unreachable
             ],
             "named_paths": sorted(paths),
             "rotation_backups": EVALUATION_JOURNAL_ROTATION_BACKUPS,
@@ -1885,7 +1973,11 @@ def _wait_for_expected(
         terminal = _terminal_keys(last_rows, expected)
         for input_hash, keys in expected_by_input.items():
             present = terminal.intersection(keys)
-            if observed_ns <= deadline_ns and present and input_hash not in first_visible:
+            if (
+                observed_ns <= deadline_ns
+                and present
+                and input_hash not in first_visible
+            ):
                 first_visible[input_hash] = observed_ns
             if keys.issubset(terminal):
                 if observed_ns <= deadline_ns and input_hash not in all_visible:
@@ -1908,18 +2000,22 @@ def _wait_for_expected(
             last_observed_ns = settle_observed_ns
             settle_terminal = _terminal_keys(last_rows, expected)
             settle_complete = all(
-                keys.issubset(settle_terminal)
-                for keys in expected_by_input.values()
+                keys.issubset(settle_terminal) for keys in expected_by_input.values()
             )
             if settle_complete and settle_observed_ns <= deadline_ns:
-                return last_rows, first_visible, all_visible, {
-                    "timed_out": False,
-                    "missing_input_sha256": [],
-                    "deadline_monotonic_ns": deadline_ns,
-                    "last_observed_monotonic_ns": settle_observed_ns,
-                    "settle_seconds": QUERY_POLL_INTERVAL_SECONDS,
-                    "query_samples": query_samples,
-                }
+                return (
+                    last_rows,
+                    first_visible,
+                    all_visible,
+                    {
+                        "timed_out": False,
+                        "missing_input_sha256": [],
+                        "deadline_monotonic_ns": deadline_ns,
+                        "last_observed_monotonic_ns": settle_observed_ns,
+                        "settle_seconds": QUERY_POLL_INTERVAL_SECONDS,
+                        "query_samples": query_samples,
+                    },
+                )
             if settle_complete:
                 after_deadline_visible.update(expected_by_input)
             break
@@ -1928,14 +2024,19 @@ def _wait_for_expected(
     # A missing/slow system outcome is measured data, not a harness exception.
     # Return the last complete observation so callers can retain exact loss and
     # right-censoring rather than discarding the condition.
-    return last_rows, first_visible, all_visible, {
-        "timed_out": True,
-        "missing_input_sha256": missing,
-        "deadline_monotonic_ns": deadline_ns,
-        "last_observed_monotonic_ns": last_observed_ns,
-        "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
-        "query_samples": query_samples,
-    }
+    return (
+        last_rows,
+        first_visible,
+        all_visible,
+        {
+            "timed_out": True,
+            "missing_input_sha256": missing,
+            "deadline_monotonic_ns": deadline_ns,
+            "last_observed_monotonic_ns": last_observed_ns,
+            "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
+            "query_samples": query_samples,
+        },
+    )
 
 
 def _wait_for_expected_incremental(
@@ -2073,26 +2174,31 @@ def _wait_for_expected_incremental(
         }
     )
     missing = sorted(set(expected_by_input) - set(all_visible))
-    return last_rows, first_visible, all_visible, {
-        "timed_out": bool(missing),
-        "integrity_violation": bool(not settle_complete or history_limit_saturated),
-        "history_limit_saturated": history_limit_saturated,
-        "missing_input_sha256": missing,
-        "deadline_monotonic_ns": deadline_ns,
-        "last_observed_monotonic_ns": max(
-            settle_finished_ns, last_observed_ns or settle_finished_ns
-        ),
-        "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
-        "journal_polls": journal_polls,
-        "settle": {
-            "seconds": QUERY_POLL_INTERVAL_SECONDS,
-            "started_monotonic_ns": settle_started_ns,
-            "finished_monotonic_ns": settle_finished_ns,
-            "complete": settle_complete,
+    return (
+        last_rows,
+        first_visible,
+        all_visible,
+        {
+            "timed_out": bool(missing),
+            "integrity_violation": bool(not settle_complete or history_limit_saturated),
+            "history_limit_saturated": history_limit_saturated,
+            "missing_input_sha256": missing,
+            "deadline_monotonic_ns": deadline_ns,
+            "last_observed_monotonic_ns": max(
+                settle_finished_ns, last_observed_ns or settle_finished_ns
+            ),
+            "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
+            "journal_polls": journal_polls,
+            "settle": {
+                "seconds": QUERY_POLL_INTERVAL_SECONDS,
+                "started_monotonic_ns": settle_started_ns,
+                "finished_monotonic_ns": settle_finished_ns,
+                "complete": settle_complete,
+            },
+            "query_samples": query_samples,
+            "history_limits": dict(sorted(history_limits.items())),
         },
-        "query_samples": query_samples,
-        "history_limits": dict(sorted(history_limits.items())),
-    }
+    )
 
 
 def _process_tree_snapshot(pid: int) -> dict[str, Any]:
@@ -2170,9 +2276,7 @@ class _ResourceSampler:
                 sample["observed_monotonic_ns"] = time.perf_counter_ns()
                 sample["observed_utc"] = datetime.now(timezone.utc).isoformat()
                 self.sample_count += 1
-                self.peak_rss_bytes = max(
-                    self.peak_rss_bytes, int(sample["rss_bytes"])
-                )
+                self.peak_rss_bytes = max(self.peak_rss_bytes, int(sample["rss_bytes"]))
                 descriptors = sample.get("file_descriptors")
                 if descriptors is not None:
                     self.peak_file_descriptors = max(
@@ -2180,9 +2284,7 @@ class _ResourceSampler:
                     )
                 self.rss_points.append(
                     {
-                        "observed_monotonic_ns": int(
-                            sample["observed_monotonic_ns"]
-                        ),
+                        "observed_monotonic_ns": int(sample["observed_monotonic_ns"]),
                         "rss_bytes": int(sample["rss_bytes"]),
                     }
                 )
@@ -2268,16 +2370,10 @@ def _storage_snapshot(fixture: RunningFixture) -> dict[str, Any]:
     }
     database = rap_config.db_path()
     named_bytes = {
-        "ledger_tree": _tree_size(fixture.isolated_root / "state" / "ledgers")[
-            "bytes"
-        ],
+        "ledger_tree": _tree_size(fixture.isolated_root / "state" / "ledgers")["bytes"],
         "finding_database": _path_bytes(database),
-        "finding_database_wal": _path_bytes(
-            database.with_name(f"{database.name}-wal")
-        ),
-        "finding_database_shm": _path_bytes(
-            database.with_name(f"{database.name}-shm")
-        ),
+        "finding_database_wal": _path_bytes(database.with_name(f"{database.name}-wal")),
+        "finding_database_shm": _path_bytes(database.with_name(f"{database.name}-shm")),
         "audit_logs": {
             str(project.root): _path_bytes(
                 rap_config.project_log_file(str(project.root))
@@ -2448,9 +2544,7 @@ def _linear_slope(
     denominator = sum((x - mean_x) ** 2 for x, _y in points)
     slope = sum((x - mean_x) * (y - mean_y) for x, y in points) / denominator
     intercept = mean_y - slope * mean_x
-    residual_sum_squares = sum(
-        (y - (intercept + slope * x)) ** 2 for x, y in points
-    )
+    residual_sum_squares = sum((y - (intercept + slope * x)) ** 2 for x, y in points)
     total_sum_squares = sum((y - mean_y) ** 2 for _x, y in points)
     r_squared = (
         1.0
@@ -2478,9 +2572,7 @@ def _rss_slope(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
     normalized = [
         {
             **item,
-            "elapsed_seconds": (
-                int(item["observed_monotonic_ns"]) - origin
-            )
+            "elapsed_seconds": (int(item["observed_monotonic_ns"]) - origin)
             / 1_000_000_000,
         }
         for item in samples
@@ -2598,7 +2690,9 @@ def _invoke_event_group(
     expected = _expected_for_events(events, fixture.artifacts)
     expected_rows_by_project = Counter(item.project_root for item in expected)
     history_limits = {
-        str(project.root): int((baseline_rows_by_project or {}).get(str(project.root), 0))
+        str(project.root): int(
+            (baseline_rows_by_project or {}).get(str(project.root), 0)
+        )
         + int(expected_rows_by_project[str(project.root)])
         + MATRIX_HISTORY_DUPLICATE_HEADROOM
         for project in fixture.projects
@@ -2623,9 +2717,8 @@ def _invoke_event_group(
                 checkpoint_writer=checkpoint_writer,
                 history_limits=history_limits,
             )
-        return _wait_for_expected(
-            fixture.projects, wait_expected, started, timeout
-        )
+        return _wait_for_expected(fixture.projects, wait_expected, started, timeout)
+
     samples: list[dict[str, Any]] = []
 
     def sample_for(
@@ -2682,9 +2775,7 @@ def _invoke_event_group(
                 else None
             ),
             "latency_censored_at_ms": (
-                None
-                if complete_ns is not None
-                else round(censor_ns / 1_000_000, 3)
+                None if complete_ns is not None else round(censor_ns / 1_000_000, 3)
             ),
             "hook": {
                 "returncode": hook.get("returncode"),
@@ -2751,9 +2842,7 @@ def _invoke_event_group(
             str(project.root): _evaluation_history(project.root)
             for project in fixture.projects
         }
-        workload_start_ns = min(
-            int(item["submitted_monotonic_ns"]) for item in samples
-        )
+        workload_start_ns = min(int(item["submitted_monotonic_ns"]) for item in samples)
         workload_end_ns = max(
             int(
                 item.get("all_visible_monotonic_ns")
@@ -2761,19 +2850,24 @@ def _invoke_event_group(
             )
             for item in samples
         )
-        return samples, expected, final_rows, {
-            "timed_out": bool(timed_out_inputs),
-            "integrity_violation": integrity_violation,
-            "history_limit_saturated": history_limit_saturated,
-            "missing_input_sha256": sorted(set(timed_out_inputs)),
-            "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
-            "journal_polls": journal_polls,
-            "per_event_wait": per_event_wait,
-            "query_samples": query_samples,
-            "burst_queue_drain_ns": None,
-            "burst_queue_drain_ms": None,
-            "workload_wall_ns": workload_end_ns - workload_start_ns,
-        }
+        return (
+            samples,
+            expected,
+            final_rows,
+            {
+                "timed_out": bool(timed_out_inputs),
+                "integrity_violation": integrity_violation,
+                "history_limit_saturated": history_limit_saturated,
+                "missing_input_sha256": sorted(set(timed_out_inputs)),
+                "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
+                "journal_polls": journal_polls,
+                "per_event_wait": per_event_wait,
+                "query_samples": query_samples,
+                "burst_queue_drain_ns": None,
+                "burst_queue_drain_ms": None,
+                "workload_wall_ns": workload_end_ns - workload_start_ns,
+            },
+        )
     if mode != "burst":
         raise ValueError(f"unsupported event-group mode {mode!r}")
     hooks: dict[str, dict[str, Any]] = {}
@@ -3036,9 +3130,7 @@ def run_condition(
         resources_before = _process_tree_snapshot(fixture.daemon.pid)
         storage_before = _storage_snapshot(fixture)
         started_wall_time = time.time()
-        events = _build_events(
-            fixture, condition_id, event_count, schedule=schedule
-        )
+        events = _build_events(fixture, condition_id, event_count, schedule=schedule)
         workload_started_ns = time.perf_counter_ns()
         with (
             _ResourceSampler(fixture.daemon.pid) as sampler,
@@ -3114,8 +3206,7 @@ def run_condition(
         }
         fairness = _fairness_summary(schedule, project_count, complete_by_project)
         workload_wall_ns = int(
-            wait.get("workload_wall_ns")
-            or (workload_finished_ns - workload_started_ns)
+            wait.get("workload_wall_ns") or (workload_finished_ns - workload_started_ns)
         )
         wall_seconds = workload_wall_ns / 1_000_000_000
         accounting_failure = any(accounting.get(key) for key in ACCOUNTING_FAILURE_KEYS)
@@ -3145,9 +3236,7 @@ def run_condition(
             int(item["latency_ns"]) for item in wait.get("query_samples", [])
         ]
         return {
-            "status": (
-                "system_violation" if system_failure else "completed"
-            ),
+            "status": ("system_violation" if system_failure else "completed"),
             "performance_failures_are_retained": True,
             "condition_id": condition_id,
             "rule_count": rule_count,
@@ -3190,9 +3279,7 @@ def run_condition(
                 "applicable": mode == "burst",
                 "value_ns": wait.get("burst_queue_drain_ns"),
                 "display_ms": wait.get("burst_queue_drain_ms"),
-                "right_censored_at_ns": wait.get(
-                    "burst_queue_drain_censored_at_ns"
-                ),
+                "right_censored_at_ns": wait.get("burst_queue_drain_censored_at_ns"),
             },
             "per_project_event_to_all_p95_ms": project_p95,
             "per_project_p95_fairness_range_ms": fairness["range_ms"],
@@ -3454,9 +3541,7 @@ def _invoke_soak_batch(
         hook = hooks[input_hash]
         journal_ns = all_terminal_ns.get(input_hash)
         checkpoint_latency_ns = (
-            int(checkpoint_ns) - submitted_ns
-            if checkpoint_within_deadline
-            else None
+            int(checkpoint_ns) - submitted_ns if checkpoint_within_deadline else None
         )
         censor_ns = max(0, deadline_ns - submitted_ns)
         hook_latency_ns = int(hook["exited_ns"]) - int(hook["started_ns"])
@@ -3508,42 +3593,49 @@ def _invoke_soak_batch(
         if checkpoint_within_deadline
         else None
     )
-    return samples, expected, checkpoint_rows, {
-        "batch_id": batch_id,
-        "expected_key_set_sha256": expected_key_set_sha256,
-        "timed_out": not checkpoint_within_deadline,
-        "deadline_monotonic_ns": deadline_ns,
-        "missing_input_sha256": sorted(
-            set(expected_by_input) - set(all_terminal_ns)
-        ),
-        "journal_polls": journal_polls,
-        "journal_bytes_read": journal_bytes_read,
-        "journal_records_read": journal_records_read,
-        "journal_rotation_bytes": EVALUATION_JOURNAL_ROTATION_BYTES,
-        "single_rotation_volume_exceeded_diagnostic": (
-            single_rotation_volume_exceeded
-        ),
-        "journal_terminal_inputs": len(all_terminal_ns),
-        "journal_terminal_after_deadline_input_sha256": sorted(
-            late_all_terminal_ns
-        ),
-        "settle": settle,
-        "history_checkpoint": {
-            key: value for key, value in checkpoint.items() if key != "query_samples"
+    return (
+        samples,
+        expected,
+        checkpoint_rows,
+        {
+            "batch_id": batch_id,
+            "expected_key_set_sha256": expected_key_set_sha256,
+            "timed_out": not checkpoint_within_deadline,
+            "deadline_monotonic_ns": deadline_ns,
+            "missing_input_sha256": sorted(
+                set(expected_by_input) - set(all_terminal_ns)
+            ),
+            "journal_polls": journal_polls,
+            "journal_bytes_read": journal_bytes_read,
+            "journal_records_read": journal_records_read,
+            "journal_rotation_bytes": EVALUATION_JOURNAL_ROTATION_BYTES,
+            "single_rotation_volume_exceeded_diagnostic": (
+                single_rotation_volume_exceeded
+            ),
+            "journal_terminal_inputs": len(all_terminal_ns),
+            "journal_terminal_after_deadline_input_sha256": sorted(
+                late_all_terminal_ns
+            ),
+            "settle": settle,
+            "history_checkpoint": {
+                key: value
+                for key, value in checkpoint.items()
+                if key != "query_samples"
+            },
+            "query_samples": list(checkpoint.get("query_samples") or []),
+            "burst_queue_drain_ns": queue_drain_ns,
+            "burst_queue_drain_ms": (
+                round(queue_drain_ns / 1_000_000, 3)
+                if queue_drain_ns is not None
+                else None
+            ),
+            "workload_wall_ns": (
+                int(checkpoint_ns) - min(submissions.values())
+                if checkpoint_within_deadline
+                else max(0, deadline_ns - min(submissions.values()))
+            ),
         },
-        "query_samples": list(checkpoint.get("query_samples") or []),
-        "burst_queue_drain_ns": queue_drain_ns,
-        "burst_queue_drain_ms": (
-            round(queue_drain_ns / 1_000_000, 3)
-            if queue_drain_ns is not None
-            else None
-        ),
-        "workload_wall_ns": (
-            int(checkpoint_ns) - min(submissions.values())
-            if checkpoint_within_deadline
-            else max(0, deadline_ns - min(submissions.values()))
-        ),
-    }
+    )
 
 
 def run_soak(
@@ -3701,9 +3793,7 @@ def run_soak(
                 batches.append(
                     {
                         "batch_id": condition_id,
-                        "expected_key_set_sha256": wait[
-                            "expected_key_set_sha256"
-                        ],
+                        "expected_key_set_sha256": wait["expected_key_set_sha256"],
                         "offset": offset,
                         "events": size,
                         "accounting": accounting,
@@ -3735,9 +3825,7 @@ def run_soak(
                 drain_timeout * 1_000_000_000
             )
             if unresolved_batch_expected:
-                unresolved_keys = {
-                    item.key for item in unresolved_batch_expected
-                }
+                unresolved_keys = {item.key for item in unresolved_batch_expected}
                 final_checkpoint: dict[str, Any] | None = None
                 final_checkpoint_rows: dict[str, list[dict[str, Any]]] = {}
                 final_journal_polls = 0
@@ -3761,10 +3849,7 @@ def run_soak(
                             SOAK_JOURNAL_POLL_INTERVAL_SECONDS,
                             max(
                                 0.0,
-                                (
-                                    final_drain_deadline_ns
-                                    - time.perf_counter_ns()
-                                )
+                                (final_drain_deadline_ns - time.perf_counter_ns())
                                 / 1_000_000_000,
                             ),
                         )
@@ -3774,10 +3859,7 @@ def run_soak(
                         "batch_id": str(unresolved_batch_id),
                         "expected_key_set_sha256": _sha256_bytes(
                             _canonical_json_bytes(
-                                [
-                                    _key_json(key)
-                                    for key in sorted(unresolved_keys)
-                                ]
+                                [_key_json(key) for key in sorted(unresolved_keys)]
                             )
                         ),
                         "complete": False,
@@ -3786,9 +3868,7 @@ def run_soak(
                         "visible_monotonic_ns": None,
                         "missing": [
                             _key_json(key)
-                            for key in sorted(
-                                unresolved_keys - tailer.terminal_keys
-                            )
+                            for key in sorted(unresolved_keys - tailer.terminal_keys)
                         ],
                         "query_samples": [],
                     }
@@ -3796,10 +3876,7 @@ def run_soak(
                 final_drain_wait = {
                     "timed_out": not bool(final_checkpoint.get("complete")),
                     "missing_input_sha256": sorted(
-                        {
-                            key[1]
-                            for key in unresolved_keys - tailer.terminal_keys
-                        }
+                        {key[1] for key in unresolved_keys - tailer.terminal_keys}
                     ),
                     "deadline_monotonic_ns": final_drain_deadline_ns,
                     "last_observed_monotonic_ns": (
@@ -3815,9 +3892,7 @@ def run_soak(
                     "checkpoint_rows": sum(
                         len(rows) for rows in final_checkpoint_rows.values()
                     ),
-                    "query_samples": list(
-                        final_checkpoint.get("query_samples") or []
-                    ),
+                    "query_samples": list(final_checkpoint.get("query_samples") or []),
                 }
             else:
                 final_drain_wait = {
@@ -3997,8 +4072,7 @@ def run_soak(
                 separators=(",", ":"),
             ).encode("utf-8")
             before_restart_receipt = _write_immutable_evidence(
-                fixture.isolated_root
-                / "soak-persisted-projection-before-restart.json",
+                fixture.isolated_root / "soak-persisted-projection-before-restart.json",
                 before_restart_bytes,
             )
         old_identity = fixture.identity
@@ -4050,9 +4124,7 @@ def run_soak(
                             [
                                 _finding_projection(Path(root), finding)
                                 for finding in findings
-                                if int(
-                                    finding.get("finding_id", finding.get("id", -1))
-                                )
+                                if int(finding.get("finding_id", finding.get("id", -1)))
                                 not in baseline_finding_ids
                             ]
                         )
@@ -4063,8 +4135,7 @@ def run_soak(
                 separators=(",", ":"),
             ).encode("utf-8")
             after_restart_receipt = _write_immutable_evidence(
-                fixture.isolated_root
-                / "soak-persisted-projection-after-restart.json",
+                fixture.isolated_root / "soak-persisted-projection-after-restart.json",
                 after_restart_bytes,
             )
             with _IncrementalJsonlWriter(
@@ -4087,9 +4158,7 @@ def run_soak(
                 "persisted_projection_sha256_before": _sha256_bytes(
                     before_restart_bytes
                 ),
-                "persisted_projection_sha256_after": _sha256_bytes(
-                    after_restart_bytes
-                ),
+                "persisted_projection_sha256_after": _sha256_bytes(after_restart_bytes),
                 "persisted_projection_before_receipt": before_restart_receipt,
                 "persisted_projection_after_receipt": after_restart_receipt,
                 "exact_projection_bytes_preserved": (
@@ -4145,9 +4214,7 @@ def run_soak(
             or not restart_persistence.get("exact_projection_bytes_preserved")
             or not bool(
                 (
-                    (restart_persistence.get("post_restart_event") or {}).get(
-                        "hook"
-                    )
+                    (restart_persistence.get("post_restart_event") or {}).get("hook")
                     or {}
                 ).get("contract_preserved")
             )
@@ -4164,10 +4231,7 @@ def run_soak(
             or restart_failure
         )
         first_submission_ns = min(
-            (
-                int(item["submitted_monotonic_ns"])
-                for item in all_samples
-            ),
+            (int(item["submitted_monotonic_ns"]) for item in all_samples),
             default=started_ns,
         )
         rss_window = [
@@ -4197,9 +4261,7 @@ def run_soak(
             "query_samples": query_samples if not fixture.retained else [],
             "incremental_evidence": incremental_evidence,
             "global_accounting": global_accounting,
-            "batch_accounting_diagnostic_sums_not_global": dict(
-                batch_accounting_sums
-            ),
+            "batch_accounting_diagnostic_sums_not_global": dict(batch_accounting_sums),
             "post_drain": {
                 "status": "completed" if true_drain_complete else "not_applicable",
                 "final_drain_timeout_seconds": drain_timeout,
@@ -4258,9 +4320,7 @@ def run_soak(
                     "start_first_submission_monotonic_ns": first_submission_ns,
                     "end_true_drain_monotonic_ns": true_drain_finished_ns,
                 },
-                "timestamped_samples": (
-                    rss_window if not fixture.retained else []
-                ),
+                "timestamped_samples": (rss_window if not fixture.retained else []),
                 "timestamped_samples_receipt": sampler.journal_receipt(),
                 "batch_checkpoints": resource_checkpoints,
                 "cpu_seconds_delta": round(
@@ -4435,9 +4495,7 @@ def _persisted_predictions(
         outcome = dict(row.get("outcome") or {})
         prediction_present = "result" in outcome and outcome.get("result") is not None
         persisted = (
-            str(outcome["result"]).encode("utf-8")
-            if prediction_present
-            else None
+            str(outcome["result"]).encode("utf-8") if prediction_present else None
         )
         values[rule_id] = {
             "status": str(row.get("status", "")),
@@ -4472,9 +4530,7 @@ def compare_persisted_predictions(
             if record.get("terminal_rows") != 1:
                 invalid_fields.append(f"{arm}.terminal_rows")
             if record.get("persisted_prediction_utf8_present") is not True:
-                invalid_fields.append(
-                    f"{arm}.persisted_prediction_utf8_present"
-                )
+                invalid_fields.append(f"{arm}.persisted_prediction_utf8_present")
         if left != right or invalid_fields:
             fields = sorted(
                 key
@@ -4503,9 +4559,7 @@ def _offline_arm_system_violation(
     accounting: Mapping[str, Any],
     sample: Mapping[str, Any] | None,
 ) -> bool:
-    hook_ok = bool(
-        sample and (sample.get("hook") or {}).get("contract_preserved")
-    )
+    hook_ok = bool(sample and (sample.get("hook") or {}).get("contract_preserved"))
     return bool(
         wait.get("timed_out")
         or wait.get("integrity_violation")
@@ -4683,9 +4737,7 @@ def run_offline_after_prepare(
                 )
                 online_hook_ok = bool(
                     online_samples
-                    and (online_samples[0].get("hook") or {}).get(
-                        "contract_preserved"
-                    )
+                    and (online_samples[0].get("hook") or {}).get("contract_preserved")
                 )
                 return {
                     "status": "system_violation",
@@ -4794,15 +4846,11 @@ def run_offline_after_prepare(
                 rows = {
                     str(projects[1].root): _full_evaluation_history(projects[1].root)
                 }
-                findings = {
-                    str(projects[1].root): _full_findings(projects[1].root)
-                }
+                findings = {str(projects[1].root): _full_findings(projects[1].root)}
                 accounting = account_evaluations(
                     rows, expected, selected, started_wall_time=started_wall
                 )
-                accounting["findings"] = account_findings(
-                    findings, rows, expected
-                )
+                accounting["findings"] = account_findings(findings, rows, expected)
                 blocked_attempts = _jsonl(block_log) if block_log.exists() else []
                 activation_records = (
                     _jsonl(activation_log) if activation_log.exists() else []
@@ -4868,15 +4916,10 @@ def run_offline_after_prepare(
                 }
                 online_hook_ok = bool(
                     online_samples
-                    and (online_samples[0].get("hook") or {}).get(
-                        "contract_preserved"
-                    )
+                    and (online_samples[0].get("hook") or {}).get("contract_preserved")
                 )
                 offline_hook_ok = bool(
-                    samples
-                    and (samples[0].get("hook") or {}).get(
-                        "contract_preserved"
-                    )
+                    samples and (samples[0].get("hook") or {}).get("contract_preserved")
                 )
                 online_arm_failure = _offline_arm_system_violation(
                     online_wait,
@@ -4896,11 +4939,7 @@ def run_offline_after_prepare(
                     or not comparison["exactly_equal"]
                 )
                 return {
-                    "status": (
-                        "system_violation"
-                        if system_failure
-                        else "completed"
-                    ),
+                    "status": ("system_violation" if system_failure else "completed"),
                     "prepared_online": True,
                     "fresh_offline_daemon": True,
                     "rule_count": rule_count,
@@ -4924,9 +4963,7 @@ def run_offline_after_prepare(
                     },
                     "online": {
                         "status": (
-                            "system_violation"
-                            if online_arm_failure
-                            else "completed"
+                            "system_violation" if online_arm_failure else "completed"
                         ),
                         "hook_contract_preserved": online_hook_ok,
                         "envelope": _envelope_projection(raw_online),
@@ -4942,9 +4979,7 @@ def run_offline_after_prepare(
                     },
                     "offline": {
                         "status": (
-                            "system_violation"
-                            if offline_arm_failure
-                            else "completed"
+                            "system_violation" if offline_arm_failure else "completed"
                         ),
                         "hook_contract_preserved": offline_hook_ok,
                         "envelope": _envelope_projection(raw_offline),
@@ -4956,17 +4991,13 @@ def run_offline_after_prepare(
                             if key != "query_samples"
                         },
                         "persisted_predictions": offline_predictions,
-                        "evidence": _fixture_evidence(
-                            offline_fixture, rows, findings
-                        ),
+                        "evidence": _fixture_evidence(offline_fixture, rows, findings),
                     },
                     "comparison": comparison,
                     "paired_event_to_all_latency": paired_latency,
                     "evidence": {
                         "online": online_evidence,
-                        "offline": _fixture_evidence(
-                            offline_fixture, rows, findings
-                        ),
+                        "offline": _fixture_evidence(offline_fixture, rows, findings),
                     },
                     "limitation": (
                         "This is the named CPython socket-API boundary, not an OS "
@@ -5067,7 +5098,9 @@ def _persistent_state_integrity(fixture: RunningFixture) -> dict[str, Any]:
         "sqlite_integrity_check": database_check,
         "database_error": database_error,
         "journal_parse_errors": journal_errors,
-        "ok": (database_check in (None, "ok") and not database_error and not journal_errors),
+        "ok": (
+            database_check in (None, "ok") and not database_error and not journal_errors
+        ),
     }
 
 
@@ -5332,13 +5365,10 @@ def _settle_and_force_fault_cleanup(
     final_orphans = final_settle.get("final_orphan_processes")
     final_scan_errors = list(final_settle.get("final_scan_errors") or [])
     measurable = retained_root is not None
-    safe_to_continue = (
-        not measurable
-        or (
-            bool(final_settle.get("completed_within_deadline"))
-            and final_orphans == []
-            and not final_scan_errors
-        )
+    safe_to_continue = not measurable or (
+        bool(final_settle.get("completed_within_deadline"))
+        and final_orphans == []
+        and not final_scan_errors
     )
     return {
         "initial_settle": initial_settle,
@@ -5419,9 +5449,7 @@ def _fault_daemon_crash(
             "faulting_hook_exit_ms": round(
                 (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
             ),
-            "faulting_hook_contract_preserved": bool(
-                hook.get("contract_preserved")
-            ),
+            "faulting_hook_contract_preserved": bool(hook.get("contract_preserved")),
             "faulting_hook": _hook_projection(hook),
             "faulting_event_evaluations": len(lost_rows),
             "faulting_event_expected_loss": len(lost_rows) == 0,
@@ -5516,9 +5544,7 @@ def _wait_for_process_stopped(
                 "observations": observations,
                 "error": {"type": type(exc).__name__, "message": str(exc)},
             }
-        observations.append(
-            {"observed_monotonic_ns": observed_ns, "status": status}
-        )
+        observations.append({"observed_monotonic_ns": observed_ns, "status": status})
         if status in stopped_statuses and observed_ns <= deadline_ns:
             return {
                 "confirmed": True,
@@ -5691,9 +5717,7 @@ def _fault_sqlite_lock(
             "faulting_hook_exit_ms": round(
                 (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
             ),
-            "faulting_hook_contract_preserved": bool(
-                hook.get("contract_preserved")
-            ),
+            "faulting_hook_contract_preserved": bool(hook.get("contract_preserved")),
             "faulting_hook": _hook_projection(hook),
             "faulting_evaluation_status": (row or {}).get("status", "missing"),
             "faulting_evaluation_outcome": (row or {}).get("outcome", {}),
@@ -5715,9 +5739,7 @@ def _fault_malformed_payload(
     with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         project = fixture.projects[0]
         baseline_rows = _full_evaluation_history(project.root)
-        baseline_ids = {
-            str(row.get("evaluation_id", "")) for row in baseline_rows
-        }
+        baseline_ids = {str(row.get("evaluation_id", "")) for row in baseline_rows}
         before = len(baseline_rows)
         malformed = _invoke_payload(
             project.wrapper, project.root, "{not-json", fixture.environment
@@ -5758,9 +5780,7 @@ def _fault_malformed_payload(
                     (malformed["exited_ns"] - malformed["started_ns"]) / 1_000_000,
                     3,
                 ),
-                "hook_contract_preserved": bool(
-                    malformed.get("contract_preserved")
-                ),
+                "hook_contract_preserved": bool(malformed.get("contract_preserved")),
                 "hook": _hook_projection(malformed),
                 "evaluation_history_delta": after - before,
                 "early_history_delta_is_diagnostic_only": True,
@@ -5810,8 +5830,7 @@ def _fault_evaluation_quiescence(
             "finished_monotonic_ns": finished_ns,
             "count": len(rows),
             "terminal_count": sum(
-                str(row.get("status", "")) in {"completed", "failed"}
-                for row in rows
+                str(row.get("status", "")) in {"completed", "failed"} for row in rows
             ),
             "input_sha256_counts": dict(
                 sorted(Counter(_input_hash_from_row(row) for row in rows).items())
@@ -6054,9 +6073,7 @@ def _fault_passed(name: str, result: dict[str, Any]) -> bool:
     recovery = dict(result.get("recovery") or {})
     recovery_accounting = recovery.get("accounting")
     recovery_hook_ok = bool(
-        ((recovery.get("sample") or {}).get("hook") or {}).get(
-            "contract_preserved"
-        )
+        ((recovery.get("sample") or {}).get("hook") or {}).get("contract_preserved")
     )
     if name == "duplicate_delivery":
         return (
@@ -6094,9 +6111,7 @@ def _fault_passed(name: str, result: dict[str, Any]) -> bool:
             cleanup_ok
             and integrity
             and bool(malformed.get("hook_contract_preserved"))
-            and (result.get("final_exact_evaluation_accounting") or {}).get(
-                "complete"
-            )
+            and (result.get("final_exact_evaluation_accounting") or {}).get("complete")
             and bool((oversized.get("hook") or {}).get("contract_preserved"))
             and oversized.get("status") == "failed"
             and oversized.get("error_code") == "input_too_large"
@@ -6121,9 +6136,7 @@ def _fault_passed(name: str, result: dict[str, Any]) -> bool:
             and (result.get("failed_outcome") or {}).get("status") == "failed"
             and (result.get("failed_outcome") or {}).get("error_code")
             == "invalid_output"
-            and bool(
-                (result.get("faulting_hook") or {}).get("contract_preserved")
-            )
+            and bool((result.get("faulting_hook") or {}).get("contract_preserved"))
             and bool(result.get("worker_replaced"))
             and result.get("old_worker_confirmed_absent") is True
             and bool(result.get("new_worker_pids"))
@@ -6156,9 +6169,7 @@ def _fault_passed(name: str, result: dict[str, Any]) -> bool:
     return cleanup_ok and integrity
 
 
-def _standardized_fault_outcomes(
-    name: str, result: dict[str, Any]
-) -> dict[str, Any]:
+def _standardized_fault_outcomes(name: str, result: dict[str, Any]) -> dict[str, Any]:
     recovery = dict(result.get("recovery") or {})
     hook = (
         result.get("faulting_hook")
@@ -6187,7 +6198,8 @@ def _standardized_fault_outcomes(
                 "findings": result.get("findings"),
             }
         ),
-        "healthy_recovery": recovery or {
+        "healthy_recovery": recovery
+        or {
             "sample": result.get("post_failure_sample"),
             "accounting": result.get("post_failure_accounting"),
         },
@@ -6196,9 +6208,7 @@ def _standardized_fault_outcomes(
         ),
         "orphan_process_count": result.get("orphan_process_count"),
         "orphan_process_count_status": result.get("orphan_process_count_status"),
-        "post_shutdown_process_cleanup": result.get(
-            "post_shutdown_process_cleanup"
-        ),
+        "post_shutdown_process_cleanup": result.get("post_shutdown_process_cleanup"),
         "persistent_state_integrity": result.get("persistent_state_integrity"),
         "operator_visible_incident_records": result.get(
             "operator_visible_incidents", []
@@ -6272,9 +6282,7 @@ def run_fault_suite(
                     },
                 )
             retained_root = (
-                recorder.root / "runtime" / "faults" / attempt_id
-                if recorder
-                else None
+                recorder.root / "runtime" / "faults" / attempt_id if recorder else None
             )
             probe_result: dict[str, Any] | None = None
             retained_exception: dict[str, Any] | None = None
@@ -6330,9 +6338,7 @@ def run_fault_suite(
                     "fault": name,
                     "repetition": repetition,
                     "status": retained_exception["status"],
-                    "classification_basis": retained_exception[
-                        "classification_basis"
-                    ],
+                    "classification_basis": retained_exception["classification_basis"],
                     "passed": False,
                     "started_utc": started_utc,
                     "finished_utc": datetime.now(timezone.utc).isoformat(),
@@ -6354,6 +6360,16 @@ def run_fault_suite(
                     ),
                     "cleanup": cleanup,
                 }
+            if (
+                recorder
+                and (
+                    (getattr(recorder, "manifest", {}).get("identity") or {}).get(
+                        "study_mode"
+                    )
+                )
+                == FORMAL_STUDY_MODE
+            ):
+                attempt["study_mode"] = FORMAL_STUDY_MODE
             attempts.append(attempt)
             if recorder:
                 recorder.record("faults", attempt_id, "terminal", attempt)
@@ -6369,20 +6385,15 @@ def run_fault_suite(
                 else "harness_error"
                 if any(item["status"] == "harness_error" for item in attempts)
                 else "infrastructure_error"
-                if any(
-                    item["status"] == "infrastructure_error" for item in attempts
-                )
+                if any(item["status"] == "infrastructure_error" for item in attempts)
                 else "unclassified_failure"
-                if any(
-                    item["status"] == "unclassified_failure" for item in attempts
-                )
+                if any(item["status"] == "unclassified_failure" for item in attempts)
                 else "system_violation"
             ),
             "capability": capability,
             "repetitions_planned": repetitions,
             "repetitions_completed": sum(
-                item["status"] in ("completed", "system_violation")
-                for item in attempts
+                item["status"] in ("completed", "system_violation") for item in attempts
             ),
             "repetitions_passed": sum(item["passed"] for item in attempts),
             "repetitions_system_violation": sum(
@@ -6454,7 +6465,9 @@ def reduce_matrix_attempts(
     observed_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in matrix:
         observed_by_id[str(item.get("condition_id", ""))].append(dict(item))
-    missing = [condition_id for condition_id in planned_ids if not observed_by_id[condition_id]]
+    missing = [
+        condition_id for condition_id in planned_ids if not observed_by_id[condition_id]
+    ]
     duplicate_terminal = {
         condition_id: len(items)
         for condition_id, items in observed_by_id.items()
@@ -6466,12 +6479,16 @@ def reduce_matrix_attempts(
     for planned in plan:
         condition_id = str(planned["condition_id"])
         terminal = observed_by_id.get(condition_id, [])
-        item = terminal[0] if len(terminal) == 1 else {
-            "condition_id": condition_id,
-            "status": "missing_or_duplicate_terminal",
-            "samples": [],
-            "accounting": {},
-        }
+        item = (
+            terminal[0]
+            if len(terminal) == 1
+            else {
+                "condition_id": condition_id,
+                "status": "missing_or_duplicate_terminal",
+                "samples": [],
+                "accounting": {},
+            }
+        )
         key = (
             int(planned["rule_count"]),
             int(planned["project_count"]),
@@ -6486,7 +6503,9 @@ def reduce_matrix_attempts(
         pooled_samples = [
             sample for attempt in attempts for sample in attempt.get("samples", [])
         ]
-        statuses = Counter(str(attempt.get("status", "missing")) for attempt in attempts)
+        statuses = Counter(
+            str(attempt.get("status", "missing")) for attempt in attempts
+        )
         accounting_totals: Counter[str] = Counter()
         finding_totals: Counter[str] = Counter()
         for attempt in attempts:
@@ -6522,9 +6541,7 @@ def reduce_matrix_attempts(
         )
         cells.append(
             {
-                "cell_id": (
-                    f"r{key[0]}-p{key[1]}-{key[2]}-{key[3]}{key[4]}"
-                ),
+                "cell_id": (f"r{key[0]}-p{key[1]}-{key[2]}-{key[3]}{key[4]}"),
                 "rule_count": key[0],
                 "project_count": key[1],
                 "schedule": key[2],
@@ -6578,14 +6595,14 @@ def reduce_matrix_attempts(
     for dimensions, item in sorted(direct_by_dimensions.items()):
         rules, projects, schedule, mode, events, repeat = dimensions
         current_ns = int(
-            item["event_to_all_query_visible_evaluations"].get(
-                "p95_nearest_rank_ns", 0
-            )
+            item["event_to_all_query_visible_evaluations"].get("p95_nearest_rank_ns", 0)
             or 0
         )
         for factor_index, factor_name in ((0, "rule_count"), (1, "project_count")):
             values = sorted({key[factor_index] for key in direct_by_dimensions})
-            previous_values = [value for value in values if value < dimensions[factor_index]]
+            previous_values = [
+                value for value in values if value < dimensions[factor_index]
+            ]
             if not previous_values:
                 continue
             prior_value = max(previous_values)
@@ -6682,8 +6699,7 @@ def _git_state_allowing_attempt(attempt_root: Path | None) -> dict[str, Any]:
         dirty = [
             line
             for line in status
-            if not allowed_prefix
-            or not line[3:].strip().startswith(allowed_prefix)
+            if not allowed_prefix or not line[3:].strip().startswith(allowed_prefix)
         ]
         return {"commit": commit, "dirty": bool(dirty), "scope": scope}
     except (OSError, subprocess.CalledProcessError):
@@ -6762,9 +6778,7 @@ def run_study(
         started_utc = datetime.now(timezone.utc).isoformat()
         started_ns = time.perf_counter_ns()
         retained_root = (
-            recorder.root / "runtime" / "matrix" / condition_id
-            if recorder
-            else None
+            recorder.root / "runtime" / "matrix" / condition_id if recorder else None
         )
         if recorder:
             recorder.record(
@@ -6808,6 +6822,8 @@ def run_study(
                 "samples": [],
                 "accounting": {},
             }
+        if recorder and formal:
+            condition["study_mode"] = FORMAL_STUDY_MODE
         matrix.append(condition)
         if recorder:
             recorder.record("matrix", condition_id, "terminal", condition)
@@ -6846,6 +6862,8 @@ def run_study(
             soak = {
                 **retained,
             }
+        if recorder and formal:
+            soak["study_mode"] = FORMAL_STUDY_MODE
         if recorder:
             recorder.record("soak", soak_id, "terminal", soak)
     offline = None
@@ -6877,6 +6895,8 @@ def run_study(
                 **retained,
                 "network_boundary": _python_socket_boundary(),
             }
+        if recorder and formal:
+            offline["study_mode"] = FORMAL_STUDY_MODE
         if recorder:
             recorder.record("offline", offline_id, "terminal", offline)
     faults = run_fault_suite(
@@ -6926,12 +6946,9 @@ def run_study(
         for value in faults.values()
         for attempt in value.get("attempts", [])
     )
-    planned_keys = [
-        (str(item["component"]), str(item["unit_id"])) for item in plan
-    ]
+    planned_keys = [(str(item["component"]), str(item["unit_id"])) for item in plan]
     terminal_keys = [
-        (str(item["component"]), str(item["unit_id"]))
-        for item in terminal_units
+        (str(item["component"]), str(item["unit_id"])) for item in terminal_units
     ]
     planned_key_set = set(planned_keys)
     terminal_key_counts = Counter(terminal_keys)
@@ -6973,9 +6990,7 @@ def run_study(
         for status in [*unit_statuses, *global_outcome_statuses]
     )
     incomplete = (
-        has_harness_error
-        or has_infrastructure_error
-        or has_unclassified_failure
+        has_harness_error or has_infrastructure_error or has_unclassified_failure
     )
     system_violations = sum(
         status == "system_violation"
@@ -7014,11 +7029,7 @@ def run_study(
         "global_outcomes": {
             "statuses": global_outcome_statuses,
         },
-        "protocol_status": (
-            FORMAL_STUDY_MODE
-            if formal
-            else "candidate_noncanonical"
-        ),
+        "protocol_status": (FORMAL_STUDY_MODE if formal else "candidate_noncanonical"),
         "study_mode": FORMAL_STUDY_MODE if formal else "candidate_noncanonical",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "measurement_boundary": _measurement_boundary(),
@@ -7095,45 +7106,188 @@ def _validate_output_path(path: Path) -> Path:
 
 
 def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
-    if _sha256_file(FORMAL_AMENDMENT) != FORMAL_AMENDMENT_SHA256:
+    if (
+        FORMAL_BASE_AMENDMENT.is_symlink()
+        or not FORMAL_BASE_AMENDMENT.is_file()
+        or _sha256_file(FORMAL_BASE_AMENDMENT) != FORMAL_BASE_AMENDMENT_SHA256
+    ):
         raise SystemsHarnessError("protocol-v3 amendment 007 bytes changed")
+    if FORMAL_AMENDMENT.is_symlink() or not FORMAL_AMENDMENT.is_file():
+        raise SystemsHarnessError("protocol-v3 amendment 008 is absent or a symlink")
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON number {value}")
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON object key {key!r}")
+            value[key] = child
+        return value
+
     try:
-        contract = json.loads(FORMAL_AMENDMENT.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemsHarnessError(f"invalid amendment 007: {exc}") from exc
-    if contract.get("amendment_id") != "protocol-v3-amendment-007":
+        contract = json.loads(
+            FORMAL_AMENDMENT.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise SystemsHarnessError(f"invalid strict amendment 008: {exc}") from exc
+    if not isinstance(contract, dict):
+        raise SystemsHarnessError("protocol-v3 amendment 008 is not a JSON object")
+    if contract.get("amendment_id") != "protocol-v3-amendment-008":
         raise SystemsHarnessError("unexpected formal amendment identity")
+
+    def pending_markers(value: Any) -> list[str]:
+        if isinstance(value, dict):
+            return [
+                marker for child in value.values() for marker in pending_markers(child)
+            ]
+        if isinstance(value, list):
+            return [marker for child in value for marker in pending_markers(child)]
+        if isinstance(value, str) and re.fullmatch(
+            r"PENDING_TERMINAL_[A-Z0-9_]+", value
+        ):
+            return [value]
+        return []
+
+    unresolved = pending_markers(contract)
+    if unresolved:
+        raise SystemsHarnessError(
+            "protocol-v3 amendment 008 retains unresolved terminal markers"
+        )
     if require_frozen:
-        if contract.get("freeze_state") != "frozen_outcome_aware_repair":
-            raise SystemsHarnessError(
-                "protocol-v3 amendment 007 is not frozen outcome-aware repair"
-            )
+        freeze_state = str(contract.get("freeze_state", ""))
+        status = str(contract.get("status", ""))
+        if not freeze_state.startswith("frozen_") or "draft" in status.lower():
+            raise SystemsHarnessError("protocol-v3 amendment 008 is not frozen")
         frozen_utc = contract.get("frozen_utc")
         try:
-            frozen_at = datetime.fromisoformat(
-                str(frozen_utc).replace("Z", "+00:00")
-            )
+            frozen_at = datetime.fromisoformat(str(frozen_utc).replace("Z", "+00:00"))
         except ValueError as exc:
             raise SystemsHarnessError(
-                "protocol-v3 amendment 007 has no valid frozen_utc"
+                "protocol-v3 amendment 008 has no valid frozen_utc"
             ) from exc
         if frozen_at.tzinfo is None:
             raise SystemsHarnessError(
-                "protocol-v3 amendment 007 frozen_utc must be timezone-aware"
+                "protocol-v3 amendment 008 frozen_utc must be timezone-aware"
             )
-    prefix = (
-        (contract.get("effective_protocol_identity") or {}).get("frozen_prefix")
+        if frozen_at > datetime.now(timezone.utc):
+            raise SystemsHarnessError(
+                "protocol-v3 amendment 008 frozen_utc may not be in the future"
+            )
+    interpretation_order = list(
+        (contract.get("effective_protocol_identity") or {}).get("interpretation_order")
         or []
     )
-    for item in prefix:
-        path = (REPO_ROOT / str(item.get("path", ""))).resolve()
+    expected_order = [
+        "experiments/eacl2027/protocol-v3.json",
+        *[
+            f"experiments/eacl2027/protocol-v3-amendment-{index:03d}.json"
+            for index in range(1, 9)
+        ],
+    ]
+    if interpretation_order != expected_order:
+        raise SystemsHarnessError(
+            "protocol-v3 amendment 008 interpretation order is not exact"
+        )
+    for relative in interpretation_order:
+        path = (REPO_ROOT / relative).resolve()
         try:
             path.relative_to(REPO_ROOT)
         except ValueError as exc:
-            raise SystemsHarnessError("protocol contract path escapes repository") from exc
-        if not path.is_file() or _sha256_file(path) != str(item.get("sha256", "")):
+            raise SystemsHarnessError(
+                "protocol contract path escapes repository"
+            ) from exc
+        if not path.is_file() or path.is_symlink():
             raise SystemsHarnessError(f"formal protocol hash mismatch: {path}")
     return contract
+
+
+def _formal_base_contract() -> dict[str, Any]:
+    try:
+        value = json.loads(FORMAL_BASE_AMENDMENT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemsHarnessError(f"invalid amendment 007: {exc}") from exc
+    if value.get("amendment_id") != "protocol-v3-amendment-007":
+        raise SystemsHarnessError("unexpected amendment-007 identity")
+    return value
+
+
+def _formal_runtime_profile() -> dict[str, Any]:
+    """Apply amendment-008's two explicit cache/runtime-lock overrides."""
+
+    profile = json.loads(
+        json.dumps(_formal_base_contract().get("formal_runtime_profile") or {})
+    )
+    dependency = dict(profile.get("cache_and_dependency_receipt") or {})
+    corrected = dict(
+        _formal_contract().get("corrected_direct_paw_cache_contract") or {}
+    )
+    dependency["formal_cache_dir"] = corrected.get("r03_paw_cache_dir_exact")
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v4.json"
+    profile["cache_and_dependency_receipt"] = dependency
+    thread_environment = dict(profile.get("thread_environment") or {})
+    thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
+    profile["thread_environment"] = thread_environment
+    return profile
+
+
+def _formal_effective_config() -> dict[str, Any]:
+    """Return amendment-007 config with amendment-008's exact r03 overrides."""
+
+    effective = json.loads(
+        json.dumps(_formal_base_contract().get("formal_effective_config") or {})
+    )
+    overrides = dict(
+        (_formal_contract().get("effective_protocol_identity") or {}).get(
+            "explicit_one_time_overrides"
+        )
+        or {}
+    )
+    if (
+        overrides.get("formal_effective_config.fault_names_in_order")
+        != FORMAL_FAULT_OVERRIDE_TEXT
+    ):
+        raise SystemsHarnessError(
+            "amendment-008 r03 fault_names_in_order override differs"
+        )
+    if (
+        overrides.get("formal_effective_config.study_mode")
+        != FORMAL_STUDY_MODE_OVERRIDE_TEXT
+    ):
+        raise SystemsHarnessError("amendment-008 r03 study_mode override differs")
+    effective["fault_names_in_order"] = list(FORMAL_FAULTS)
+    effective["study_mode"] = FORMAL_STUDY_MODE
+    return effective
+
+
+def _required_git_state(contract: Mapping[str, Any]) -> dict[str, Any]:
+    topology = dict(
+        (contract.get("effective_protocol_identity") or {}).get("required_git_topology")
+        or {}
+    )
+    p4 = dict(topology.get("p4") or {})
+    i4 = dict(topology.get("i4") or {})
+    h4 = dict(topology.get("h4") or {})
+    return {
+        "protocol_commit_parent_must_equal": p4.get("parent_must_equal"),
+        "protocol_commit_diff_paths_exactly": p4.get("diff_paths_exactly"),
+        "implementation_commit_parent_must_equal_protocol_commit": i4.get(
+            "parent_must_equal_p4"
+        ),
+        "implementation_commit_diff_paths_exactly": i4.get("diff_paths_exactly"),
+        "runtime_lock_commit_parent_must_equal_implementation_commit": h4.get(
+            "parent_must_equal_i4"
+        ),
+        "runtime_lock_commit_diff_paths_exactly": h4.get("diff_paths_exactly"),
+        "head_must_equal_runtime_lock_commit": topology.get(
+            "head_must_equal_h4_before_r03_setup"
+        ),
+        "dirty_must_equal": topology.get("dirty_must_equal"),
+        "dirty_scope": topology.get("dirty_scope"),
+    }
 
 
 def _git_commit_parent(commit: str) -> str:
@@ -7232,24 +7386,42 @@ def _validate_formal_git_topology(
     }
 
 
+def _git_remote_refs_containing(commit: str) -> list[str]:
+    completed = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname)",
+            "--contains",
+            commit,
+            "refs/remotes",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise SystemsHarnessError("formal chronology cannot inspect pushed refs")
+    return sorted(
+        ref
+        for ref in completed.stdout.splitlines()
+        if ref and not ref.endswith("/HEAD")
+    )
+
+
 def _formal_source_state() -> tuple[dict[str, Any], dict[str, Any]]:
     state = integrated._git_state()
     if state.get("dirty") or not state.get("commit"):
         raise SystemsHarnessError(
             "formal execution requires a clean scoped Git source state"
         )
-    required_git = dict(
-        (
-            (
-                (_formal_contract().get("effective_protocol_identity") or {}).get(
-                    "acyclic_formal_binding"
-                )
-                or {}
-            ).get("required_git_state", {})
-            or {}
-        )
-    )
+    required_git = _required_git_state(_formal_contract())
     topology = _validate_formal_git_topology(str(state["commit"]), required_git)
+    if not _git_remote_refs_containing(str(state["commit"])):
+        raise SystemsHarnessError(
+            "formal execution requires H4 to be contained by a pushed remote ref"
+        )
     return state, topology
 
 
@@ -7262,12 +7434,8 @@ def _validate_formal_config(
     require_partition: bool,
 ) -> None:
     contract = _formal_contract()
-    effective = dict(contract.get("formal_effective_config") or {})
-    expected = {
-        name: effective[name]
-        for name in asdict(config)
-        if name in effective
-    }
+    effective = _formal_effective_config()
+    expected = {name: effective[name] for name in asdict(config) if name in effective}
     observed = json.loads(json.dumps(asdict(config)))
     mismatches = {
         name: {"expected": value, "observed": observed[name]}
@@ -7277,7 +7445,7 @@ def _validate_formal_config(
     missing_config_fields = sorted(set(observed) - set(expected))
     if missing_config_fields:
         mismatches["unbound_config_fields"] = missing_config_fields
-    expected_faults = tuple(effective.get("fault_names_in_order") or ())
+    expected_faults = FORMAL_FAULTS
     if tuple(fault_names) != expected_faults:
         mismatches["fault_names"] = {
             "expected": expected_faults,
@@ -7391,15 +7559,56 @@ def _validate_formal_config(
         ),
         "rule_order": list(EXTERNAL_RULE_ORDER),
     }
+    expected_checks = {
+        **checks,
+        "fault_attempts": len(FORMAL_FAULTS) * config.fault_repetitions,
+        "top_level_units": 430,
+    }
     for name, value in observed_checks.items():
-        if checks.get(name) != value:
+        if expected_checks.get(name) != value:
             mismatches[f"plan.{name}"] = {
-                "expected": checks.get(name),
+                "expected": expected_checks.get(name),
                 "observed": value,
             }
-    runtime_budget = dict(
-        (contract.get("formal_runtime_profile") or {}).get("runtime_budget") or {}
+    full_attempt = build_full_attempt_plan(config)
+    full_expected = {
+        "unit_count": 430,
+        "canonical_sha256": FORMAL_FULL_PLAN_SHA256,
+        "ordered_membership_sha256": FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
+        "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+    }
+    for name, expected_value in full_expected.items():
+        if full_attempt[name] != expected_value:
+            mismatches[f"full_attempt_plan.{name}"] = {
+                "expected": expected_value,
+                "observed": full_attempt[name],
+            }
+    amendment_full = dict(
+        ((contract.get("full_attempt_plan") or {}).get("full_plan") or {})
     )
+    amendment_values = {
+        "unit_count": amendment_full.get("unit_count"),
+        "canonical_sha256": amendment_full.get("canonical_sha256"),
+        "ordered_membership_sha256": amendment_full.get("ordered_membership_sha256"),
+        "stored_json_sha256": amendment_full.get("stored_json_sha256"),
+    }
+    expected_amendment_values = {
+        **{
+            name: full_expected[name]
+            for name in (
+                "unit_count",
+                "canonical_sha256",
+                "ordered_membership_sha256",
+            )
+        },
+        "stored_json_sha256": FORMAL_FULL_PLAN_STORED_SHA256,
+    }
+    if amendment_values != expected_amendment_values:
+        mismatches["full_attempt_plan.amendment_bindings"] = {
+            "expected": expected_amendment_values,
+            "observed": amendment_values,
+        }
+    runtime_budget = dict(_formal_runtime_profile().get("runtime_budget") or {})
     matrix_warmup_evaluations = sum(
         int(item["project_count"])
         * config.warmups_per_project
@@ -7407,9 +7616,7 @@ def _validate_formal_config(
         for item in plan
     )
     soak_warmup_evaluations = (
-        config.soak_project_count
-        * config.warmups_per_project
-        * config.soak_rule_count
+        config.soak_project_count * config.warmups_per_project * config.soak_rule_count
     )
     offline_rule_count = max(config.rule_counts)
     offline_measured_evaluations = 2 * offline_rule_count
@@ -7432,9 +7639,7 @@ def _validate_formal_config(
     projected_seconds = planned_evaluations * evaluation_seconds
     soak_batches = math.ceil(config.soak_events / config.soak_batch_size)
     matrix_warmup_wait_seconds = sum(
-        int(item["project_count"])
-        * config.warmups_per_project
-        * config.timeout_seconds
+        int(item["project_count"]) * config.warmups_per_project * config.timeout_seconds
         for item in plan
     )
     sequential_wait_seconds = sum(
@@ -7446,9 +7651,7 @@ def _validate_formal_config(
         config.drain_timeout_seconds for item in plan if item["mode"] == "burst"
     )
     soak_wait_seconds = (
-        config.soak_project_count
-        * config.warmups_per_project
-        * config.timeout_seconds
+        config.soak_project_count * config.warmups_per_project * config.timeout_seconds
         + soak_batches * config.drain_timeout_seconds
         + config.drain_timeout_seconds
         + soak_batches * SOAK_BATCH_SETTLE_SECONDS
@@ -7490,11 +7693,14 @@ def _validate_formal_config(
         }
     if mismatches:
         raise SystemsHarnessError(
-            "formal configuration differs from protocol v3 amendment 007: "
+            "formal configuration differs from protocol v3 amendment 008: "
             + json.dumps(mismatches, sort_keys=True)
         )
     expected_partition = str(effective.get("slurm_partition", "ALL"))
-    if require_partition and os.environ.get("SLURM_JOB_PARTITION", "") != expected_partition:
+    if (
+        require_partition
+        and os.environ.get("SLURM_JOB_PARTITION", "") != expected_partition
+    ):
         raise SystemsHarnessError(
             f"formal watgpu execution requires SLURM_JOB_PARTITION={expected_partition!r}"
         )
@@ -7518,7 +7724,11 @@ def _fault_names(value: str) -> tuple[str, ...]:
 
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -7534,22 +7744,80 @@ def _replacement_retention_plan(
     replacement: Mapping[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if replacement.get("kind") != "replacement_attempt":
-        return {"self_contained": True, "copies": []}, []
+        return {"self_contained": True, "copies": [], "references": []}, []
     retained: list[dict[str, Any]] = []
     copies: list[dict[str, Any]] = []
+    references: list[dict[str, str]] = []
+    source_paths: set[Path] = set()
+    source_identities: set[tuple[int, int]] = set()
+    target_paths: set[Path] = set()
 
     def add(role: str, source: str, target: str, byte_count: int, digest: str) -> None:
+        source_path = Path(source)
+        target_path = Path(target)
+        if (
+            not source_path.is_absolute()
+            or source_path.is_symlink()
+            or not source_path.is_file()
+            or source_path.resolve(strict=True) != source_path
+            or not target_path.parts
+            or target_path.is_absolute()
+            or ".." in target_path.parts
+            or source_path in source_paths
+            or target_path in target_paths
+        ):
+            raise SystemsHarnessError(
+                "replacement retention copy set has a path collision or alias"
+            )
+        if (
+            type(byte_count) is not int
+            or byte_count < 0
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        ):
+            raise SystemsHarnessError(
+                "replacement retention copy has an invalid byte/hash binding"
+            )
+        observed_bytes = 0
+        observed_digest = hashlib.sha256()
+        with source_path.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode):
+                raise SystemsHarnessError(
+                    "replacement retention source is not a regular file"
+                )
+            identity = (opened.st_dev, opened.st_ino)
+            if identity in source_identities:
+                raise SystemsHarnessError(
+                    "replacement retention copy set repeats a source identity"
+                )
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                observed_bytes += len(chunk)
+                observed_digest.update(chunk)
+            closed = os.fstat(handle.fileno())
+        if (
+            opened.st_dev != closed.st_dev
+            or opened.st_ino != closed.st_ino
+            or opened.st_size != closed.st_size
+            or observed_bytes != byte_count
+            or observed_digest.hexdigest() != digest
+        ):
+            raise SystemsHarnessError(
+                "replacement retention source changed before copy planning"
+            )
+        source_paths.add(source_path)
+        source_identities.add(identity)
+        target_paths.add(target_path)
         entry = {
             "role": role,
-            "retained_path": target,
+            "retained_path": target_path.as_posix(),
             "bytes": int(byte_count),
             "sha256": str(digest),
         }
         retained.append(entry)
         copies.append(
             {
-                "source_path": source,
-                "retained_path": target,
+                "source_path": str(source_path),
+                "retained_path": target_path.as_posix(),
                 "bytes": int(byte_count),
                 "sha256": str(digest),
             }
@@ -7581,20 +7849,154 @@ def _replacement_retention_plan(
             int(receipt["bytes"]),
             str(receipt["sha256"]),
         )
-    for index, receipt in enumerate(replacement.get("evidence_receipts") or []):
-        kind = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(receipt["kind"])).strip(
-            "._"
-        ) or "evidence"
+    evidence_receipts = list(replacement.get("evidence_receipts") or [])
+    evidence_kinds = [str(receipt.get("kind", "")) for receipt in evidence_receipts]
+    expected_evidence_kinds = [
+        "launch_wide_cache_root_adjudication",
+        "paw_cache_semantics_receipt",
+        "all_partition_paw_cache_canary",
+        "whole_attempt_replacement_validation",
+        "r02_effective_cache_forensic_inventory",
+        "r02_terminal_archive",
+        "scheduler_sacct",
+        "scheduler_stdout",
+        "scheduler_stderr",
+    ]
+    correction = dict(replacement.get("whole_attempt_protocol_correction") or {})
+    if correction and evidence_kinds != expected_evidence_kinds:
+        raise SystemsHarnessError(
+            "whole-attempt evidence order differs from its frozen layout"
+        )
+    canary_archive_files = list(
+        (
+            (replacement.get("r02_partial_terminal_forensics") or {}).get(
+                "validated_canary_archive_files"
+            )
+        )
+        or []
+    )
+    whole_attempt_validation_target: str | None = None
+    for index, receipt in enumerate(evidence_receipts):
+        kind = (
+            re.sub(r"[^A-Za-z0-9_.-]+", "_", str(receipt["kind"])).strip("._")
+            or "evidence"
+        )
+        if receipt["kind"] == "all_partition_paw_cache_canary":
+            archive_root = Path(str(receipt["path"])).parent
+            if (
+                len(canary_archive_files) != 28
+                or any(
+                    not isinstance(item, dict)
+                    or set(item) != {"basename", "path", "bytes", "sha256"}
+                    for item in canary_archive_files
+                )
+                or len({str(item["basename"]) for item in canary_archive_files}) != 28
+                or any(
+                    Path(str(item["path"])).parent != archive_root
+                    or Path(str(item["path"])).name != item["basename"]
+                    for item in canary_archive_files
+                )
+            ):
+                raise SystemsHarnessError(
+                    "validated canary archive is not an exact 28-file closure"
+                )
+            receipt_names = [
+                str(item["basename"])
+                for item in canary_archive_files
+                if re.fullmatch(
+                    r"rap-eacl-paw-cache-canary-v4-[1-9][0-9]*\.json",
+                    str(item["basename"]),
+                )
+            ]
+            if len(receipt_names) != 1:
+                raise SystemsHarnessError(
+                    "validated canary archive semantic receipt identity differs"
+                )
+            canary_job_id = (
+                receipt_names[0]
+                .removeprefix("rap-eacl-paw-cache-canary-v4-")
+                .removesuffix(".json")
+            )
+            expected_archive_names = {
+                template.replace("<job_id>", canary_job_id)
+                for template in _COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES
+            } | {"evidence.sha256", "evidence.sha256.sha256"}
+            if {
+                str(item["basename"]) for item in canary_archive_files
+            } != expected_archive_names:
+                raise SystemsHarnessError(
+                    "validated canary archive member names differ"
+                )
+            sidecar = next(
+                (
+                    item
+                    for item in canary_archive_files
+                    if item["basename"] == "evidence.sha256.sha256"
+                ),
+                None,
+            )
+            if (
+                sidecar is None
+                or sidecar["path"] != receipt["path"]
+                or sidecar["bytes"] != receipt["bytes"]
+                or sidecar["sha256"] != receipt["sha256"]
+            ):
+                raise SystemsHarnessError(
+                    "validated canary archive top anchor differs from evidence"
+                )
+            target_root = "replacement/evidence/002-all_partition_paw_cache_canary"
+            for item in sorted(
+                canary_archive_files, key=lambda value: os.fsencode(value["basename"])
+            ):
+                add(
+                    f"evidence:{receipt['kind']}:{item['basename']}",
+                    str(item["path"]),
+                    f"{target_root}/{item['basename']}",
+                    int(item["bytes"]),
+                    str(item["sha256"]),
+                )
+            continue
+        retained_target = f"replacement/evidence/{index:03d}-{kind}"
         add(
             f"evidence:{receipt['kind']}",
             str(receipt["path"]),
-            f"replacement/evidence/{index:03d}-{kind}",
+            retained_target,
             int(receipt["bytes"]),
             str(receipt["sha256"]),
+        )
+        if receipt["kind"] == "whole_attempt_replacement_validation":
+            whole_attempt_validation_target = retained_target
+    historical = dict(correction.get("historical_validation") or {})
+    if correction:
+        whole_attempt_validation = next(
+            (
+                item
+                for item in evidence_receipts
+                if item.get("kind") == "whole_attempt_replacement_validation"
+            ),
+            None,
+        )
+        if (
+            whole_attempt_validation is None
+            or whole_attempt_validation_target is None
+            or historical.get("receipt_path") != whole_attempt_validation.get("path")
+            or historical.get("receipt_bytes") != whole_attempt_validation.get("bytes")
+            or historical.get("receipt_sha256")
+            != whole_attempt_validation.get("sha256")
+        ):
+            raise SystemsHarnessError(
+                "historical validation is not the typed whole-attempt evidence"
+            )
+        references.append(
+            {
+                "role": "gate:historical_validation",
+                "retained_path": whole_attempt_validation_target,
+            }
         )
     return {
         "self_contained": True,
         "copies": retained,
+        "references": references,
     }, copies
 
 
@@ -7653,13 +8055,13 @@ def _launch_manifest(
         raise SystemsHarnessError(
             "formal attempt directory basename must be a caller-supplied unique slug"
         )
-    contract = _formal_contract(require_frozen=formal)
+    contract = _formal_contract() if formal else _formal_base_contract()
     if formal:
         source, source_topology = _formal_source_state()
     else:
         source = integrated._git_state()
         source_topology = None
-    runtime_profile = dict(contract.get("formal_runtime_profile") or {})
+    runtime_profile = _formal_runtime_profile() if formal else {}
     replacement = (
         replacement_launch_binding(
             attempt_dir,
@@ -7668,9 +8070,7 @@ def _launch_manifest(
         if formal
         else {"kind": "candidate_not_applicable"}
     )
-    replacement_retention, prelaunch_copies = _replacement_retention_plan(
-        replacement
-    )
+    replacement_retention, prelaunch_copies = _replacement_retention_plan(replacement)
     if formal:
         expected_repo = str(
             (runtime_profile.get("cache_and_dependency_receipt") or {}).get(
@@ -7692,27 +8092,33 @@ def _launch_manifest(
             raise SystemsHarnessError(str(exc)) from exc
     else:
         runtime = None
-    runtime_retention, runtime_prelaunch_copies = (
-        _runtime_preflight_retention_plan(runtime)
+    runtime_retention, runtime_prelaunch_copies = _runtime_preflight_retention_plan(
+        runtime
     )
-    protocol_documents = [
-        {
-            "path": str(item["path"]),
-            "sha256": str(item["sha256"]),
-        }
-        for item in (
+    if formal:
+        protocol_paths = list(
             (contract.get("effective_protocol_identity") or {}).get(
-                "frozen_prefix"
+                "interpretation_order"
             )
             or []
         )
+    else:
+        protocol_paths = [
+            str(item["path"])
+            for item in (
+                (contract.get("effective_protocol_identity") or {}).get("frozen_prefix")
+                or []
+            )
         ]
-    protocol_documents.append(
+        protocol_paths.append(str(FORMAL_BASE_AMENDMENT.relative_to(REPO_ROOT)))
+    protocol_documents = [
         {
-            "path": str(FORMAL_AMENDMENT.relative_to(REPO_ROOT)),
-            "sha256": _sha256_file(FORMAL_AMENDMENT),
+            "path": str(relative),
+            "sha256": _sha256_file(REPO_ROOT / str(relative)),
         }
-    )
+        for relative in protocol_paths
+    ]
+    full_attempt = build_full_attempt_plan(config)
     runner = Path(__file__).resolve()
     identity = {
         "attempt_id": attempt_id,
@@ -7730,6 +8136,19 @@ def _launch_manifest(
         "protocol_documents": protocol_documents,
         "config": json.loads(json.dumps(asdict(config))),
         "plan_sha256": _sha256_bytes(_canonical_json_bytes(list(plan))),
+        "whole_attempt_protocol_correction": (
+            {
+                "analysis_id": FORMAL_COMPONENT_ANALYSIS_ID,
+                "full_plan_unit_count": full_attempt["unit_count"],
+                "full_plan_sha256": full_attempt["canonical_sha256"],
+                "full_plan_stored_sha256": FORMAL_FULL_PLAN_STORED_SHA256,
+                "ordered_membership_sha256": full_attempt["ordered_membership_sha256"],
+                "primary_source_attempt_id": full_attempt["primary_source_attempt_id"],
+                "execution_roles": full_attempt["execution_roles"],
+            }
+            if formal
+            else None
+        ),
         "artifact_provenance": bundle.provenance,
         "formal_runtime": runtime,
         "packages": {
@@ -7786,9 +8205,7 @@ def _capture_formal_cache_end(
     recorder: AttemptRecorder,
 ) -> dict[str, Any]:
     try:
-        runtime_profile = dict(
-            _formal_contract().get("formal_runtime_profile") or {}
-        )
+        runtime_profile = _formal_runtime_profile()
         launch_cache_receipt = dict(
             (
                 (
@@ -7832,9 +8249,9 @@ def _merge_global_outcome(
     global_outcomes["statuses"] = statuses
     merged["global_outcomes"] = global_outcomes
     if status == "system_violation":
-        merged["system_violation_units"] = int(
-            merged.get("system_violation_units", 0)
-        ) + 1
+        merged["system_violation_units"] = (
+            int(merged.get("system_violation_units", 0)) + 1
+        )
     current = str(merged.get("status", "incomplete_unclassified_failure"))
     ranks = {
         "completed": 0,
@@ -7932,11 +8349,7 @@ def _aborted_attempt_result(
         "terminal_unit_count": 0,
         "planned_unit_count": len(plan),
         "system_violation_units": int(unit_classification == "system_violation"),
-        "protocol_status": (
-            FORMAL_STUDY_MODE
-            if formal
-            else "candidate_noncanonical"
-        ),
+        "protocol_status": (FORMAL_STUDY_MODE if formal else "candidate_noncanonical"),
         "study_mode": FORMAL_STUDY_MODE if formal else "candidate_noncanonical",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "config": asdict(config),
@@ -7971,9 +8384,7 @@ def _artifact_initialization_abort_result(
     if not recorder.initialization_warnings:
         return None
     try:
-        raise ExternalInfrastructureError(
-            "; ".join(recorder.initialization_warnings)
-        )
+        raise ExternalInfrastructureError("; ".join(recorder.initialization_warnings))
     except ExternalInfrastructureError as exc:
         return _aborted_attempt_result(
             exc,
@@ -7981,13 +8392,1150 @@ def _artifact_initialization_abort_result(
             plan=plan,
             formal=formal,
             attempt_root=recorder.root,
-            launch_git=dict(
-                (recorder.manifest.get("identity") or {}).get("git") or {}
-            ),
+            launch_git=dict((recorder.manifest.get("identity") or {}).get("git") or {}),
         )
 
 
+def _exclusive_canonical_json(path: Path, value: Mapping[str, Any]) -> None:
+    """Durably create one canonical JSON object plus exactly one LF."""
+
+    payload = _canonical_json_bytes(dict(value)) + b"\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short canonical JSON write")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    directory_descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _formal_attempt_dir_from_argv(argv: Sequence[str]) -> Path | None:
+    try:
+        index = list(argv).index("--attempt-dir")
+        raw = list(argv)[index + 1]
+    except (ValueError, IndexError):
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def _last_complete_lifecycle_phase(root: Path) -> str:
+    path = root / "fatal-lifecycle.jsonl"
+    if not path.is_file() or path.is_symlink():
+        return "unavailable_before_first_lifecycle_record"
+    phase = "unavailable_before_first_lifecycle_record"
+    for raw in path.read_bytes().splitlines(keepends=True):
+        if not raw.endswith(b"\n"):
+            break
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            break
+        if not isinstance(value, dict) or not isinstance(value.get("phase"), str):
+            break
+        phase = str(value["phase"])
+    return phase
+
+
+def _write_fatal_exception_envelope(exc: BaseException) -> None:
+    root = _formal_attempt_dir_from_argv(sys.argv[1:])
+    if (
+        root is None
+        or not root.is_dir()
+        or root.is_symlink()
+        or (root / "result.json").exists()
+        or (root / "fatal-exception.json").exists()
+    ):
+        return
+    exception_type = f"{type(exc).__module__}.{type(exc).__qualname__}"
+    traceback_utf8 = "".join(
+        traceback.TracebackException.from_exception(exc).format(chain=True)
+    )
+    _exclusive_canonical_json(
+        root / "fatal-exception.json",
+        {
+            "schema_version": 1,
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "raw_attempt_id": root.name,
+            "phase": _last_complete_lifecycle_phase(root),
+            "exception_type": exception_type,
+            "exception_message": str(exc),
+            "traceback_utf8": traceback_utf8,
+        },
+    )
+
+
+def _supervisor_file_receipt(path: Path) -> dict[str, Any]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise SystemsHarnessError(f"supervisor artifact is not regular: {path}")
+        digest = hashlib.sha256()
+        byte_count = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            byte_count += len(chunk)
+        closed_over = os.fstat(descriptor)
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_size,
+        ) != (
+            closed_over.st_dev,
+            closed_over.st_ino,
+            closed_over.st_size,
+        ) or byte_count != closed_over.st_size:
+            raise SystemsHarnessError(f"supervisor artifact changed while read: {path}")
+    finally:
+        os.close(descriptor)
+    return {
+        "path": str(path),
+        "bytes": byte_count,
+        "sha256": digest.hexdigest(),
+        "type": "regular_file",
+    }
+
+
+def _supervisor_process_identity(pid: int) -> dict[str, Any]:
+    stat_path = Path(f"/proc/{pid}/stat")
+    cmdline_path = Path(f"/proc/{pid}/cmdline")
+    try:
+        first = stat_path.read_bytes()
+        command = cmdline_path.read_bytes()
+        second = stat_path.read_bytes()
+    except OSError as exc:
+        raise SystemsHarnessError(f"process identity vanished for pid {pid}") from exc
+
+    def start_ticks(raw: bytes) -> int:
+        suffix = raw[raw.rfind(b")") + 2 :].split()
+        if len(suffix) < 20:
+            raise SystemsHarnessError(f"malformed /proc stat for pid {pid}")
+        return int(suffix[19])
+
+    first_ticks = start_ticks(first)
+    if first_ticks != start_ticks(second) or first_ticks <= 0 or not command:
+        raise SystemsHarnessError(f"unstable process identity for pid {pid}")
+    return {
+        "pid": pid,
+        "proc_start_ticks": first_ticks,
+        "command_sha256": hashlib.sha256(command).hexdigest(),
+    }
+
+
+def _supervisor_environment() -> dict[str, str]:
+    environment = {
+        str(name): str(value)
+        for name, value in os.environ.items()
+        if not any(
+            marker in str(name).upper() for marker in _SUPERVISOR_SENSITIVE_ENV_MARKERS
+        )
+        and name != "PROGRAMASWEIGHTS_CACHE_DIR"
+    }
+    corrected = dict(_formal_contract()["corrected_direct_paw_cache_contract"])
+    environment.update(
+        {
+            "PAW_CACHE_DIR": str(corrected["r03_paw_cache_dir_exact"]),
+            "RAP_EACL_SUPERVISED_CHILD": "1",
+        }
+    )
+    for name in ("SLURM_JOB_ID", "SLURM_JOB_PARTITION", "SLURM_JOB_NODELIST"):
+        if not environment.get(name):
+            raise SystemsHarnessError(f"supervisor requires nonempty {name}")
+    if not environment["SLURM_JOB_ID"].isdigit():
+        raise SystemsHarnessError("supervisor SLURM_JOB_ID must be decimal")
+    if environment["SLURM_JOB_PARTITION"] != "ALL":
+        raise SystemsHarnessError("formal supervisor requires partition ALL")
+    forbidden = sorted(
+        name
+        for name in environment
+        if any(marker in name.upper() for marker in _SUPERVISOR_SENSITIVE_ENV_MARKERS)
+        or name == "PROGRAMASWEIGHTS_CACHE_DIR"
+    )
+    if forbidden:
+        raise SystemsHarnessError(
+            f"supervisor child environment leaked keys: {forbidden}"
+        )
+    return dict(sorted(environment.items()))
+
+
+def _supervisor_observed_exit(
+    returncode: int | None, spawn_error: BaseException | None
+) -> dict[str, Any]:
+    if spawn_error is not None:
+        return {
+            "state": "not_started",
+            "returncode": None,
+            "exit_code": None,
+            "signal": None,
+            "spawn_error": {
+                "type": f"{type(spawn_error).__module__}.{type(spawn_error).__qualname__}",
+                "message": str(spawn_error),
+                "traceback_utf8": "".join(
+                    traceback.TracebackException.from_exception(spawn_error).format(
+                        chain=True
+                    )
+                ),
+            },
+        }
+    if returncode is None:
+        raise SystemsHarnessError("started supervisor child was not waited")
+    return {
+        "state": "waited",
+        "returncode": returncode,
+        "exit_code": returncode if returncode >= 0 else None,
+        "signal": -returncode if returncode < 0 else None,
+        "spawn_error": None,
+    }
+
+
+def _supervisor_live_identities(
+    *,
+    process_group_id: int | None,
+    registered: Mapping[tuple[int, int], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    identities: dict[tuple[int, int], dict[str, Any]] = {}
+    for process in psutil.process_iter(["pid"]):
+        pid = int(process.info["pid"])
+        if pid == os.getpid():
+            continue
+        in_group = False
+        if process_group_id is not None:
+            try:
+                in_group = os.getpgid(pid) == process_group_id
+            except OSError:
+                pass
+        try:
+            identity = _supervisor_process_identity(pid)
+        except (OSError, ValueError, SystemsHarnessError):
+            continue
+        key = (pid, int(identity["proc_start_ticks"]))
+        if in_group or key in registered:
+            identities[key] = identity
+    return sorted(
+        identities.values(),
+        key=lambda value: (
+            int(value["pid"]),
+            int(value["proc_start_ticks"]),
+            str(value["command_sha256"]),
+        ),
+    )
+
+
+def _supervisor_open_writers(root: Path) -> list[dict[str, Any]]:
+    writers: list[dict[str, Any]] = []
+    resolved_root = root.resolve(strict=True)
+    for process in psutil.process_iter(["pid"]):
+        pid = int(process.info["pid"])
+        try:
+            identity = _supervisor_process_identity(pid)
+            for fd_path in Path(f"/proc/{pid}/fd").iterdir():
+                if not fd_path.name.isdigit():
+                    continue
+                descriptor = int(fd_path.name)
+                try:
+                    target = fd_path.resolve(strict=True)
+                    target.relative_to(resolved_root)
+                    info = Path(f"/proc/{pid}/fdinfo/{descriptor}").read_text(
+                        encoding="utf-8"
+                    )
+                    match = re.search(r"^flags:\s*([0-7]+)$", info, re.MULTILINE)
+                    if match is None:
+                        continue
+                    flags = int(match.group(1), 8)
+                    if flags & os.O_ACCMODE == os.O_RDONLY:
+                        continue
+                except (OSError, ValueError):
+                    continue
+                writers.append(
+                    {
+                        "process": identity,
+                        "fd": descriptor,
+                        "resolved_path": str(target),
+                        "open_flags_octal": "0" + format(flags, "o"),
+                    }
+                )
+        except (OSError, ValueError, SystemsHarnessError, psutil.Error):
+            continue
+    return sorted(
+        writers,
+        key=lambda value: (
+            int(value["process"]["pid"]),
+            int(value["process"]["proc_start_ticks"]),
+            int(value["fd"]),
+            str(value["resolved_path"]),
+        ),
+    )
+
+
+def _supervisor_tree_inventory(
+    root: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    regular_count = 0
+    regular_bytes = 0
+    for path in sorted(
+        root.rglob("*"), key=lambda value: value.relative_to(root).as_posix()
+    ):
+        relative = path.relative_to(root).as_posix()
+        metadata = path.lstat()
+        if stat.S_ISLNK(metadata.st_mode):
+            raise SystemsHarnessError(f"attempt tree contains symlink: {relative}")
+        if stat.S_ISDIR(metadata.st_mode):
+            entries.append(
+                {
+                    "relative_path": relative,
+                    "type": "directory",
+                    "mode": stat.S_IMODE(metadata.st_mode),
+                }
+            )
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemsHarnessError(
+                f"attempt tree contains special entry: {relative}"
+            )
+        receipt = _supervisor_file_receipt(path)
+        entries.append(
+            {
+                "relative_path": relative,
+                "type": "regular_file",
+                "mode": stat.S_IMODE(metadata.st_mode),
+                "bytes": receipt["bytes"],
+                "sha256": receipt["sha256"],
+            }
+        )
+        regular_count += 1
+        regular_bytes += int(receipt["bytes"])
+    canonical = json.dumps(
+        entries, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
+    return entries, {
+        "entry_count": len(entries),
+        "regular_file_count": regular_count,
+        "regular_file_bytes": regular_bytes,
+        "canonical_json_bytes": len(canonical),
+        "sha256": hashlib.sha256(canonical).hexdigest(),
+    }
+
+
+def _supervisor_quiesce(
+    *,
+    child: subprocess.Popen[bytes] | None,
+    process_group_id: int | None,
+    registered: Mapping[tuple[int, int], dict[str, Any]],
+    drain_threads: Sequence[threading.Thread],
+    stream_handles: Sequence[Any],
+    stream_paths: Mapping[str, Path],
+    attempt_root: Path,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    before = (
+        _supervisor_live_identities(
+            process_group_id=process_group_id, registered=registered
+        )
+        if child is not None
+        else []
+    )
+    actions: list[dict[str, Any]] = []
+    for identity in before:
+        result = "sent"
+        try:
+            os.kill(int(identity["pid"]), signal.SIGTERM)
+        except ProcessLookupError:
+            result = "already_exited"
+        actions.append(
+            {
+                "process": identity,
+                "signal": "TERM",
+                "sent_monotonic_ns": time.monotonic_ns(),
+                "result": result,
+            }
+        )
+    while time.monotonic() - started < 5.0:
+        if not _supervisor_live_identities(
+            process_group_id=process_group_id, registered=registered
+        ):
+            break
+        time.sleep(0.05)
+    survivors = (
+        _supervisor_live_identities(
+            process_group_id=process_group_id, registered=registered
+        )
+        if child is not None
+        else []
+    )
+    for identity in survivors:
+        result = "sent"
+        try:
+            os.kill(int(identity["pid"]), signal.SIGKILL)
+        except ProcessLookupError:
+            result = "already_exited"
+        actions.append(
+            {
+                "process": identity,
+                "signal": "KILL",
+                "sent_monotonic_ns": time.monotonic_ns(),
+                "result": result,
+            }
+        )
+    for thread in drain_threads:
+        thread.join(max(0.0, 30.0 - (time.monotonic() - started)))
+    for handle in stream_handles:
+        handle.flush()
+        os.fsync(handle.fileno())
+        handle.close()
+    after = (
+        _supervisor_live_identities(
+            process_group_id=process_group_id, registered=registered
+        )
+        if child is not None
+        else []
+    )
+    drained = {
+        name: _supervisor_file_receipt(path) for name, path in stream_paths.items()
+    }
+    first_writers: list[dict[str, Any]] = []
+    second_writers: list[dict[str, Any]] = []
+    sinks: list[dict[str, Any]] = []
+    stable_tree: dict[str, Any] | None = None
+    root_safe = False
+    try:
+        root_safe = (
+            attempt_root.exists()
+            and not attempt_root.is_symlink()
+            and attempt_root.is_dir()
+            and attempt_root.stat().st_uid == os.getuid()
+        )
+        if root_safe:
+            first_writers = _supervisor_open_writers(attempt_root)
+            first_entries, first_snapshot = _supervisor_tree_inventory(attempt_root)
+            if not first_writers:
+                for entry in first_entries:
+                    if entry["type"] != "regular_file":
+                        continue
+                    path = attempt_root / str(entry["relative_path"])
+                    descriptor = os.open(
+                        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                    )
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+                    sinks.append(_supervisor_file_receipt(path))
+                directories = [
+                    attempt_root,
+                    *(
+                        path
+                        for path in attempt_root.rglob("*")
+                        if path.is_dir() and not path.is_symlink()
+                    ),
+                ]
+                for directory in sorted(
+                    directories, key=lambda value: len(value.parts), reverse=True
+                ):
+                    _fsync_directory(directory)
+            time.sleep(0.25)
+            second_writers = _supervisor_open_writers(attempt_root)
+            second_entries, second_snapshot = _supervisor_tree_inventory(attempt_root)
+            stable_tree = {
+                "first": first_snapshot,
+                "second": second_snapshot,
+                "stable": first_entries == second_entries,
+            }
+    except (OSError, SystemsHarnessError):
+        root_safe = False
+    passed = (
+        not after
+        and all(not thread.is_alive() for thread in drain_threads)
+        and (
+            not attempt_root.exists()
+            or (
+                root_safe
+                and not first_writers
+                and not second_writers
+                and stable_tree is not None
+                and stable_tree["stable"]
+            )
+        )
+    )
+    return {
+        "process_group_id": process_group_id,
+        "bounded_settle_seconds": 30.0,
+        "descendants_before": before,
+        "termination_actions": actions,
+        "descendants_after": after,
+        "open_attempt_writers_first_scan": first_writers,
+        "open_attempt_writers_second_scan": second_writers,
+        "writer_scan_separation_ms": 250,
+        "drained_supervisor_streams": drained,
+        "fsynced_attempt_sinks": sorted(sinks, key=lambda value: value["path"]),
+        "stable_attempt_tree": stable_tree,
+        "passed": passed,
+    }
+
+
+def _observe_supervisor_product(path: Path) -> dict[str, Any]:
+    if not path.exists() and not path.is_symlink():
+        return {"state": "absent", "receipt": None, "validation_error": None}
+    if path.is_symlink() or not path.is_file():
+        return {
+            "state": "present_invalid",
+            "receipt": None,
+            "validation_error": "terminal product is a symlink or special entry",
+        }
+    receipt = _supervisor_file_receipt(path)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("terminal product is not a JSON object")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "state": "present_invalid",
+            "receipt": receipt,
+            "validation_error": str(exc),
+        }
+    return {"state": "valid", "receipt": receipt, "validation_error": None}
+
+
+def _observe_ordinary_result(root: Path) -> dict[str, Any]:
+    path = root / "result.json"
+    observed = _observe_supervisor_product(path)
+    if observed["state"] != "valid":
+        return observed
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        plan_raw = (root / "plan.json").read_bytes()
+        plan = json.loads(plan_raw)
+        unit_index = value.get("unit_index")
+        if value.get("raw_attempt_id") != FORMAL_RAW_ATTEMPT_ID:
+            raise ValueError("ordinary result raw attempt ID differs")
+        if not isinstance(plan, list) or len(plan) != 430:
+            raise ValueError("ordinary result plan is not the immutable 430 rows")
+        if (
+            len(plan_raw) != 122245
+            or hashlib.sha256(plan_raw).hexdigest() != FORMAL_FULL_PLAN_STORED_SHA256
+        ):
+            raise ValueError("ordinary result stored plan identity differs")
+        if (
+            hashlib.sha256(_canonical_json_bytes(plan)).hexdigest()
+            != FORMAL_FULL_PLAN_SHA256
+        ):
+            raise ValueError("ordinary result canonical plan identity differs")
+        terminal_count = value.get("terminal_unit_count")
+        if (
+            value.get("planned_unit_count") != 430
+            or type(terminal_count) is not int
+            or not 0 <= terminal_count <= 430
+            or value.get("all_planned_units_terminal") is not (terminal_count == 430)
+            or value.get("complete_plan") is not (terminal_count == 430)
+            or not isinstance(unit_index, list)
+            or len(unit_index) != 430
+        ):
+            raise ValueError("ordinary result 430-row completion accounting differs")
+        if not all(isinstance(item, dict) for item in unit_index):
+            raise ValueError("ordinary result unit index contains a non-object")
+        terminal_rows = [
+            item for item in unit_index if item.get("terminal_record") is not None
+        ]
+        if len(terminal_rows) != terminal_count or any(
+            item.get("status") not in UNIT_STATUSES
+            or type(item.get("started")) is not bool
+            or (item.get("terminal_record") is not None and not item.get("started"))
+            for item in unit_index
+        ):
+            raise ValueError("ordinary result unit index is internally inconsistent")
+        if _last_complete_lifecycle_phase(root) != "result_published":
+            raise ValueError("ordinary result lifecycle is not durably terminal")
+        if (root / "fatal-result.json").exists() or (
+            root / "fatal-exception.json"
+        ).exists():
+            raise ValueError("ordinary result conflicts with fatal evidence")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "state": "present_invalid",
+            "receipt": observed["receipt"],
+            "validation_error": str(exc),
+        }
+    return observed
+
+
+def _supervisor_attempt_state(attempt_root: Path) -> str:
+    if not attempt_root.exists() and not attempt_root.is_symlink():
+        return "not_published"
+    if attempt_root.is_symlink() or not attempt_root.is_dir():
+        return "present_invalid"
+    required = ("launch.json", "plan.json", "publication.json", "units.jsonl")
+    return (
+        "published"
+        if all(
+            (attempt_root / name).is_file() and not (attempt_root / name).is_symlink()
+            for name in required
+        )
+        else "present_invalid"
+    )
+
+
+def _fatal_journal_item(path: Path, root: Path) -> dict[str, Any]:
+    raw = path.read_bytes()
+    complete = raw.splitlines(keepends=True)
+    complete_lines = [line for line in complete if line.endswith(b"\n")]
+    trailing = b"" if not complete or complete[-1].endswith(b"\n") else complete[-1]
+    valid = 0
+    for line in complete_lines:
+        try:
+            value = json.loads(line)
+            if isinstance(value, (dict, list)):
+                valid += 1
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+    return {
+        "relative_path": path.relative_to(root).as_posix(),
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "complete_lf_terminated_line_count": len(complete_lines),
+        "strict_valid_complete_line_count": valid,
+        "invalid_complete_line_count": len(complete_lines) - valid,
+        "trailing_fragment_bytes": len(trailing),
+        "trailing_fragment_sha256": hashlib.sha256(trailing).hexdigest(),
+    }
+
+
+def _fatal_core_observation(
+    root: Path, relative: str, validation_errors: list[str]
+) -> dict[str, Any]:
+    path = root / relative
+    if not path.exists() and not path.is_symlink():
+        return {
+            "relative_path": relative,
+            "state": "absent",
+            "receipt": None,
+            "validation_error": None,
+        }
+    if path.is_symlink() or not path.is_file():
+        error = f"{relative} is a symlink or special entry"
+        validation_errors.append(error)
+        return {
+            "relative_path": relative,
+            "state": "present_invalid",
+            "receipt": None,
+            "validation_error": error,
+        }
+    try:
+        receipt = _supervisor_file_receipt(path)
+    except (OSError, SystemsHarnessError) as exc:
+        error = f"{relative}: {exc}"
+        validation_errors.append(error)
+        return {
+            "relative_path": relative,
+            "state": "present_invalid",
+            "receipt": None,
+            "validation_error": error,
+        }
+    return {
+        "relative_path": relative,
+        "state": "valid_regular",
+        "receipt": receipt,
+        "validation_error": None,
+    }
+
+
+def _fatal_execution_counts(
+    root: Path, plan: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    errors: list[str] = []
+    expected = [
+        (str(item.get("component", "")), str(item.get("unit_id", ""))) for item in plan
+    ]
+    if len(expected) != len(set(expected)):
+        errors.append("plan contains duplicate component/unit keys")
+    expected_set = set(expected)
+    started: set[tuple[str, str]] = set()
+    terminal: set[tuple[str, str]] = set()
+    for component, unit_id in expected:
+        component_root = root / AttemptRecorder._safe(component)
+        stem = AttemptRecorder._safe(unit_id)
+        started_path = component_root / f"{stem}.started.json"
+        if started_path.is_file() and not started_path.is_symlink():
+            started.add((component, unit_id))
+        terminal_paths = [
+            component_root / f"{stem}.{phase}.json"
+            for phase in ("terminal", "completed", "error")
+        ]
+        present = [
+            path for path in terminal_paths if path.is_file() and not path.is_symlink()
+        ]
+        if len(present) > 1:
+            errors.append(f"multiple terminal files for {component}/{unit_id}")
+        elif len(present) == 1:
+            terminal.add((component, unit_id))
+    for path in root.glob("*/*.started.json"):
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"invalid started entry {path.relative_to(root).as_posix()}")
+    if not terminal.issubset(started):
+        errors.append("terminal unit set is not a subset of started units")
+    units_path = root / "units.jsonl"
+    journal_keys: list[tuple[str, str]] = []
+    if units_path.is_file() and not units_path.is_symlink():
+        for line in units_path.read_bytes().splitlines(keepends=True):
+            if not line.endswith(b"\n"):
+                continue
+            try:
+                value = json.loads(line)
+                key = (str(value["component"]), str(value["record_id"]))
+            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+                errors.append("units.jsonl contains an invalid complete line")
+                continue
+            journal_keys.append(key)
+    if len(journal_keys) != len(set(journal_keys)):
+        errors.append("units.jsonl contains duplicate unit keys")
+    if set(journal_keys) != terminal:
+        errors.append("units.jsonl terminal keys differ from terminal files")
+    if not started.issubset(expected_set) or not terminal.issubset(expected_set):
+        errors.append("started or terminal artifact key escapes the immutable plan")
+    return {
+        "planned": len(expected),
+        "started": len(started),
+        "terminal": len(terminal),
+        "started_without_terminal": len(started - terminal),
+        "never_started": len(expected_set - started),
+        "units_journal_terminal_lines": len(journal_keys),
+        "validation_errors": sorted(set(errors)),
+    }
+
+
+def _fatal_exception_observation(root: Path) -> dict[str, Any]:
+    path = root / "fatal-exception.json"
+    if not path.exists() and not path.is_symlink():
+        return {
+            "observed": False,
+            "type": None,
+            "message": None,
+            "traceback_utf8": None,
+            "envelope_state": "absent",
+            "envelope": None,
+            "validation_error": None,
+        }
+    if path.is_symlink() or not path.is_file():
+        return {
+            "observed": False,
+            "type": None,
+            "message": None,
+            "traceback_utf8": None,
+            "envelope_state": "present_invalid",
+            "envelope": None,
+            "validation_error": "fatal exception envelope is symlink or special",
+        }
+    receipt = _supervisor_file_receipt(path)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        required = {
+            "schema_version",
+            "created_utc",
+            "raw_attempt_id",
+            "phase",
+            "exception_type",
+            "exception_message",
+            "traceback_utf8",
+        }
+        if not isinstance(value, dict) or set(value) != required:
+            raise ValueError("fatal exception envelope fields differ")
+        if value["raw_attempt_id"] != FORMAL_RAW_ATTEMPT_ID:
+            raise ValueError("fatal exception envelope raw ID differs")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "observed": False,
+            "type": None,
+            "message": None,
+            "traceback_utf8": None,
+            "envelope_state": "present_invalid",
+            "envelope": receipt,
+            "validation_error": str(exc),
+        }
+    return {
+        "observed": True,
+        "type": value["exception_type"],
+        "message": value["exception_message"],
+        "traceback_utf8": value["traceback_utf8"],
+        "envelope_state": "valid",
+        "envelope": receipt,
+        "validation_error": None,
+    }
+
+
+def _publish_fatal_result(
+    *,
+    root: Path,
+    observed_exit: Mapping[str, Any],
+    quiescence: Mapping[str, Any],
+) -> dict[str, Any]:
+    if observed_exit.get("state") != "waited" or not quiescence.get("passed"):
+        raise SystemsHarnessError("fatal result requires waited child and quiescence")
+    if (root / "fatal-result.json").exists():
+        raise SystemsHarnessError("fatal result cannot replace an existing fatal path")
+    plan_path = root / "plan.json"
+    plan_raw = plan_path.read_bytes()
+    plan = json.loads(plan_raw)
+    if not isinstance(plan, list):
+        raise SystemsHarnessError("fatal result plan is not a list")
+    plan_keys = [
+        {
+            "plan_index": index,
+            "component": str(item.get("component", "")),
+            "unit_id": str(item.get("unit_id", "")),
+        }
+        for index, item in enumerate(plan)
+    ]
+    plan_binding = {
+        "unit_count": len(plan),
+        "bytes": len(plan_raw),
+        "stored_sha256": hashlib.sha256(plan_raw).hexdigest(),
+        "canonical_sha256": hashlib.sha256(_canonical_json_bytes(plan)).hexdigest(),
+        "ordered_membership_sha256": hashlib.sha256(
+            _canonical_json_bytes(plan_keys)
+        ).hexdigest(),
+    }
+    if plan_binding != {
+        "unit_count": 430,
+        "bytes": 122245,
+        "stored_sha256": FORMAL_FULL_PLAN_STORED_SHA256,
+        "canonical_sha256": FORMAL_FULL_PLAN_SHA256,
+        "ordered_membership_sha256": FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
+    }:
+        raise SystemsHarnessError("fatal result plan identity differs")
+    validation_errors: list[str] = []
+    execution_counts = _fatal_execution_counts(root, plan)
+    validation_errors.extend(execution_counts["validation_errors"])
+    lifecycle_path = root / "fatal-lifecycle.jsonl"
+    units_path = root / "units.jsonl"
+    lifecycle = (
+        _fatal_journal_item(lifecycle_path, root)
+        if lifecycle_path.is_file() and not lifecycle_path.is_symlink()
+        else None
+    )
+    units = (
+        _fatal_journal_item(units_path, root)
+        if units_path.is_file() and not units_path.is_symlink()
+        else None
+    )
+    incremental = [
+        _fatal_journal_item(path, root)
+        for path in sorted(
+            root.rglob("*.jsonl"), key=lambda value: value.relative_to(root).as_posix()
+        )
+        if path not in {lifecycle_path, units_path}
+        and path.is_file()
+        and not path.is_symlink()
+    ]
+    for item in (lifecycle, units, *incremental):
+        if item is not None and (
+            item["invalid_complete_line_count"] or item["trailing_fragment_bytes"]
+        ):
+            validation_errors.append(
+                f"journal is partial or malformed: {item['relative_path']}"
+            )
+    core = {
+        name: _fatal_core_observation(root, relative, validation_errors)
+        for name, relative in {
+            "launch": "launch.json",
+            "plan": "plan.json",
+            "publication": "publication.json",
+            "streams": "streams.json",
+            "stdout": "stdout.log",
+            "stderr": "stderr.log",
+        }.items()
+    }
+    exception = _fatal_exception_observation(root)
+    if exception["validation_error"]:
+        validation_errors.append(str(exception["validation_error"]))
+    partial_result = root / "result.json"
+    result_observation = (
+        {
+            "state": "present_invalid_or_not_durable",
+            "receipt": _supervisor_file_receipt(partial_result),
+            "validation_error": "ordinary result failed frozen durability/schema validation",
+        }
+        if partial_result.is_file() and not partial_result.is_symlink()
+        else {
+            "state": "absent",
+            "receipt": None,
+            "validation_error": None,
+        }
+    )
+    receipt = {
+        "schema_version": 1,
+        "receipt_type": "formal_fatal_result_v1",
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_attempt_id": FORMAL_RAW_ATTEMPT_ID,
+        "attempt_root": str(root),
+        "producer": "launcher_supervisor_after_runner_exit",
+        "phase": _last_complete_lifecycle_phase(root),
+        "observed_runner_exit": dict(observed_exit),
+        "quiescence": dict(quiescence),
+        "exception": exception,
+        "result_observation": result_observation,
+        "plan": plan_binding,
+        "execution_counts": {
+            **execution_counts,
+            "validation_errors": sorted(set(validation_errors)),
+        },
+        "journals": {
+            "lifecycle": lifecycle,
+            "units": units,
+            "incremental_jsonl": incremental,
+        },
+        "core_artifacts": core,
+        "pre_fatal_tree": quiescence["stable_attempt_tree"],
+        "canonical_process_exit_code": 5,
+    }
+    path = root / "fatal-result.json"
+    _exclusive_canonical_json(path, receipt)
+    _fsync_directory(root)
+    parsed = json.loads(path.read_text(encoding="utf-8"))
+    if parsed != receipt:
+        raise SystemsHarnessError("fatal result verification differs after publication")
+    return _supervisor_file_receipt(path)
+
+
+def _run_formal_supervisor(argv: Sequence[str]) -> int:
+    if "--supervised-child" in argv:
+        raise SystemsHarnessError("supervisor recursion is forbidden")
+    child_args = [argument for argument in argv if argument != "--supervise"]
+    child_args.append("--supervised-child")
+    attempt_root = _formal_attempt_dir_from_argv(child_args)
+    if attempt_root is None or attempt_root.name != FORMAL_RAW_ATTEMPT_ID:
+        raise SystemsHarnessError("supervisor requires exact r03 --attempt-dir")
+    contract = _formal_contract()["fatal_result_contract"]
+    supervisor_root = Path(str(contract["supervisor_closeout_root_exact"]))
+    if supervisor_root != FORMAL_SUPERVISOR_ROOT:
+        raise SystemsHarnessError("fatal supervisor root differs from frozen contract")
+    os.mkdir(supervisor_root, 0o700)
+    _fsync_directory(supervisor_root.parent)
+    stream_paths = {
+        "stdout": Path(str(contract["supervisor_child_stdout_path_exact"])),
+        "stderr": Path(str(contract["supervisor_child_stderr_path_exact"])),
+    }
+    stream_handles = [path.open("xb", buffering=0) for path in stream_paths.values()]
+    environment = _supervisor_environment()
+    child_argv = [sys.executable, str(Path(__file__).resolve()), *child_args]
+    start_path = Path(str(contract["supervisor_start_path_exact"]))
+    _exclusive_canonical_json(
+        start_path,
+        {
+            "schema_version": 1,
+            "created_utc": datetime.now(timezone.utc).isoformat(),
+            "raw_attempt_id": FORMAL_RAW_ATTEMPT_ID,
+            "attempt_root": str(attempt_root),
+            "slurm_job_id": environment["SLURM_JOB_ID"],
+            "slurm_partition": environment["SLURM_JOB_PARTITION"],
+            "supervisor_process": _supervisor_process_identity(os.getpid()),
+            "child_argv": child_argv,
+            "child_environment": environment,
+            "child_environment_sha256": hashlib.sha256(
+                _canonical_json_bytes(environment)
+            ).hexdigest(),
+            "child_stream_paths": {
+                name: str(path) for name, path in stream_paths.items()
+            },
+        },
+    )
+    child: subprocess.Popen[bytes] | None = None
+    spawn_error: BaseException | None = None
+    returncode: int | None = None
+    process_group_id: int | None = None
+    registered: dict[tuple[int, int], dict[str, Any]] = {}
+    drain_threads: list[threading.Thread] = []
+    registry_stop = threading.Event()
+    registry_thread: threading.Thread | None = None
+
+    def drain(source: Any, sink: Any) -> None:
+        try:
+            while chunk := source.read(1024 * 1024):
+                sink.write(chunk)
+        finally:
+            source.close()
+
+    def register_descendants(pid: int) -> None:
+        while not registry_stop.wait(0.05):
+            try:
+                descendants = psutil.Process(pid).children(recursive=True)
+            except psutil.Error:
+                descendants = []
+            for descendant in descendants:
+                try:
+                    identity = _supervisor_process_identity(descendant.pid)
+                except (OSError, ValueError, SystemsHarnessError):
+                    continue
+                registered[(descendant.pid, int(identity["proc_start_ticks"]))] = (
+                    identity
+                )
+
+    try:
+        child = subprocess.Popen(
+            child_argv,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        process_group_id = child.pid
+        identity = _supervisor_process_identity(child.pid)
+        registered[(child.pid, int(identity["proc_start_ticks"]))] = identity
+        registry_thread = threading.Thread(
+            target=register_descendants, args=(child.pid,), daemon=True
+        )
+        registry_thread.start()
+        assert child.stdout is not None and child.stderr is not None
+        drain_threads = [
+            threading.Thread(
+                target=drain, args=(child.stdout, stream_handles[0]), daemon=True
+            ),
+            threading.Thread(
+                target=drain, args=(child.stderr, stream_handles[1]), daemon=True
+            ),
+        ]
+        for thread in drain_threads:
+            thread.start()
+        returncode = child.wait()
+    except BaseException as exc:
+        if child is None:
+            spawn_error = exc
+        else:
+            try:
+                returncode = child.wait(timeout=1)
+            except BaseException:
+                returncode = child.returncode
+    finally:
+        registry_stop.set()
+        if registry_thread is not None:
+            registry_thread.join(timeout=1)
+    observed_exit = _supervisor_observed_exit(returncode, spawn_error)
+    quiescence = _supervisor_quiesce(
+        child=child,
+        process_group_id=process_group_id,
+        registered=registered,
+        drain_threads=drain_threads,
+        stream_handles=stream_handles,
+        stream_paths=stream_paths,
+        attempt_root=attempt_root,
+    )
+    attempt_state = _supervisor_attempt_state(attempt_root)
+    ordinary = _observe_ordinary_result(attempt_root)
+    fatal = _observe_supervisor_product(attempt_root / "fatal-result.json")
+    validation_errors: list[str] = []
+    expected_exit: int | None = None
+    if ordinary["state"] == "valid":
+        ordinary_value = json.loads(
+            (attempt_root / "result.json").read_text(encoding="utf-8")
+        )
+        expected_exit = {
+            "completed": 0,
+            "completed_with_system_violations": 3,
+            "incomplete_harness_error": 2,
+            "incomplete_infrastructure_error": 4,
+            "incomplete_unclassified_failure": 5,
+        }.get(str(ordinary_value.get("status", "")))
+        if expected_exit is None:
+            ordinary = {
+                "state": "present_invalid",
+                "receipt": ordinary["receipt"],
+                "validation_error": "ordinary result has noncanonical status",
+            }
+    clean_quiescence = (
+        quiescence["passed"]
+        and not quiescence["descendants_before"]
+        and not quiescence["termination_actions"]
+        and not quiescence["open_attempt_writers_first_scan"]
+        and not quiescence["open_attempt_writers_second_scan"]
+    )
+    if (
+        ordinary["state"] != "valid"
+        and fatal["state"] == "absent"
+        and observed_exit["state"] == "waited"
+        and attempt_state in {"published", "present_invalid"}
+        and quiescence["passed"]
+    ):
+        try:
+            _publish_fatal_result(
+                root=attempt_root,
+                observed_exit=observed_exit,
+                quiescence=quiescence,
+            )
+            fatal = _observe_supervisor_product(attempt_root / "fatal-result.json")
+        except (OSError, ValueError, SystemsHarnessError) as exc:
+            validation_errors.append(f"fatal result publication failed: {exc}")
+    if ordinary["state"] == "valid" and clean_quiescence:
+        agrees = (
+            observed_exit["state"] == "waited"
+            and observed_exit["exit_code"] == expected_exit
+        )
+        disposition = (
+            "ordinary_result_exit_agrees"
+            if agrees
+            else "ordinary_result_exit_disagrees"
+        )
+        final_exit = int(expected_exit) if agrees else 5
+    elif ordinary["state"] == "valid":
+        disposition = "ordinary_result_closeout_invalid"
+        final_exit = 5
+    elif observed_exit["state"] == "not_started" or attempt_state == "not_published":
+        disposition = "prepublication_or_unpublished_failure"
+        final_exit = 5
+    elif fatal["state"] == "valid":
+        disposition = "fatal_result_published"
+        final_exit = 5
+    else:
+        disposition = "fatal_finalization_failed"
+        final_exit = 5
+        validation_errors.append(
+            "published attempt lacks a valid ordinary or fatal terminal product"
+        )
+    closeout = {
+        "schema_version": 1,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "raw_attempt_id": FORMAL_RAW_ATTEMPT_ID,
+        "attempt_root": str(attempt_root),
+        "start_receipt": _supervisor_file_receipt(start_path),
+        "observed_runner_exit": observed_exit,
+        "quiescence": quiescence,
+        "attempt_root_state": attempt_state,
+        "ordinary_result": ordinary,
+        "fatal_result": fatal,
+        "disposition": disposition,
+        "final_supervisor_exit_code": final_exit,
+        "validation_errors": sorted(set(validation_errors)),
+    }
+    closeout_path = Path(str(contract["supervisor_closeout_path_exact"]))
+    _exclusive_canonical_json(closeout_path, closeout)
+    for path in (start_path, *stream_paths.values(), closeout_path):
+        os.chmod(path, 0o444)
+        _supervisor_file_receipt(path)
+    _fsync_directory(supervisor_root)
+    os.chmod(supervisor_root, 0o500)
+    if sorted(path.name for path in supervisor_root.iterdir()) != [
+        "supervisor-child.stderr.log",
+        "supervisor-child.stdout.log",
+        "supervisor-closeout.json",
+        "supervisor-start.json",
+    ]:
+        raise SystemsHarnessError("sealed supervisor root membership differs")
+    return final_exit
+
+
 def main() -> int:
+    if "--supervise" in sys.argv[1:]:
+        return _run_formal_supervisor(sys.argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--rule-counts",
@@ -8048,7 +9596,12 @@ def main() -> int:
         action="store_true",
         help="enforce the exact protocol-v3 design and ALL-partition execution",
     )
+    parser.add_argument(
+        "--supervised-child", action="store_true", help=argparse.SUPPRESS
+    )
     args = parser.parse_args()
+    if args.supervised_child and os.environ.get("RAP_EACL_SUPERVISED_CHILD") != "1":
+        raise SystemsHarnessError("supervised-child mode lacks supervisor environment")
     config = MatrixConfig(
         rule_counts=tuple(args.rule_counts),
         project_counts=tuple(args.project_counts),
@@ -8079,10 +9632,7 @@ def main() -> int:
         if not args.plan:
             expected_parent = FORMAL_RAW_ATTEMPT_ROOT.resolve()
             runtime_dependency = dict(
-                (_formal_contract().get("formal_runtime_profile") or {}).get(
-                    "cache_and_dependency_receipt"
-                )
-                or {}
+                _formal_runtime_profile().get("cache_and_dependency_receipt") or {}
             )
             configured_parent = str(runtime_dependency.get("formal_attempt_root", ""))
             if str(FORMAL_RAW_ATTEMPT_ROOT) != configured_parent:
@@ -8143,6 +9693,8 @@ def main() -> int:
             if args.attempt_dir
             else None
         )
+        if recorder is not None and args.formal:
+            recorder.record_lifecycle("post_publication_gate_started")
         result = (
             _artifact_initialization_abort_result(
                 recorder,
@@ -8153,6 +9705,8 @@ def main() -> int:
             if recorder is not None
             else None
         )
+        if result is None and recorder is not None and args.formal:
+            recorder.record_lifecycle("post_publication_gate_passed")
         if result is None:
             try:
                 result = run_study(
@@ -8172,9 +9726,7 @@ def main() -> int:
                     formal=args.formal,
                     attempt_root=recorder.root if recorder else None,
                     launch_git=(
-                        dict(
-                            (recorder.manifest.get("identity") or {}).get("git") or {}
-                        )
+                        dict((recorder.manifest.get("identity") or {}).get("git") or {})
                         if recorder
                         else None
                     ),
@@ -8189,9 +9741,7 @@ def main() -> int:
                 "cache_end_receipt",
                 _capture_formal_cache_end(bundle, recorder),
             )
-        result = _finalize_source_state(
-            result, recorder.root if recorder else None
-        )
+        result = _finalize_source_state(result, recorder.root if recorder else None)
         if recorder:
             result = recorder.finalize(result)
     exit_code = _attempt_exit_code(str(result.get("status", "")))
@@ -8232,8 +9782,22 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (SystemsHarnessError, ValueError) as exc:
+        try:
+            _write_fatal_exception_envelope(exc)
+        except Exception:
+            traceback.print_exc()
         print(f"systems harness preflight error: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
-    except Exception:
+    except Exception as exc:
+        try:
+            _write_fatal_exception_envelope(exc)
+        except Exception:
+            traceback.print_exc()
         traceback.print_exc()
         raise SystemExit(5) from None
+    except BaseException as exc:
+        try:
+            _write_fatal_exception_envelope(exc)
+        except Exception:
+            traceback.print_exc()
+        raise

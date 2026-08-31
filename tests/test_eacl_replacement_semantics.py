@@ -1530,3 +1530,1499 @@ def test_post_terminal_system_abort_remains_a_separate_flag(
     assert result["system_violation_units"] == 0
     assert result["abort_system_violation"] is True
     assert result["unit_status_histogram"] == {"completed": 1}
+
+
+def test_component_pending_scan_matches_only_exact_scalar_placeholders():
+    value = {
+        "ordinary": "prefix PENDING_TERMINAL_VALUE suffix",
+        "PENDING_TERMINAL_KEY": "resolved",
+        "placeholder": "PENDING_TERMINAL_VALUE",
+        "metadata_prefix": "PENDING_TERMINAL_",
+    }
+
+    assert attempts._pending_terminal_markers(value) == ["PENDING_TERMINAL_VALUE"]
+
+
+def test_component_successor_binding_requires_pushed_exact_h4_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p4 = "1" * 40
+    i4 = "2" * 40
+    h4 = "3" * 40
+    h3 = "4" * 40
+    paths = {
+        "protocol": ["protocol.json"],
+        "implementation": ["runner.py"],
+        "runtime_lock": ["runtime-lock.json"],
+    }
+    for relative in [item for group in paths.values() for item in group]:
+        (tmp_path / relative).write_text(f"{relative}\n", encoding="utf-8")
+    amendment = {
+        "effective_protocol_identity": {
+            "required_git_topology": {
+                "p4": {"parent_must_equal": h3, "diff_paths_exactly": paths["protocol"]},
+                "i4": {
+                    "parent_must_equal_p4": True,
+                    "diff_paths_exactly": paths["implementation"],
+                },
+                "h4": {
+                    "parent_must_equal_i4": True,
+                    "diff_paths_exactly": paths["runtime_lock"],
+                },
+                "head_must_equal_h4_before_r03_setup": True,
+            }
+        }
+    }
+    parents = {h4: i4, i4: p4, p4: h3}
+
+    def git_text(*args: str) -> str:
+        if args == ("rev-parse", "HEAD"):
+            return h4
+        if args[:3] == ("rev-list", "--parents", "-n"):
+            commit = args[-1]
+            return f"{commit} {parents[commit]}"
+        if args[0] == "diff-tree":
+            commit = args[-1]
+            group = {p4: "protocol", i4: "implementation", h4: "runtime_lock"}[
+                commit
+            ]
+            return "\n".join(paths[group])
+        if args[0] == "for-each-ref":
+            return "refs/remotes/origin/formal-h4"
+        if args[:1] == ("rev-parse",) and ":" in args[-1]:
+            relative = args[-1].split(":", 1)[1]
+            return attempts._git_blob_sha1((tmp_path / relative).read_bytes())
+        raise AssertionError(args)
+
+    monkeypatch.setattr(attempts, "_REPO_ROOT", tmp_path)
+    monkeypatch.setattr(attempts, "_git_text", git_text)
+
+    binding = attempts.component_successor_source_binding(amendment)
+    assert binding["protocol_commit"] == p4
+    assert binding["implementation_commit"] == i4
+    assert binding["runtime_lock_commit"] == h4
+    assert [item["path"] for item in binding["tracked_files"]] == [
+        "protocol.json",
+        "runner.py",
+        "runtime-lock.json",
+    ]
+
+    def unpushed_git_text(*args: str) -> str:
+        if args[0] == "for-each-ref":
+            return ""
+        return git_text(*args)
+
+    monkeypatch.setattr(attempts, "_git_text", unpushed_git_text)
+    with pytest.raises(attempts.SystemsHarnessError, match="pushed remote ref"):
+        attempts.component_successor_source_binding(amendment)
+
+
+def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_result = {"status": "incomplete_unclassified_failure"}
+    predecessor, _unused = _predecessor(tmp_path, original_result)
+    exact_predecessor = predecessor.with_name(attempts._COMPONENT_PREDECESSOR_ID)
+    predecessor.rename(exact_predecessor)
+    (exact_predecessor / "result.json").unlink()
+    successor = exact_predecessor.with_name(attempts._COMPONENT_SUCCESSOR_ID)
+    evidence_root = tmp_path / "component-evidence"
+    evidence_root.mkdir()
+    evidence = []
+    for kind in sorted(attempts._COMPONENT_REQUIRED_EVIDENCE):
+        path = evidence_root / f"{kind}.txt"
+        path.write_text(f"{kind}\n", encoding="utf-8")
+        evidence.append((kind, path))
+    receipt = _replacement_receipt(
+        exact_predecessor,
+        successor,
+        classification=attempts._COMPONENT_CLASSIFICATION,
+        original_status="missing",
+        evidence=evidence,
+    )
+    receipt.update(
+        {
+            "schema_version": 2,
+            "successor_source": {"external": "p4-i4-h4"},
+            "whole_attempt_protocol_correction": {"source": "r03-full-430"},
+        }
+    )
+    receipt_path = tmp_path / "replacement.json"
+    _write_json(receipt_path, receipt)
+    before = attempts._predecessor_tree_receipts(exact_predecessor)
+    observed: dict[str, Any] = {}
+
+    def validate_component(**kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {"raw_partial_preserved": True}
+
+    monkeypatch.setattr(
+        attempts, "_validate_whole_attempt_protocol_correction", validate_component
+    )
+
+    binding = attempts.replacement_launch_binding(successor, str(receipt_path))
+
+    assert binding["classification"] == attempts._COMPONENT_CLASSIFICATION
+    assert binding["original_status"] == "missing"
+    assert binding["successor_source"] == receipt["successor_source"]
+    assert observed["predecessor_root"] == exact_predecessor
+    assert binding["r02_partial_terminal_forensics"] == {
+        "raw_partial_preserved": True
+    }
+    assert attempts._predecessor_tree_receipts(exact_predecessor) == before
+
+    wrong_edge = successor.with_name("formal-v3-20260831t051023z-r04")
+    wrong_receipt = dict(receipt)
+    wrong_receipt.update(
+        {
+            "schema_version": 1,
+            "successor_raw_attempt_id": wrong_edge.name,
+            "predecessor_raw_attempt_id": successor.name,
+        }
+    )
+    wrong_receipt.pop("successor_source")
+    wrong_receipt.pop("whole_attempt_protocol_correction")
+    _write_json(receipt_path, wrong_receipt)
+    with pytest.raises(attempts.SystemsHarnessError, match="not permitted"):
+        attempts.replacement_launch_binding(wrong_edge, str(receipt_path))
+
+
+def test_canary_validator_accepts_extra_import_activations_but_requires_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inner_pid = 2001
+    worker_pid = 2002
+    marker = "rap-eacl-paw-cache-canary-v4-network-guard-v2"
+    job_id = "123"
+    stem = f"rap-eacl-paw-cache-canary-v4-{job_id}"
+    archive_parent = tmp_path / "scheduler" / "canary-v4"
+    archive_parent.mkdir(parents=True)
+    archive_root = archive_parent / "20260831T120000Z-999"
+    archive_root.mkdir()
+    monkeypatch.setattr(
+        attempts, "_COMPONENT_CANARY_ARCHIVE_PARENT", archive_parent
+    )
+    canary_script = tmp_path / "rap-eacl-paw-cache-canary-v4.py"
+    launcher_script = tmp_path / "run-rap-eacl-paw-cache-canary-v4.sh"
+    canary_script.write_bytes(b"#!/usr/bin/env python3\n")
+    launcher_script.write_bytes(b"#!/bin/bash\n")
+
+    def activation(purpose: str, pid: int, parent_pid: int) -> dict[str, Any]:
+        return {
+            "guard_marker": marker,
+            "purpose": purpose,
+            "pid": pid,
+            "parent_pid": parent_pid,
+            "sys_executable": "/tmp/canary/venv/bin/python",
+            "all_identity_checks_passed": True,
+            "identity_checks": {"socket.socket": True, "_socket.socket": True},
+            "time_ns": 1,
+            "monotonic_ns": 1,
+        }
+
+    raw_activations = [
+        activation("bootstrap-pip", 1001, 1),
+        activation("bootstrap-pip:wrapper", 1001, 1),
+        activation("install-pip", 1002, 1),
+        activation("install-pip:wrapper", 1002, 1),
+        activation("freeze-pip", 1003, 1),
+        activation("freeze-pip:wrapper", 1003, 1),
+        activation("inner-runtime", inner_pid, 1),
+        activation("inner-runtime:inner", inner_pid, 1),
+        activation("inner-runtime", worker_pid, inner_pid),
+    ]
+    activation_raw = b"".join(
+        attempts._canonical_json_bytes(value) + b"\n" for value in raw_activations
+    )
+    activations = [
+        {"sequence": sequence, **value}
+        for sequence, value in enumerate(raw_activations)
+    ]
+    programs = [
+        {"program_id": f"program-{index}", "rule_id": f"rule-{index}"}
+        for index in range(8)
+    ]
+    declared = [
+        {
+            "program_id": item["program_id"],
+            "rule_id": item["rule_id"],
+            "case_id": f"case-{index}",
+            "expected": "WARNING",
+            "input_utf8_bytes": 4,
+            "input_sha256": f"{index + 1:064x}",
+            "raw_output_utf8_bytes": 2,
+            "raw_output_utf8_sha256": f"{index + 11:064x}",
+            "severity": "OK",
+            "timed_out": False,
+            "worker_generation": 1,
+            "worker_pid": worker_pid,
+        }
+        for index, item in enumerate(programs)
+    ]
+    calls = [
+        {
+            "sequence": index,
+            "program_id": item["program_id"],
+            "rule_id": item["rule_id"],
+            "case_id": declared[index]["case_id"],
+            "frozen_expected": "WARNING",
+            "input_utf8_bytes": 4,
+            "input_utf8_sha256": declared[index]["input_sha256"],
+            "raw_output_utf8_bytes": 2,
+            "raw_output_utf8_sha256": declared[index]["raw_output_utf8_sha256"],
+            "normalized_output": "OK",
+            "timed_out": False,
+            "generation_before": 1,
+            "generation_after": 1,
+            "worker_pid": worker_pid,
+            "worker_last_error": "",
+        }
+        for index, item in enumerate(programs)
+    ]
+    empty_diff = {"added": [], "deleted": [], "changed": []}
+
+    def inventory(root: str, *, device: int, inode: int) -> dict[str, Any]:
+        entries = [
+            {
+                "path": ".",
+                "type": "directory",
+                "mode": 0o700,
+                "uid": os.geteuid(),
+                "gid": os.getegid(),
+                "dev": device,
+                "inode": inode,
+                "nlink": 2,
+                "mtime_ns": 1,
+                "ctime_ns": 1,
+            },
+            {
+                "path": "runtimes/qwen3-0.6b-q6_k.json",
+                "type": "regular",
+                "mode": 0o600,
+                "uid": os.geteuid(),
+                "gid": os.getegid(),
+                "dev": device,
+                "inode": inode + 1,
+                "nlink": 1,
+                "mtime_ns": 1,
+                "ctime_ns": 1,
+                "bytes": 2,
+                "sha256": hashlib.sha256(b"{}").hexdigest(),
+            },
+        ]
+        content = [
+            {key: entry[key] for key in ("path", "type", "mode", "bytes", "sha256") if key in entry}
+            for entry in entries
+        ]
+        files = [
+            {
+                "path": entries[1]["path"],
+                "bytes": entries[1]["bytes"],
+                "sha256": entries[1]["sha256"],
+            }
+        ]
+        return {
+            "root": root,
+            "root_entry": entries[0],
+            "entries": entries,
+            "strict_temporal_entries": entries,
+            "strict_temporal_sha256": hashlib.sha256(
+                attempts._canonical_json_bytes(entries)
+            ).hexdigest(),
+            "content_equivalence_entries": content,
+            "content_equivalence_sha256": hashlib.sha256(
+                attempts._canonical_json_bytes(content)
+            ).hexdigest(),
+            "content_files": files,
+            "content_sha256": hashlib.sha256(
+                attempts._canonical_json_bytes(files)
+            ).hexdigest(),
+            "file_count": 1,
+            "total_bytes": 2,
+            "tmp_entries": [],
+        }
+
+    source_inventory = inventory("/u4/source-cache", device=1, inode=10)
+    copied_inventory = inventory("/tmp/canary/cache", device=2, inode=20)
+    receipt = {
+        "schema_version": 1,
+        "canary": "rap-eacl-paw-cache-canary-v4",
+        "status": "passed",
+        "started_at_utc": "2026-08-31T00:00:01.000001Z",
+        "ended_at_utc": "2026-08-31T00:00:04.000001Z",
+        "receipt_directory": {
+            "path": str(archive_root),
+            "owner_uid": os.geteuid(),
+            "mode": 0o700,
+        },
+        "scheduler": {
+            "job_id": job_id,
+            "hostname": "watgpu808",
+            "environment": {
+                "SLURM_JOB_ID": job_id,
+                "SLURM_JOB_PARTITION": "ALL",
+                "SLURM_JOB_NODELIST": "watgpu808",
+                "SLURM_CPUS_PER_TASK": "8",
+                "SLURM_MEM_PER_NODE": "16G",
+                "SLURM_MEM_PER_CPU": None,
+                "SLURM_JOB_GPUS": None,
+                "SLURM_STEP_GPUS": None,
+                "SLURM_GPUS": None,
+                "SLURM_GPUS_ON_NODE": None,
+                "CUDA_VISIBLE_DEVICES": "",
+                "PAW_GPU_LAYERS": "0",
+            },
+            "affinity": list(range(8)),
+            "memory_mib": 16 * 1024,
+        },
+        "inner": {
+            "status": "passed",
+            "started_at_utc": "2026-08-31T00:00:02.000001Z",
+            "ended_at_utc": "2026-08-31T00:00:03.000001Z",
+            "environment": {"process_pid": inner_pid},
+            "worker": {"stable_pid_before_shutdown": worker_pid, "stable_generation": 1},
+            "calls": calls,
+            "network_guard_activation": raw_activations[7],
+            "cache_before": copied_inventory,
+            "cache_after": copy.deepcopy(copied_inventory),
+            "cache_postrun_proof": {
+                "content_equivalence_diff": empty_diff,
+                "strict_temporal_diff": empty_diff,
+                "content_equivalence_unchanged": True,
+                "strict_temporal_unchanged": True,
+                "permitted_runtime_manifest_metadata_rewrite": None,
+                "permitted_rewrite_observed": False,
+                "permitted_changed_fields": ["ctime_ns", "mtime_ns"],
+            },
+        },
+        "preregistered_contract": {"source_cache_root": "/u4/source-cache"},
+        "network": {
+            "guard_activation_proof": {
+                "guard_marker": marker,
+                "activation_count": len(activations),
+                "all_identity_checks_passed": True,
+                "all_activations": activations,
+                "inner_explicit_activation": activations[7],
+                "spawned_inference_worker_activations": [activations[8]],
+            }
+        },
+        "source_cache": {
+            "before": source_inventory,
+            "before_owner": {
+                "expected_uid": os.geteuid(),
+                "expected_gid": os.getegid(),
+                "root_uid": os.geteuid(),
+                "root_gid": os.getegid(),
+                "checked_entry_count": len(source_inventory["entries"]),
+                "all_entries_owned_by_effective_uid_gid": True,
+            },
+            "after": copy.deepcopy(source_inventory),
+            "postrun_proof": {
+                "strict_temporal_diff": empty_diff,
+                "strict_temporal_sha256_before": source_inventory[
+                    "strict_temporal_sha256"
+                ],
+                "strict_temporal_sha256_after": source_inventory[
+                    "strict_temporal_sha256"
+                ],
+                "content_equivalence_diff": empty_diff,
+                "unchanged_exactly_excluding_atime": True,
+                "zero_tmp_entries": True,
+                "after_owner": {
+                    "expected_uid": os.geteuid(),
+                    "expected_gid": os.getegid(),
+                    "root_uid": os.geteuid(),
+                    "root_gid": os.getegid(),
+                    "checked_entry_count": len(source_inventory["entries"]),
+                    "all_entries_owned_by_effective_uid_gid": True,
+                },
+            },
+        },
+        "copy_independence": {
+            "same_content": True,
+            "content_equivalence_diff": empty_diff,
+            "content_equivalence_sha256": copied_inventory[
+                "content_equivalence_sha256"
+            ],
+            "source_aliases": [],
+            "destination_files_with_multiple_links": [],
+            "all_destination_regular_file_link_counts_equal_one": True,
+            "destination_owner": {
+                "expected_uid": os.geteuid(),
+                "expected_gid": os.getegid(),
+                "root_uid": os.geteuid(),
+                "root_gid": os.getegid(),
+                "checked_entry_count": len(copied_inventory["entries"]),
+                "all_entries_owned_by_effective_uid_gid": True,
+            },
+        },
+        "copy_durability": {
+            "regular_file_count": 1,
+            "directory_count": 1,
+            "files_fsynced_after_final_copystat": True,
+            "directories_fsynced_bottom_up": True,
+            "parent_directory_fsynced": True,
+        },
+        "node_local": {"copied_cache": "/tmp/canary/cache"},
+        "log_anchors": {},
+    }
+    scontrol_raw = (
+        f"JobId={job_id} JobName=rap-paw-cache-canary-v4 JobState=RUNNING "
+        "Partition=ALL NodeList=watgpu808 NumCPUs=8 MinMemoryNode=16G "
+        "AllocTRES=cpu=8,mem=16G,node=1,billing=8 TimeLimit=00:30:00"
+    )
+    receipt["scheduler"].update(
+        {
+            "scontrol_selected": {
+                "JobId": job_id,
+                "JobState": "RUNNING",
+                "Partition": "ALL",
+                "NodeList": "watgpu808",
+                "NumCPUs": "8",
+                "MinMemoryNode": "16G",
+                "AllocTRES": "cpu=8,mem=16G,node=1,billing=8",
+                "TimeLimit": "00:30:00",
+            },
+            "scontrol_raw": scontrol_raw,
+            "scontrol_raw_sha256": hashlib.sha256(
+                scontrol_raw.encode()
+            ).hexdigest(),
+        }
+    )
+    receipt["script"] = {
+        "path": str(canary_script),
+        "resolved_path": str(canary_script),
+        "bytes": canary_script.stat().st_size,
+        "mode": canary_script.stat().st_mode & 0o777,
+        "sha256": hashlib.sha256(canary_script.read_bytes()).hexdigest(),
+    }
+    evidence_path = archive_root / f"{stem}.json"
+    binding = {
+        "job_id": job_id,
+        "worker_generation": 1,
+        "worker_pid": worker_pid,
+        "program_results_in_exact_order": declared,
+        "network_guard_marker": marker,
+        "network_guard_activation_count": len(activations),
+        "network_guard_activation_log_bytes": len(activation_raw),
+        "network_guard_activation_log_sha256": hashlib.sha256(activation_raw).hexdigest(),
+        "guarded_pip_wrapper_activation_count": 3,
+        "guarded_pip_wrapper_identities_passed": True,
+        "inner_guard_identity_passed": True,
+        "spawned_worker_guard_identity_passed": True,
+        "copy_added_file_count": 0,
+        "copy_removed_file_count": 0,
+        "copy_changed_file_count": 0,
+        "copy_tmp_file_count": 0,
+        "copy_inventory_before_sha256": copied_inventory["strict_temporal_sha256"],
+        "copy_inventory_after_sha256": copied_inventory["strict_temporal_sha256"],
+        "source_inventory_before_sha256": source_inventory[
+            "strict_temporal_sha256"
+        ],
+        "source_inventory_after_sha256": source_inventory[
+            "strict_temporal_sha256"
+        ],
+        "node_local_cache_root": "/tmp/canary/cache",
+        "launcher_exit_status": 0,
+        "srun_exit_status": 0,
+        "postrun_sacct_exit_status": 0,
+        "postrun_sacct_attempts": 2,
+    }
+    canary_script_sha256 = hashlib.sha256(canary_script.read_bytes()).hexdigest()
+    launcher_script_sha256 = hashlib.sha256(launcher_script.read_bytes()).hexdigest()
+    amendment = {
+        "all_partition_canary": {
+            "partition_exact": "ALL",
+            "node_exact": "watgpu808",
+            "source_cache_root_exact": "/u4/source-cache",
+            "ordered_programs_exact": programs,
+            "sealed_archive_contract": {
+                "manifest_member_templates_exactly": list(
+                    attempts._COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES
+                )
+            },
+            "canary_script": {
+                "remote_path": str(canary_script),
+                "sha256": canary_script_sha256,
+            },
+            "launcher_script": {
+                "remote_path": str(launcher_script),
+                "sha256": launcher_script_sha256,
+            },
+        },
+        "pending_terminal_bindings": {
+            "r02": {
+                "slurm_partition": "ALL",
+                "slurm_terminal_state": "FAILED",
+                "slurm_exit_code": "5:0",
+                "slurm_node_list": "watgpu108",
+            }
+        },
+    }
+    top_evidence_path = archive_root / "evidence.sha256.sha256"
+    evidence: dict[str, Any] = {
+        "kind": "all_partition_paw_cache_canary",
+        "path": str(top_evidence_path),
+    }
+
+    log_names = {
+        "setup_stdout": f"{stem}.setup.stdout.log",
+        "setup_stderr": f"{stem}.setup.stderr.log",
+        "inner_stdout": f"{stem}.inner.stdout.log",
+        "inner_stderr": f"{stem}.inner.stderr.log",
+        "network": f"{stem}.network.jsonl",
+        "guard_activations": f"{stem}.guard-activations.jsonl",
+    }
+
+    def seal_archive() -> None:
+        archive_root.chmod(0o700)
+        for child in archive_root.iterdir():
+            child.chmod(0o600)
+
+        log_payloads = {
+            "setup_stdout": b"setup output\n",
+            "setup_stderr": b"",
+            "inner_stdout": b"inner output\n",
+            "inner_stderr": b"",
+            "network": b"",
+            "guard_activations": activation_raw,
+        }
+        anchors: dict[str, Any] = {}
+        for anchor_name, member_name in log_names.items():
+            member = archive_root / member_name
+            member.write_bytes(log_payloads[anchor_name])
+            member.chmod(0o444)
+            anchors[anchor_name] = {
+                "path": str(member),
+                "resolved_path": str(member),
+                "bytes": member.stat().st_size,
+                "mode": 0o444,
+                "sha256": hashlib.sha256(member.read_bytes()).hexdigest(),
+            }
+        receipt["log_anchors"] = anchors
+        receipt.pop("canonical_evidence_sha256", None)
+        receipt["canonical_evidence_sha256"] = hashlib.sha256(
+            attempts._canonical_json_bytes(receipt)
+        ).hexdigest()
+        rendered_receipt = attempts._canonical_json_bytes(receipt) + b"\n"
+        evidence_path.write_bytes(rendered_receipt)
+        evidence_path.chmod(0o444)
+        receipt_sha256 = hashlib.sha256(rendered_receipt).hexdigest()
+        receipt_sidecar = archive_root / f"{stem}.json.sha256"
+        receipt_sidecar.write_bytes(
+            f"{receipt_sha256}  {evidence_path.name}\n".encode()
+        )
+        receipt_sidecar.chmod(0o444)
+
+        postrun_row = [
+            job_id,
+            "rap-paw-cache-canary-v4",
+            "ALL",
+            "COMPLETED",
+            "0:0",
+            "10",
+            "2026-08-31T00:00:00",
+            "2026-08-31T00:00:05",
+            "watgpu808",
+            "8",
+            "16Gn",
+            "cpu=8,mem=16G,node=1,billing=8",
+            "",
+            "",
+        ]
+        r02_row = [
+            "1524523",
+            "rap-eacl-systems-v3",
+            "ALL",
+            "FAILED",
+            "5:0",
+            "100",
+            "2026-08-30T00:00:00",
+            "2026-08-31T00:00:00",
+            "watgpu108",
+        ]
+        task_summary = {
+            "status": "passed",
+            "receipt": str(evidence_path),
+            "receipt_sha256": receipt_sha256,
+            "sha256_sidecar": str(receipt_sidecar),
+        }
+        fixed_payloads = {
+            "archive-ended-at-utc.txt": b"2026-08-31T00:00:05Z\n",
+            "canary-script.sha256": (
+                f"{canary_script_sha256}  {canary_script}\n".encode()
+            ),
+            "launch-started-at-utc.txt": b"2026-08-31T00:00:00Z\n",
+            "launcher-script.sha256": (
+                f"{launcher_script_sha256}  {launcher_script}\n".encode()
+            ),
+            "launcher.exit-status.txt": b"0\n",
+            "postrun-sacct.attempts.txt": b"2\n",
+            "postrun-sacct.exit-status.txt": b"0\n",
+            "postrun-sacct.stderr.log": b"",
+            "postrun-sacct.txt": ("|".join(postrun_row) + "\n").encode(),
+            "r02-terminal-sacct.stderr.log": b"",
+            "r02-terminal-sacct.txt": ("|".join(r02_row) + "\n").encode(),
+            "required-terminal-r02-job-id.txt": b"1524523\n",
+            "slurm-job-id.txt": f"{job_id}\n".encode(),
+            "srun-client.stderr.log": b"",
+            "srun-client.stdout.log": f"{job_id}\n".encode(),
+            f"srun-task-{job_id}.stderr.log": b"",
+            f"srun-task-{job_id}.stdout.log": (
+                attempts._canonical_json_bytes(task_summary) + b"\n"
+            ),
+            "srun.exit-status.txt": b"0\n",
+        }
+        for member_name, payload in fixed_payloads.items():
+            member = archive_root / member_name
+            member.write_bytes(payload)
+            member.chmod(0o444)
+
+        expanded = {
+            name.replace("<job_id>", job_id)
+            for name in attempts._COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES
+        }
+        assert {
+            path.name
+            for path in archive_root.iterdir()
+            if path.name not in {"evidence.sha256", "evidence.sha256.sha256"}
+        } == expanded
+        manifest_path = archive_root / "evidence.sha256"
+        member_paths = sorted(
+            (archive_root / name for name in expanded),
+            key=lambda item: os.fsencode(str(item)),
+        )
+        manifest_raw = b"".join(
+            f"{hashlib.sha256(member.read_bytes()).hexdigest()}  {member}\n".encode()
+            for member in member_paths
+        )
+        manifest_path.write_bytes(manifest_raw)
+        manifest_path.chmod(0o444)
+        manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+        top_evidence_path.write_bytes(
+            f"{manifest_sha256}  {manifest_path}\n".encode()
+        )
+        top_evidence_path.chmod(0o444)
+        binding.update(
+            {
+                "archive_root": str(archive_root),
+                "archive_manifest_path": str(manifest_path),
+                "archive_manifest_bytes": len(manifest_raw),
+                "archive_manifest_sha256": manifest_sha256,
+                "canary_receipt_path": str(evidence_path),
+                "canary_receipt_bytes": len(rendered_receipt),
+                "canary_receipt_sha256": receipt_sha256,
+                "evidence_path": str(top_evidence_path),
+                "evidence_bytes": top_evidence_path.stat().st_size,
+                "evidence_sha256": hashlib.sha256(
+                    top_evidence_path.read_bytes()
+                ).hexdigest(),
+            }
+        )
+        evidence.update(
+            {
+                "bytes": binding["evidence_bytes"],
+                "sha256": binding["evidence_sha256"],
+            }
+        )
+        for child in archive_root.iterdir():
+            child.chmod(0o444)
+        archive_root.chmod(0o500)
+
+    seal_archive()
+
+    attempts._validate_all_partition_canary_receipt(
+        amendment=amendment,
+        binding=binding,
+        evidence_receipt=evidence,
+    )
+
+    missing_member = archive_root / "srun-client.stderr.log"
+    archive_root.chmod(0o700)
+    missing_member.unlink()
+    archive_root.chmod(0o500)
+    with pytest.raises(attempts.SystemsHarnessError, match="member set"):
+        attempts._validate_all_partition_canary_receipt(
+            amendment=amendment,
+            binding=binding,
+            evidence_receipt=evidence,
+        )
+    seal_archive()
+
+    tampered_member = archive_root / "srun-client.stdout.log"
+    archive_root.chmod(0o700)
+    tampered_member.chmod(0o600)
+    tampered_member.write_bytes(b"tampered\n")
+    tampered_member.chmod(0o444)
+    archive_root.chmod(0o500)
+    with pytest.raises(attempts.SystemsHarnessError, match="member digest"):
+        attempts._validate_all_partition_canary_receipt(
+            amendment=amendment,
+            binding=binding,
+            evidence_receipt=evidence,
+        )
+    seal_archive()
+
+    copied_regular = receipt["inner"]["cache_before"]["entries"][1]
+    copied_after_regular = receipt["inner"]["cache_after"]["entries"][1]
+    original_copy_identity = (copied_regular["dev"], copied_regular["inode"])
+    copied_regular["dev"] = source_inventory["entries"][1]["dev"]
+    copied_regular["inode"] = source_inventory["entries"][1]["inode"]
+    copied_after_regular["dev"] = copied_regular["dev"]
+    copied_after_regular["inode"] = copied_regular["inode"]
+    copied_before = receipt["inner"]["cache_before"]
+    copied_after = receipt["inner"]["cache_after"]
+    copied_before["strict_temporal_sha256"] = hashlib.sha256(
+        attempts._canonical_json_bytes(copied_before["entries"])
+    ).hexdigest()
+    copied_after["strict_temporal_sha256"] = hashlib.sha256(
+        attempts._canonical_json_bytes(copied_after["entries"])
+    ).hexdigest()
+    binding["copy_inventory_before_sha256"] = copied_before[
+        "strict_temporal_sha256"
+    ]
+    binding["copy_inventory_after_sha256"] = copied_after[
+        "strict_temporal_sha256"
+    ]
+    seal_archive()
+    with pytest.raises(
+        attempts.SystemsHarnessError, match="initial source/copy equivalence"
+    ):
+        attempts._validate_all_partition_canary_receipt(
+            amendment=amendment,
+            binding=binding,
+            evidence_receipt=evidence,
+        )
+
+    copied_regular["dev"], copied_regular["inode"] = original_copy_identity
+    copied_after_regular["dev"], copied_after_regular["inode"] = original_copy_identity
+    copied_before["strict_temporal_sha256"] = hashlib.sha256(
+        attempts._canonical_json_bytes(copied_before["entries"])
+    ).hexdigest()
+    copied_after["strict_temporal_sha256"] = hashlib.sha256(
+        attempts._canonical_json_bytes(copied_after["entries"])
+    ).hexdigest()
+    binding["copy_inventory_before_sha256"] = copied_before[
+        "strict_temporal_sha256"
+    ]
+    binding["copy_inventory_after_sha256"] = copied_after[
+        "strict_temporal_sha256"
+    ]
+
+    copied_after_regular["mtime_ns"] = 2
+    copied_after["strict_temporal_sha256"] = hashlib.sha256(
+        attempts._canonical_json_bytes(copied_after["entries"])
+    ).hexdigest()
+    binding["copy_inventory_after_sha256"] = copied_after[
+        "strict_temporal_sha256"
+    ]
+    seal_archive()
+    with pytest.raises(
+        attempts.SystemsHarnessError, match="diff is not independently derived"
+    ):
+        attempts._validate_all_partition_canary_receipt(
+            amendment=amendment,
+            binding=binding,
+            evidence_receipt=evidence,
+        )
+
+    temporal_change = {
+        "path": "runtimes/qwen3-0.6b-q6_k.json",
+        "before": dict(copied_regular),
+        "after": dict(copied_after_regular),
+    }
+    cache_proof = receipt["inner"]["cache_postrun_proof"]
+    cache_proof["strict_temporal_diff"] = {
+        "added": [],
+        "deleted": [],
+        "changed": [temporal_change],
+    }
+    cache_proof["strict_temporal_unchanged"] = False
+    cache_proof["permitted_runtime_manifest_metadata_rewrite"] = {
+        "path": temporal_change["path"],
+        "changed_fields": ["mtime_ns"],
+        "before": temporal_change["before"],
+        "after": temporal_change["after"],
+        "content_bytes_and_sha256_unchanged": True,
+    }
+    cache_proof["permitted_rewrite_observed"] = True
+    seal_archive()
+    attempts._validate_all_partition_canary_receipt(
+        amendment=amendment,
+        binding=binding,
+        evidence_receipt=evidence,
+    )
+
+    worker_line = raw_activations.pop()
+    assert worker_line["pid"] == worker_pid
+    activation_raw = b"".join(
+        attempts._canonical_json_bytes(value) + b"\n" for value in raw_activations
+    )
+    activations = [
+        {"sequence": sequence, **value}
+        for sequence, value in enumerate(raw_activations)
+    ]
+    activation_hash = hashlib.sha256(activation_raw).hexdigest()
+    binding["network_guard_activation_count"] = len(activations)
+    binding["network_guard_activation_log_bytes"] = len(activation_raw)
+    binding["network_guard_activation_log_sha256"] = activation_hash
+    receipt["log_anchors"]["guard_activations"].update(
+        {"bytes": len(activation_raw), "sha256": activation_hash}
+    )
+    proof = receipt["network"]["guard_activation_proof"]
+    proof["activation_count"] = len(activations)
+    proof["all_activations"] = activations
+    proof["inner_explicit_activation"] = activations[7]
+    proof["spawned_inference_worker_activations"] = []
+    seal_archive()
+    with pytest.raises(attempts.SystemsHarnessError, match="inner/spawned-worker"):
+        attempts._validate_all_partition_canary_receipt(
+            amendment=amendment,
+            binding=binding,
+            evidence_receipt=evidence,
+        )
+
+
+@pytest.mark.parametrize(
+    ("component", "payload"),
+    [
+        (
+            "matrix",
+            {
+                "samples": [{}],
+                "accounting": {"evaluations_expected": 1},
+                "daemon_identity": {"paw": True},
+                "incremental_evidence": {"journal_progress": {"path": "/x"}},
+            },
+        ),
+        (
+            "soak",
+            {
+                "events_submitted": 1,
+                "batches": [{}],
+                "global_accounting": {"evaluations_expected": 1},
+                "incremental_evidence": {"event_samples": {"path": "/x"}},
+            },
+        ),
+        (
+            "offline",
+            {
+                "prepared_online": True,
+                "online": {"sample": {}, "accounting": {"evaluations_expected": 1}},
+                "online_daemon_identity": {"paw": True},
+            },
+        ),
+        (
+            "faults",
+            {
+                "error": None,
+                "probe_specific": {
+                    "recovery": {
+                        "sample": {},
+                        "accounting": {"evaluations_expected": 1},
+                    }
+                },
+                "standardized_outcomes": {"measured": True},
+                "started_monotonic_ns": 1,
+                "finished_monotonic_ns": 2,
+            },
+        ),
+    ],
+)
+def test_forensics_positive_measurement_predicates_are_component_exact(
+    component: str, payload: dict[str, Any]
+) -> None:
+    positive, pointers = attempts._forensics_positive_measurement(component, payload)
+    assert positive is True
+    assert len(pointers) >= 4
+
+    broken = json.loads(json.dumps(payload))
+    first = pointers[0].split("/")[1]
+    broken.pop(first)
+    assert attempts._forensics_positive_measurement(component, broken)[0] is False
+
+
+def test_forensics_exception_only_fault_is_not_positive_measurement() -> None:
+    exception_only = {
+        "error": {"type": "RuntimeError", "message": "boom"},
+        "probe_specific": {"probe_exception": {"type": "RuntimeError"}},
+        "standardized_outcomes": {"healthy_recovery": None},
+        "started_monotonic_ns": 1,
+        "finished_monotonic_ns": 2,
+    }
+    assert attempts._forensics_positive_measurement("faults", exception_only)[0] is False
+
+
+@pytest.mark.parametrize(
+    ("plan", "expected"),
+    [
+        ({"component": "matrix"}, "component_requires_direct_paw"),
+        (
+            {"component": "faults", "fault": "worker_timeout"},
+            "fault_recovery_requires_direct_paw",
+        ),
+        (
+            {"component": "faults", "fault": "sqlite_lock"},
+            "fault_boundary_is_deterministic_no_paw",
+        ),
+    ],
+)
+def test_forensics_dependency_basis_is_exact_static_mapping(
+    plan: dict[str, Any], expected: str
+) -> None:
+    schema = {
+        "dependency_basis_by_static_plan_exactly": dict(
+            attempts._COMPONENT_DEPENDENCY_BASIS
+        )
+    }
+
+    assert attempts._forensics_dependency_basis(plan, schema=schema) == expected
+
+    schema["dependency_basis_by_static_plan_exactly"]["matrix"] = "arbitrary"
+    with pytest.raises(attempts.SystemsHarnessError, match="schema differs"):
+        attempts._forensics_dependency_basis(plan, schema=schema)
+
+
+def _deterministic_carry_terminal(fault: str) -> dict[str, Any]:
+    standardized = {
+        "schema_version": 1,
+        "injected_boundary": "synthetic",
+        "fail_open_hook_contract_and_latency": {},
+        "current_event_survival": {},
+        "loss_and_duplication": {},
+        "healthy_recovery": {},
+        "previous_deployment_continuity": None,
+        "orphan_process_count": 0,
+        "orphan_process_count_status": "known",
+        "post_shutdown_process_cleanup": {},
+        "persistent_state_integrity": {},
+        "operator_visible_incident_records": [],
+    }
+    probe = {
+        "persistent_state_integrity": {"ok": True},
+        "post_shutdown_process_cleanup": {"safe_to_continue": True},
+    }
+    if fault == "sqlite_lock":
+        probe.update(
+            {
+                "lock_mode": "BEGIN EXCLUSIVE",
+                "lock_acquired_monotonic_ns": 10,
+                "lock_release_started_monotonic_ns": 20,
+                "lock_released_monotonic_ns": 30,
+                "faulting_hook": {},
+                "recovery": {
+                    "sample": {},
+                    "accounting": {"evaluations_expected": 1},
+                },
+            }
+        )
+    elif fault == "malformed_payload":
+        probe.update(
+            {
+                "invalid_json": {"hook": {}},
+                "oversized_trigger_field": {"hook": {}},
+                "final_exact_evaluation_accounting": {"complete": True},
+                "recovery": {
+                    "sample": {},
+                    "accounting": {"evaluations_expected": 1},
+                },
+            }
+        )
+    elif fault == "duplicate_delivery":
+        probe.update(
+            {
+                "deliveries": 2,
+                "hooks": [{}, {}],
+                "evaluations": 1,
+                "findings": 1,
+                "ingress_duplicate_counter_delta": 1,
+                "exactly_once_within_live_daemon_window": True,
+                "scope": (
+                    "byte-identical concurrent redelivery while one daemon and its "
+                    "short-window admission cache remain live"
+                ),
+            }
+        )
+    elif fault == "deployment_failure":
+        probe.update(
+            {
+                "prepare_ok": True,
+                "working_source_changed_after_prepare": True,
+                "working_behavior_changed_after_prepare": True,
+                "commit_ok": False,
+                "previous_active_revision_remained_effective": True,
+                "previous_active_source_sha256": "1" * 64,
+                "post_failure_active_source_sha256": "1" * 64,
+                "post_failure_sample": {},
+                "post_failure_accounting": {"evaluations_expected": 1},
+            }
+        )
+    else:  # pragma: no cover - fixture misuse
+        raise AssertionError(fault)
+    return {
+        "fault": fault,
+        "repetition": 0,
+        "passed": False,
+        "started_utc": "2026-08-31T12:00:00+00:00",
+        "finished_utc": "2026-08-31T12:00:01+00:00",
+        "started_monotonic_ns": 1,
+        "finished_monotonic_ns": 3,
+        "duration_ns": 2,
+        "error": None,
+        "probe_specific": probe,
+        "standardized_outcomes": standardized,
+    }
+
+
+@pytest.mark.parametrize(
+    ("fault", "predicate"),
+    [
+        ("sqlite_lock", "sqlite_lock_carry_valid_v1"),
+        ("malformed_payload", "malformed_payload_carry_valid_v1"),
+        ("duplicate_delivery", "duplicate_delivery_carry_valid_v1"),
+        ("deployment_failure", "deployment_failure_carry_valid_v1"),
+    ],
+)
+def test_forensics_deterministic_carry_predicates_are_family_exact(
+    fault: str, predicate: str
+) -> None:
+    terminal = _deterministic_carry_terminal(fault)
+    observed_predicate, pointers = attempts._forensics_carry_validity(
+        {"fault": fault, "repetition": 0}, terminal
+    )
+    assert observed_predicate == predicate
+    assert len(pointers) >= 18
+
+    terminal["probe_specific"]["probe_exception"] = {"type": "RuntimeError"}
+    with pytest.raises(attempts.SystemsHarnessError, match="common predicate"):
+        attempts._forensics_carry_validity(
+            {"fault": fault, "repetition": 0}, terminal
+        )
+
+
+def test_forensics_fault_measurement_requires_monotonic_order() -> None:
+    terminal = {
+        "error": None,
+        "probe_specific": {
+            "recovery": {
+                "sample": {},
+                "accounting": {"evaluations_expected": 1},
+            }
+        },
+        "standardized_outcomes": {"measured": True},
+        "started_monotonic_ns": 2,
+        "finished_monotonic_ns": 1,
+    }
+    assert attempts._forensics_positive_measurement("faults", terminal)[0] is False
+
+
+def test_replacement_receipt_rejects_duplicate_keys_before_edge_selection(
+    tmp_path: Path,
+) -> None:
+    successor = tmp_path / "formal-v3-20260831t051023z-r03"
+    receipt_path = tmp_path / "replacement.json"
+    receipt_path.write_text(
+        '{"schema_version":2,"schema_version":1}\n', encoding="utf-8"
+    )
+    with pytest.raises(attempts.SystemsHarnessError, match="duplicate JSON object key"):
+        attempts.replacement_launch_binding(successor, str(receipt_path))
+
+
+def test_whole_attempt_validation_rejects_duplicate_wrapper_keys(tmp_path: Path) -> None:
+    path = tmp_path / "whole-attempt-validation.json"
+    raw = b'{"schema_version":1,"schema_version":1}\n'
+    path.write_bytes(raw)
+    with pytest.raises(attempts.SystemsHarnessError, match="not strict JSON"):
+        attempts._forensics_strict_json_file(
+            path,
+            label="whole-attempt validation",
+            cache={},
+        )
+
+
+def test_forensics_component_started_and_terminal_receipts_are_exact(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    matrix_plan = {
+        "component": "matrix",
+        "unit_id": "r1-p1-round_robin_across_projects-sequential20-rep0",
+        "condition_id": "r1-p1-round_robin_across_projects-sequential20-rep0",
+        "rule_count": 1,
+        "project_count": 1,
+        "events": 20,
+    }
+    matrix_started = {
+        "phase": "started",
+        "plan": {
+            key: value
+            for key, value in matrix_plan.items()
+            if key not in {"component", "unit_id"}
+        },
+        "started_utc": "2026-08-31T12:00:00+00:00",
+        "started_monotonic_ns": 1,
+        "retained_runtime_root": str(
+            root / "runtime" / "matrix" / matrix_plan["unit_id"]
+        ),
+    }
+    attempts._forensics_validate_started_payload(
+        component="matrix",
+        unit_id=matrix_plan["unit_id"],
+        plan=matrix_plan,
+        payload=matrix_started,
+        attempt_root=root,
+        network_boundary={},
+    )
+    attempts._forensics_validate_terminal_payload(
+        component="matrix",
+        unit_id=matrix_plan["unit_id"],
+        plan=matrix_plan,
+        payload={
+            "status": "completed",
+            "condition_id": matrix_plan["unit_id"],
+            "rule_count": 1,
+            "project_count": 1,
+        },
+    )
+
+    invalid_started = {**matrix_started, "unexpected": True}
+    with pytest.raises(attempts.SystemsHarnessError, match="matrix started"):
+        attempts._forensics_validate_started_payload(
+            component="matrix",
+            unit_id=matrix_plan["unit_id"],
+            plan=matrix_plan,
+            payload=invalid_started,
+            attempt_root=root,
+            network_boundary={},
+        )
+    with pytest.raises(attempts.SystemsHarnessError, match="condition_id"):
+        attempts._forensics_validate_terminal_payload(
+            component="matrix",
+            unit_id=matrix_plan["unit_id"],
+            plan=matrix_plan,
+            payload={"status": "completed"},
+        )
+
+    soak_plan = {
+        "component": "soak",
+        "unit_id": "soak-r8-p8",
+        "rule_count": 8,
+        "project_count": 8,
+        "events": 10_000,
+    }
+    with pytest.raises(attempts.SystemsHarnessError, match="omits successful"):
+        attempts._forensics_validate_terminal_payload(
+            component="soak",
+            unit_id="soak-r8-p8",
+            plan=soak_plan,
+            payload={"status": "completed"},
+        )
+
+
+def test_forensics_fault_positive_measurement_rejects_unknown_outcomes() -> None:
+    terminal = {
+        "error": None,
+        "probe_specific": {
+            "recovery": {"sample": {}, "accounting": {"evaluations_expected": 1}}
+        },
+        "standardized_outcomes": {
+            "orphan_process_count_status": "unknown_after_caught_exception"
+        },
+        "started_monotonic_ns": 1,
+        "finished_monotonic_ns": 2,
+    }
+    assert attempts._forensics_positive_measurement("faults", terminal)[0] is False
+    terminal["standardized_outcomes"]["orphan_process_count_status"] = "measured"
+    assert attempts._forensics_positive_measurement("faults", terminal)[0] is True
+
+
+def test_forensics_label_evidence_is_sorted_exact_and_byte_counted(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    matrix = root / "matrix"
+    runtime = root / "runtime" / "matrix" / "u"
+    matrix.mkdir(parents=True)
+    runtime.mkdir(parents=True)
+    started = matrix / "u.started.json"
+    terminal = matrix / "u.terminal.json"
+    log = runtime / "daemon-output.log"
+    _write_json(started, {"phase": "started"})
+    _write_json(terminal, {"status": "completed"})
+    log.write_bytes(b"ababa")
+
+    def receipt(path: Path) -> dict[str, Any]:
+        base = _file_receipt(path)
+        return {**base, "type": "regular_file"}
+
+    schema = {
+        "file_receipt_fields_exactly": ["path", "bytes", "sha256", "type"],
+        "label_evidence_fields_exactly": [
+            "supporting_receipts",
+            "json_values",
+            "text_literals",
+        ],
+        "json_value_evidence_fields_exactly": [
+            "receipt_path",
+            "json_pointer",
+            "value",
+        ],
+        "text_literal_evidence_fields_exactly": [
+            "receipt_path",
+            "literal_utf8",
+            "occurrence_count",
+        ],
+    }
+    supports = sorted([receipt(terminal), receipt(log)], key=lambda item: item["path"])
+    evidence = {
+        "supporting_receipts": supports,
+        "json_values": [
+            {
+                "receipt_path": str(terminal.resolve()),
+                "json_pointer": "/status",
+                "value": "completed",
+            }
+        ],
+        "text_literals": [
+            {
+                "receipt_path": str(log.resolve()),
+                "literal_utf8": "aba",
+                "occurrence_count": 1,
+            }
+        ],
+    }
+    tree_files = {
+        "matrix/u.started.json": {
+            "relative_path": "matrix/u.started.json",
+            "type": "regular_file",
+            "bytes": started.stat().st_size,
+            "sha256": hashlib.sha256(started.read_bytes()).hexdigest(),
+        },
+        "runtime/matrix/u/daemon-output.log": {
+            "relative_path": "runtime/matrix/u/daemon-output.log",
+            "type": "regular_file",
+            "bytes": log.stat().st_size,
+            "sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+        }
+    }
+    pointers, literals, _ = attempts._forensics_validate_label_evidence(
+        evidence,
+        schema=schema,
+        label="test evidence",
+        predecessor_root=root,
+        component="matrix",
+        terminal_path=terminal.resolve(),
+        tree_files=tree_files,
+        expected_pointers=["/status"],
+        expected_support_paths={terminal.resolve(), log.resolve()},
+        expected_text_literal_keys={(str(log.resolve()), b"aba")},
+        indirect_receipts={},
+        json_cache={},
+    )
+    assert pointers[(str(terminal.resolve()), "/status")] == "completed"
+    assert literals[0]["occurrence_count"] == 1
+
+    wrong_count = copy.deepcopy(evidence)
+    wrong_count["text_literals"][0]["occurrence_count"] = 2
+    with pytest.raises(attempts.SystemsHarnessError, match="occurrence count"):
+        attempts._forensics_validate_label_evidence(
+            wrong_count,
+            schema=schema,
+            label="test evidence",
+            predecessor_root=root,
+            component="matrix",
+            terminal_path=terminal.resolve(),
+            tree_files=tree_files,
+            expected_pointers=["/status"],
+            expected_support_paths={terminal.resolve(), log.resolve()},
+            expected_text_literal_keys={(str(log.resolve()), b"aba")},
+            indirect_receipts={},
+            json_cache={},
+        )
+    uncited = copy.deepcopy(evidence)
+    uncited["supporting_receipts"] = sorted(
+        [*uncited["supporting_receipts"], receipt(started)],
+        key=lambda item: item["path"],
+    )
+    with pytest.raises(attempts.SystemsHarnessError, match="exact citations"):
+        attempts._forensics_validate_label_evidence(
+            uncited,
+            schema=schema,
+            label="test evidence",
+            predecessor_root=root,
+            component="matrix",
+            terminal_path=terminal.resolve(),
+            tree_files=tree_files,
+            expected_pointers=["/status"],
+            expected_support_paths={terminal.resolve(), log.resolve()},
+            expected_text_literal_keys={(str(log.resolve()), b"aba")},
+            indirect_receipts={},
+            json_cache={},
+        )
+
+
+def test_forensics_closeout_derives_observed_partition_exhaustively() -> None:
+    schema = {
+        "cache_inventory_item_fields_exactly": [
+            "relative_path",
+            "type",
+            "mode",
+            "bytes",
+            "sha256",
+        ],
+        "cache_mismatch_item_fields_exactly": [
+            "relative_path",
+            "required",
+            "observed",
+        ],
+    }
+    required = [
+        {
+            "relative_path": "base_models/model.gguf",
+            "type": "regular",
+            "mode": 0o600,
+            "bytes": 1,
+            "sha256": "1" * 64,
+        },
+        {
+            "relative_path": "runtimes/current.json",
+            "type": "regular",
+            "mode": 0o600,
+            "bytes": 2,
+            "sha256": "2" * 64,
+        },
+    ]
+    observed = [required[0]]
+    closeout = {
+        "required_files": required,
+        "observed_files": observed,
+        "matched_files": ["base_models/model.gguf"],
+        "missing_files": ["runtimes/current.json"],
+        "mismatched_files": [],
+        "inventory_sha256": hashlib.sha256(
+            attempts._canonical_json_bytes(observed)
+        ).hexdigest(),
+    }
+    assert set(
+        attempts._forensics_validate_cache_closeout(
+            closeout, schema=schema, locked_required=required
+        )
+    ) == {"base_models/model.gguf"}
+
+    extra = copy.deepcopy(closeout)
+    extra_item = {
+        "relative_path": "programs/extra/meta.json",
+        "type": "regular",
+        "mode": 0o600,
+        "bytes": 3,
+        "sha256": "3" * 64,
+    }
+    extra["observed_files"].append(extra_item)
+    extra["inventory_sha256"] = hashlib.sha256(
+        attempts._canonical_json_bytes(extra["observed_files"])
+    ).hexdigest()
+    with pytest.raises(attempts.SystemsHarnessError, match="extra"):
+        attempts._forensics_validate_cache_closeout(
+            extra, schema=schema, locked_required=required
+        )
+
+
+def test_forensics_operational_active_set_recomputes_tree_and_metadata(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    program_id = "program-id"
+    program_dir = root / "programs" / program_id
+    runtime_dir = root / "runtimes"
+    program_dir.mkdir(parents=True)
+    runtime_dir.mkdir()
+    meta = program_dir / "meta.json"
+    manifest = runtime_dir / "qwen3-0.6b-q6_k.json"
+    _write_json(
+        meta,
+        {
+            "program_id": program_id,
+            "runtime_id": "qwen3-0.6b-q6_k",
+            "runtime_manifest_version": 1,
+        },
+    )
+    _write_json(
+        manifest,
+        {"runtime_id": "qwen3-0.6b-q6_k", "manifest_version": 1},
+    )
+
+    def inventory(path: Path, relative: str) -> dict[str, Any]:
+        return {
+            "relative_path": relative,
+            "type": "regular",
+            "mode": 0o600,
+            "bytes": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+
+    meta_item = inventory(meta, f"programs/{program_id}/meta.json")
+    manifest_item = inventory(manifest, "runtimes/qwen3-0.6b-q6_k.json")
+    base_item = {
+        "relative_path": "base_models/qwen3-0.6b-q6_k.gguf",
+        "type": "regular",
+        "mode": 0o600,
+        "bytes": 622733120,
+        "sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c",
+    }
+    observed = {
+        base_item["relative_path"]: base_item,
+        meta_item["relative_path"]: meta_item,
+        manifest_item["relative_path"]: manifest_item,
+    }
+    measured = "4" * 64
+    operational = {
+        "program_ids": [program_id],
+        "program_tree_sha256_by_id": {
+            program_id: hashlib.sha256(
+                attempts._canonical_json_bytes([meta_item])
+            ).hexdigest()
+        },
+        "embedded_runtime_id_by_program_id": {
+            program_id: "qwen3-0.6b-q6_k"
+        },
+        "active_runtime_manifest": {
+            "relative_path": manifest_item["relative_path"],
+            "bytes": manifest_item["bytes"],
+            "sha256": manifest_item["sha256"],
+            "embedded_runtime_id": "qwen3-0.6b-q6_k",
+        },
+        "base_model": {
+            "relative_path": base_item["relative_path"],
+            "bytes": base_item["bytes"],
+            "sha256": base_item["sha256"],
+        },
+        "positive_measured_unit_membership_sha256": measured,
+    }
+    schema = {
+        "operational_active_set_fixed_program_ids": [program_id],
+        "active_runtime_manifest_fields_exactly": [
+            "relative_path",
+            "bytes",
+            "sha256",
+            "embedded_runtime_id",
+        ],
+        "base_model_fields_exactly": ["relative_path", "bytes", "sha256"],
+    }
+    attempts._forensics_validate_operational_active_set(
+        operational,
+        schema=schema,
+        observed_by_path=observed,
+        configured_root=root,
+        measured_membership_sha256=measured,
+    )
+    invalid = copy.deepcopy(operational)
+    invalid["program_tree_sha256_by_id"][program_id] = "0" * 64
+    with pytest.raises(attempts.SystemsHarnessError, match="program-tree"):
+        attempts._forensics_validate_operational_active_set(
+            invalid,
+            schema=schema,
+            observed_by_path=observed,
+            configured_root=root,
+            measured_membership_sha256=measured,
+        )

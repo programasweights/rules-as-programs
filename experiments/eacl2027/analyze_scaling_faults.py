@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and reduce immutable amendment-007 systems attempts."""
+"""Validate and reduce immutable amendment-007/008 systems attempts."""
 
 from __future__ import annotations
 
@@ -23,12 +23,14 @@ from experiments.eacl2027 import scaling_faults_runtime as runtime_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS_VERSION = "protocol-v3-amendment-007-systems-reducer-v1"
+COMPONENT_ANALYSIS_ID = systems.FORMAL_COMPONENT_ANALYSIS_ID
 ANALYSIS_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 FORMAL_ATTEMPT_PATTERN = re.compile(
     r"(?P<prefix>[a-z0-9][a-z0-9._-]{0,59})-r(?P<ordinal>[0-9]{2})"
 )
 FORMAL_COMPONENT_COUNTS = {"matrix": 288, "soak": 1, "offline": 1, "faults": 140}
-PROTOCOL_PATHS = (
+FORMAL_R03_COMPONENT_COUNTS = dict(FORMAL_COMPONENT_COUNTS)
+PROTOCOL_PATHS_007 = (
     "experiments/eacl2027/protocol-v3.json",
     "experiments/eacl2027/protocol-v3-amendment-001.json",
     "experiments/eacl2027/protocol-v3-amendment-002.json",
@@ -38,6 +40,12 @@ PROTOCOL_PATHS = (
     "experiments/eacl2027/protocol-v3-amendment-006.json",
     "experiments/eacl2027/protocol-v3-amendment-007.json",
 )
+PROTOCOL_PATHS_008 = (
+    *PROTOCOL_PATHS_007,
+    "experiments/eacl2027/protocol-v3-amendment-008.json",
+)
+# Backward-compatible name for the amendment-007 single-attempt reducer.
+PROTOCOL_PATHS = PROTOCOL_PATHS_007
 TERMINAL_STATUSES = frozenset(
     {
         "completed",
@@ -68,9 +76,25 @@ REDUCER_CONFIG = {
         "earlier positively evidenced harness/infrastructure failure may be crossed"
     ),
 }
+COMPONENT_REDUCER_CONFIG = {
+    "version": COMPONENT_ANALYSIS_ID,
+    "base_reducer_version": ANALYSIS_VERSION,
+    "component_order": ["matrix", "soak", "offline", "faults"],
+    "full_plan_unit_count": 430,
+    "r03_primary_unit_count": 430,
+    "r02_partial_sensitivity_terminal_count": 279,
+    "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+    "ordered_membership_sha256": systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
+    "primary_eligible_unit_statuses": sorted(PRIMARY_ELIGIBLE_STATUSES),
+    "terminal_statuses": sorted(TERMINAL_STATUSES),
+    "numeric_promotion": "only_complete_exact_r03_whole_attempt",
+    "sensitivity": "all_raw_r02_partial_rows_without_source_selection",
+    "raw_status_policy": "preserve_r01_r02_r03_without_relabeling",
+}
 
 _FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_007"
 _FORMAL_PROTOCOL_STATUS = _FORMAL_STUDY_MODE
+_COMPONENT_STUDY_MODE = "formal_protocol_v3_amendment_008"
 _SOCKET_ENDPOINT_MAX_BYTES = 107
 
 
@@ -80,7 +104,11 @@ class AnalysisValidationError(ValueError):
 
 def _canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -143,11 +171,7 @@ _LINUX_NATIVE_UNSUPPORTED_ERRNOS = {
 
 def _expected_publication_claim_path(root: Path) -> Path:
     staging_parent = root.parent.with_name(f".{root.parent.name}.staging")
-    return (
-        staging_parent
-        / ".publication-claims"
-        / f"{root.name}.launch.json"
-    )
+    return staging_parent / ".publication-claims" / f"{root.name}.launch.json"
 
 
 def _validate_publication(root: Path) -> dict[str, Any]:
@@ -158,9 +182,7 @@ def _validate_publication(root: Path) -> dict[str, Any]:
         raise AnalysisValidationError(
             "publication.json is missing, non-regular, or a symlink"
         )
-    publication = _require_dict(
-        _load_json(publication_path), "publication.json"
-    )
+    publication = _require_dict(_load_json(publication_path), "publication.json")
     if set(publication) != {
         "schema_version",
         "destination",
@@ -267,14 +289,9 @@ def _validate_publication(root: Path) -> dict[str, Any]:
         ("publication claims root", expected_claim.parent),
     ):
         if not directory.is_dir():
-            raise AnalysisValidationError(
-                f"fallback {label} is not a directory"
-            )
+            raise AnalysisValidationError(f"fallback {label} is not a directory")
         observed = directory.stat(follow_symlinks=False)
-        if (
-            observed.st_uid != expected_owner
-            or stat.S_IMODE(observed.st_mode) != 0o700
-        ):
+        if observed.st_uid != expected_owner or stat.S_IMODE(observed.st_mode) != 0o700:
             raise AnalysisValidationError(
                 f"fallback {label} is not owner-exclusive mode 0700"
             )
@@ -402,21 +419,22 @@ def _validate_hook_projection(
 def _validate_hook_parent(parent: Mapping[str, Any], hook_key: str, label: str) -> None:
     hook = _require_dict(parent.get(hook_key), f"{label} {hook_key}")
     expected_full = True if hook_key == "faulting_hook" else None
-    if hook_key == "hook" and "hook_exit_ms" in parent and not {
-        "hook_started_monotonic_ns",
-        "hook_exited_monotonic_ns",
-    }.issubset(parent):
+    if (
+        hook_key == "hook"
+        and "hook_exit_ms" in parent
+        and not {
+            "hook_started_monotonic_ns",
+            "hook_exited_monotonic_ns",
+        }.issubset(parent)
+    ):
         expected_full = True
-    _validate_hook_projection(
-        hook, f"{label} {hook_key}", expected_full=expected_full
-    )
+    _validate_hook_projection(hook, f"{label} {hook_key}", expected_full=expected_full)
     prefix = "faulting_hook" if hook_key == "faulting_hook" else "hook"
     contract_name = f"{prefix}_contract_preserved"
     latency_name = f"{prefix}_exit_ms"
-    if (
-        contract_name in parent
-        and parent.get(contract_name) is not _hook_contract_preserved(hook)
-    ):
+    if contract_name in parent and parent.get(
+        contract_name
+    ) is not _hook_contract_preserved(hook):
         raise AnalysisValidationError(
             f"{label} {contract_name} disagrees with its hook projection"
         )
@@ -478,9 +496,7 @@ def _validate_hook_parent(parent: Mapping[str, Any], hook_key: str, label: str) 
         if display_name in parent and parent.get(display_name) != round(
             expected / 1_000_000, 3
         ):
-            raise AnalysisValidationError(
-                f"{label} {display_name} is not recomputed"
-            )
+            raise AnalysisValidationError(f"{label} {display_name} is not recomputed")
 
 
 def _validate_embedded_hook_projections(value: Any, label: str) -> None:
@@ -504,9 +520,7 @@ def _validate_embedded_hook_projections(value: Any, label: str) -> None:
                 expected = len(hooks) == 2 and all(
                     _hook_contract_preserved(item) for item in hooks
                 )
-                if (
-                    node.get("hook_contracts_preserved") is not expected
-                ):
+                if node.get("hook_contracts_preserved") is not expected:
                     raise AnalysisValidationError(
                         f"{path} hook_contracts_preserved is not recomputed"
                     )
@@ -616,9 +630,7 @@ def _validate_accounting_projection(accounting: Mapping[str, Any], label: str) -
                 )
             result_counts = accounting.get("result_counts")
             if not isinstance(result_counts, dict) or any(
-                not isinstance(name, str)
-                or not _is_exact_int(count)
-                or count < 0
+                not isinstance(name, str) or not _is_exact_int(count) or count < 0
                 for name, count in result_counts.items()
             ):
                 raise AnalysisValidationError(f"{label}.result_counts is invalid")
@@ -677,8 +689,7 @@ def _validate_fault_record_scan(scan: Mapping[str, Any], label: str) -> None:
         sorted(Counter(str(item.get("input_sha256", "")) for item in records).items())
     )
     expected_terminal = sum(
-        str(item.get("status", "")) in {"completed", "failed"}
-        for item in records
+        str(item.get("status", "")) in {"completed", "failed"} for item in records
     )
     canonical = sorted(records, key=_canonical_json_bytes)
     if (
@@ -834,10 +845,7 @@ def _validated_binary_receipt(
         root, str(relative) if relative is not None else original_path
     )
     raw = path.read_bytes()
-    if (
-        receipt.get("bytes") != len(raw)
-        or receipt.get("sha256") != _sha256_bytes(raw)
-    ):
+    if receipt.get("bytes") != len(raw) or receipt.get("sha256") != _sha256_bytes(raw):
         raise AnalysisValidationError(f"{label} byte/hash receipt mismatch")
     return receipt, raw
 
@@ -850,7 +858,11 @@ def _validate_jsonl_receipt(
 
 
 def _validate_sources(
-    identity: Mapping[str, Any], *, legacy_r01: Mapping[str, Any] | None = None
+    identity: Mapping[str, Any],
+    *,
+    legacy_r01: Mapping[str, Any] | None = None,
+    runner_anchor: Mapping[str, Any] | None = None,
+    protocol_paths: Sequence[str] | None = None,
 ) -> list[dict[str, str]]:
     raw_documents = identity.get("protocol_documents")
     if not isinstance(raw_documents, list) or not all(
@@ -861,8 +873,12 @@ def _validate_sources(
         {"path": str(item.get("path", "")), "sha256": str(item.get("sha256", ""))}
         for item in raw_documents
     ]
-    expected_paths = (
-        list(PROTOCOL_PATHS[:-1]) if legacy_r01 is not None else list(PROTOCOL_PATHS)
+    expected_paths = list(
+        protocol_paths
+        if protocol_paths is not None
+        else PROTOCOL_PATHS[:-1]
+        if legacy_r01 is not None
+        else PROTOCOL_PATHS
     )
     if [item["path"] for item in documents] != expected_paths:
         raise AnalysisValidationError("launch does not bind the ordered protocol set")
@@ -875,26 +891,35 @@ def _validate_sources(
         if not path.is_file() or _sha256(path) != item["sha256"]:
             raise AnalysisValidationError(f"protocol hash mismatch: {item['path']}")
     runner = _require_dict(identity.get("runner"), "launch identity runner")
-    if legacy_r01 is not None:
+    anchor = runner_anchor or legacy_r01
+    if anchor is not None:
         if runner != {
             "path": "experiments/eacl2027/run_scaling_faults.py",
-            "sha256": legacy_r01["runner_sha256"],
-            "git_blob": legacy_r01["runner_git_blob"],
+            "sha256": anchor["runner_sha256"],
+            "git_blob": anchor["runner_git_blob"],
         }:
-            raise AnalysisValidationError("legacy r01 runner identity differs from anchor")
+            raise AnalysisValidationError(
+                "historical runner identity differs from anchor"
+            )
     else:
         imported = Path(systems.__file__).resolve()
         if runner.get("path") != str(imported.relative_to(REPO_ROOT)):
-            raise AnalysisValidationError("launch runner path differs from imported reducer")
+            raise AnalysisValidationError(
+                "launch runner path differs from imported reducer"
+            )
         if runner.get("sha256") != _sha256(imported):
-            raise AnalysisValidationError("launch runner hash differs from imported reducer")
+            raise AnalysisValidationError(
+                "launch runner hash differs from imported reducer"
+            )
         runner_bytes = imported.read_bytes()
         runner_blob = hashlib.sha1(
             f"blob {len(runner_bytes)}\0".encode("ascii") + runner_bytes,
             usedforsecurity=False,
         ).hexdigest()
         if runner.get("git_blob") != runner_blob:
-            raise AnalysisValidationError("launch runner Git blob differs from exact bytes")
+            raise AnalysisValidationError(
+                "launch runner Git blob differs from exact bytes"
+            )
     return documents
 
 
@@ -907,9 +932,61 @@ def _is_anchored_r01(
     return _require_dict(repair.get("predecessor_launch"), "amendment-007 r01 anchor")
 
 
+def _load_amendment_008() -> dict[str, Any] | None:
+    path = REPO_ROOT / PROTOCOL_PATHS_008[-1]
+    if not path.is_file() or path.is_symlink():
+        return None
+    try:
+        value = attempts_contract._strict_json_object(
+            path.read_text(encoding="utf-8"), label="amendment 008"
+        )
+    except (OSError, UnicodeDecodeError, attempts_contract.SystemsHarnessError) as exc:
+        raise AnalysisValidationError(str(exc)) from exc
+    if (
+        value.get("amendment_id") != "protocol-v3-amendment-008"
+        or not str(value.get("freeze_state", "")).startswith("frozen_")
+        or "draft" in str(value.get("status", "")).lower()
+        or attempts_contract._pending_terminal_markers(value)
+    ):
+        raise AnalysisValidationError("amendment 008 is not a terminal frozen contract")
+    try:
+        frozen_at = datetime.fromisoformat(
+            str(value.get("frozen_utc", "")).replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise AnalysisValidationError("amendment 008 frozen_utc is invalid") from exc
+    if frozen_at.tzinfo is None or frozen_at > datetime.now(timezone.utc):
+        raise AnalysisValidationError(
+            "amendment 008 frozen_utc is not a past timestamp"
+        )
+    return value
+
+
+def _is_anchored_r02(
+    raw_attempt_id: str, amendment_008: Mapping[str, Any] | None
+) -> Mapping[str, Any] | None:
+    if (
+        amendment_008 is None
+        or raw_attempt_id != attempts_contract._COMPONENT_PREDECESSOR_ID
+    ):
+        return None
+    h3 = _require_dict(amendment_008.get("known_at_draft"), "amendment-008 known facts")
+    h3 = _require_dict(h3.get("h3"), "amendment-008 H3 anchor")
+    runner = _require_dict(h3.get("runner"), "amendment-008 H3 runner")
+    return {
+        "runner_sha256": runner.get("sha256"),
+        "runner_git_blob": runner.get("git_blob"),
+        "git_commit": h3.get("commit"),
+    }
+
+
 def _validate_anchored_r01(
-    identity: Mapping[str, Any], result: Mapping[str, Any], launch: Mapping[str, Any],
-    anchor: Mapping[str, Any], contract: Mapping[str, Any], root: Path
+    identity: Mapping[str, Any],
+    result: Mapping[str, Any],
+    launch: Mapping[str, Any],
+    anchor: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    root: Path,
 ) -> None:
     repair = _require_dict(contract.get("outcome_aware_repair"), "amendment-007 repair")
     raw_result = _require_dict(repair.get("raw_result"), "amendment-007 r01 result")
@@ -920,7 +997,9 @@ def _validate_anchored_r01(
         expected = _require_dict(expected_value, f"amendment-007 r01 {name}")
         path = root / name
         if path.is_symlink() or not path.is_file():
-            raise AnalysisValidationError(f"anchored r01 core artifact is missing: {name}")
+            raise AnalysisValidationError(
+                f"anchored r01 core artifact is missing: {name}"
+            )
         byte_count, digest = _stream_file_identity(path)
         if expected.get("bytes") != byte_count or expected.get("sha256") != digest:
             raise AnalysisValidationError(
@@ -936,6 +1015,54 @@ def _validate_anchored_r01(
         is not raw_result.get("raw_primary_numeric_eligible")
     ):
         raise AnalysisValidationError("raw r01 differs from the amendment-007 anchor")
+
+
+def _validate_anchored_r02(
+    identity: Mapping[str, Any],
+    result: Mapping[str, Any],
+    launch: Mapping[str, Any],
+    anchor: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    root: Path,
+) -> None:
+    terminal = _require_dict(
+        _require_dict(
+            contract.get("pending_terminal_bindings"),
+            "amendment-008 terminal bindings",
+        ).get("r02"),
+        "amendment-008 r02 binding",
+    )
+    artifact_fields = {
+        "launch.json": ("launch_json_bytes", "launch_json_sha256"),
+        "plan.json": ("plan_json_bytes", "plan_json_sha256"),
+        "publication.json": (
+            "publication_json_bytes",
+            "publication_json_sha256",
+        ),
+        "result.json": ("result_json_bytes", "result_json_sha256"),
+        "units.jsonl": ("units_jsonl_bytes", "units_jsonl_sha256"),
+    }
+    for name, (byte_field, hash_field) in artifact_fields.items():
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            raise AnalysisValidationError(f"anchored r02 artifact is missing: {name}")
+        byte_count, digest = _stream_file_identity(path)
+        if byte_count != terminal.get(byte_field) or digest != terminal.get(hash_field):
+            raise AnalysisValidationError(
+                f"anchored r02 artifact differs from amendment 008: {name}"
+            )
+    if (
+        launch.get("identity_sha256") != terminal.get("launch_identity_sha256")
+        or (identity.get("git") or {}).get("commit") != anchor.get("git_commit")
+        or result.get("status") != terminal.get("raw_status")
+        or result.get("planned_unit_count") != 430
+        or result.get("terminal_unit_count") != 430
+        or result.get("complete_plan") is not True
+        or result.get("all_planned_units_terminal") is not True
+    ):
+        raise AnalysisValidationError(
+            "raw r02 differs from amendment-008 terminal anchor"
+        )
 
 
 def _is_exact_int(value: Any) -> bool:
@@ -1100,7 +1227,10 @@ def _validate_setup_socket_preflight(
         "bind_connect_accept_payload_equal": True,
         "endpoint_removed_after_probe": True,
     }
-    if expected["encoded_pathname_bytes"] > _SOCKET_ENDPOINT_MAX_BYTES or receipt != expected:
+    if (
+        expected["encoded_pathname_bytes"] > _SOCKET_ENDPOINT_MAX_BYTES
+        or receipt != expected
+    ):
         raise AnalysisValidationError("formal socket preflight receipt mismatch")
 
 
@@ -1126,9 +1256,10 @@ def _validate_retained_copy(
         raise AnalysisValidationError(f"{label} has unexpected fields")
     path = _checked_file(root, str(item.get("retained_path", "")))
     byte_count, digest = _stream_file_identity(path)
-    if int(item.get("bytes", -1)) != byte_count or str(
-        item.get("sha256", "")
-    ) != digest:
+    if (
+        int(item.get("bytes", -1)) != byte_count
+        or str(item.get("sha256", "")) != digest
+    ):
         raise AnalysisValidationError(f"{label} byte receipt mismatch")
     return item, path
 
@@ -1220,14 +1351,11 @@ def _validate_predecessor_tree_binding(
             "replacement predecessor tree is not in canonical path order"
         )
     regular_tree_bytes = sum(
-        int(item["bytes"])
-        for item in tree
-        if item.get("type") == "regular_file"
+        int(item["bytes"]) for item in tree if item.get("type") == "regular_file"
     )
     if (
         len(tree) > attempts_contract._MAX_PREDECESSOR_TREE_ENTRIES
-        or regular_tree_bytes
-        > attempts_contract._MAX_PREDECESSOR_TREE_REGULAR_BYTES
+        or regular_tree_bytes > attempts_contract._MAX_PREDECESSOR_TREE_REGULAR_BYTES
     ):
         raise AnalysisValidationError(
             "replacement predecessor tree exceeds the frozen retention bound"
@@ -1305,6 +1433,22 @@ def _validate_retained_replacement_semantics(
         "predecessor_tree",
         "evidence_receipts",
     }
+    whole_attempt_correction = (
+        replacement.get("predecessor_raw_attempt_id")
+        == attempts_contract._COMPONENT_PREDECESSOR_ID
+        and replacement.get("successor_raw_attempt_id")
+        == attempts_contract._COMPONENT_SUCCESSOR_ID
+        and replacement.get("classification")
+        == attempts_contract._COMPONENT_CLASSIFICATION
+    )
+    if whole_attempt_correction:
+        expected_fields.update(
+            {
+                "successor_source",
+                "whole_attempt_protocol_correction",
+                "r02_partial_terminal_forensics",
+            }
+        )
     if set(replacement) != expected_fields:
         raise AnalysisValidationError(
             "retained replacement binding has unexpected fields"
@@ -1321,8 +1465,7 @@ def _validate_retained_replacement_semantics(
         or match is None
         or successor_id != root.name
         or int(match.group("ordinal")) < 2
-        or int(match.group("ordinal"))
-        > attempts_contract._MAX_FORMAL_ATTEMPT_ORDINAL
+        or int(match.group("ordinal")) > attempts_contract._MAX_FORMAL_ATTEMPT_ORDINAL
         or replacement.get("raw_attempt_ordinal") != int(match.group("ordinal"))
         or predecessor_id
         != f"{match.group('prefix')}-r{int(match.group('ordinal')) - 1:02d}"
@@ -1330,12 +1473,21 @@ def _validate_retained_replacement_semantics(
         raise AnalysisValidationError(
             "retained replacement binding violates immediate rNN adjacency"
         )
-    if replacement.get("classification") not in {
+    if not whole_attempt_correction and replacement.get("classification") not in {
         "harness_error",
         "infrastructure_error",
     }:
         raise AnalysisValidationError(
             "retained replacement classification is not allowed"
+        )
+    if whole_attempt_correction and (
+        replacement.get("successor_source")
+        != attempts_contract.component_successor_source_binding()
+        or replacement.get("whole_attempt_protocol_correction")
+        != attempts_contract.whole_attempt_protocol_correction_binding()
+    ):
+        raise AnalysisValidationError(
+            "retained whole-attempt correction has different P4/I4/H4 or plan identities"
         )
     for name in ("reason", "affected_boundary"):
         if not isinstance(replacement.get(name), str) or not replacement[name].strip():
@@ -1363,9 +1515,7 @@ def _validate_retained_replacement_semantics(
             not isinstance(replacement.get(name), str)
             or re.fullmatch(r"[0-9a-f]{64}", replacement[name]) is None
         ):
-            raise AnalysisValidationError(
-                f"retained replacement {name} is invalid"
-            )
+            raise AnalysisValidationError(f"retained replacement {name} is invalid")
     if (
         not isinstance(replacement.get("receipt_path"), str)
         or not isinstance(replacement.get("receipt_bytes"), int)
@@ -1383,9 +1533,7 @@ def _validate_retained_replacement_semantics(
     for value in evidence:
         item = _require_dict(value, "retained replacement evidence receipt")
         evidence_path = (
-            Path(item["path"])
-            if isinstance(item.get("path"), str)
-            else Path()
+            Path(item["path"]) if isinstance(item.get("path"), str) else Path()
         )
         if (
             set(item) != {"kind", "path", "bytes", "sha256"}
@@ -1407,9 +1555,7 @@ def _validate_retained_replacement_semantics(
     _validate_predecessor_tree_binding(replacement)
 
 
-def _validate_replacement_retention(
-    root: Path, identity: Mapping[str, Any]
-) -> None:
+def _validate_replacement_retention(root: Path, identity: Mapping[str, Any]) -> None:
     replacement = _require_dict(
         identity.get("attempt_replacement"), "formal replacement binding"
     )
@@ -1417,10 +1563,17 @@ def _validate_replacement_retention(
         identity.get("replacement_retention"), "formal replacement retention"
     )
     if retention.get("self_contained") is not True:
-        raise AnalysisValidationError("formal replacement evidence is not self-contained")
+        raise AnalysisValidationError(
+            "formal replacement evidence is not self-contained"
+        )
     copies = list(retention.get("copies") or [])
+    references = list(retention.get("references") or [])
     if replacement.get("kind") == "initial_attempt":
-        if copies or replacement != systems.replacement_launch_binding(root, None):
+        if (
+            copies
+            or references
+            or replacement != systems.replacement_launch_binding(root, None)
+        ):
             raise AnalysisValidationError("formal r01 replacement binding is invalid")
         return
     if replacement.get("kind") != "replacement_attempt":
@@ -1452,20 +1605,159 @@ def _validate_replacement_retention(
             }
         )
     evidence = list(replacement.get("evidence_receipts") or [])
+    canary_archive_files = list(
+        (
+            (replacement.get("r02_partial_terminal_forensics") or {}).get(
+                "validated_canary_archive_files"
+            )
+        )
+        or []
+    )
+    whole_attempt_validation_target: str | None = None
     for index, value in enumerate(evidence):
         receipt = _require_dict(value, "replacement evidence receipt")
-        kind = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(receipt.get("kind", ""))).strip(
-            "._"
-        ) or "evidence"
+        kind = (
+            re.sub(r"[^A-Za-z0-9_.-]+", "_", str(receipt.get("kind", ""))).strip("._")
+            or "evidence"
+        )
+        if receipt.get("kind") == "all_partition_paw_cache_canary":
+            if index != 2 or len(canary_archive_files) != 28:
+                raise AnalysisValidationError(
+                    "retained canary archive does not have its exact 28-file layout"
+                )
+            archive_names = {
+                str(item.get("basename", ""))
+                for item in canary_archive_files
+                if isinstance(item, dict)
+            }
+            receipt_names = [
+                name
+                for name in archive_names
+                if re.fullmatch(r"rap-eacl-paw-cache-canary-v4-[1-9][0-9]*\.json", name)
+            ]
+            if len(receipt_names) != 1:
+                raise AnalysisValidationError(
+                    "retained canary semantic receipt identity differs"
+                )
+            canary_job_id = (
+                receipt_names[0]
+                .removeprefix("rap-eacl-paw-cache-canary-v4-")
+                .removesuffix(".json")
+            )
+            expected_archive_names = {
+                template.replace("<job_id>", canary_job_id)
+                for template in attempts_contract._COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES
+            } | {"evidence.sha256", "evidence.sha256.sha256"}
+            if archive_names != expected_archive_names:
+                raise AnalysisValidationError(
+                    "retained canary archive member names differ"
+                )
+            archive_root = Path(str(receipt.get("path", ""))).parent
+            for item in canary_archive_files:
+                archive_file = _require_dict(
+                    item, "validated canary archive file receipt"
+                )
+                archive_path = Path(str(archive_file.get("path", "")))
+                if (
+                    set(archive_file) != {"basename", "path", "bytes", "sha256"}
+                    or not archive_path.is_absolute()
+                    or archive_path.parent != archive_root
+                    or archive_path.name != archive_file.get("basename")
+                    or type(archive_file.get("bytes")) is not int
+                    or archive_file["bytes"] < 0
+                    or re.fullmatch(
+                        r"[0-9a-f]{64}", str(archive_file.get("sha256", ""))
+                    )
+                    is None
+                ):
+                    raise AnalysisValidationError(
+                        "validated canary archive file identity differs"
+                    )
+            sidecar = next(
+                item
+                for item in canary_archive_files
+                if item["basename"] == "evidence.sha256.sha256"
+            )
+            if (
+                sidecar["path"] != receipt.get("path")
+                or sidecar["bytes"] != receipt.get("bytes")
+                or sidecar["sha256"] != receipt.get("sha256")
+            ):
+                raise AnalysisValidationError(
+                    "retained canary top anchor differs from evidence binding"
+                )
+            for item in sorted(
+                canary_archive_files,
+                key=lambda child: os.fsencode(str(child.get("basename", ""))),
+            ):
+                archive_file = _require_dict(
+                    item, "validated canary archive file receipt"
+                )
+                if set(archive_file) != {"basename", "path", "bytes", "sha256"}:
+                    raise AnalysisValidationError(
+                        "validated canary archive file receipt differs"
+                    )
+                expected.append(
+                    {
+                        "role": (
+                            "evidence:all_partition_paw_cache_canary:"
+                            f"{archive_file['basename']}"
+                        ),
+                        "retained_path": (
+                            "replacement/evidence/"
+                            "002-all_partition_paw_cache_canary/"
+                            f"{archive_file['basename']}"
+                        ),
+                        "bytes": int(archive_file.get("bytes", -1)),
+                        "sha256": str(archive_file.get("sha256", "")),
+                    }
+                )
+            continue
+        retained_target = f"replacement/evidence/{index:03d}-{kind}"
         expected.append(
             {
                 "role": f"evidence:{receipt.get('kind')}",
-                "retained_path": f"replacement/evidence/{index:03d}-{kind}",
+                "retained_path": retained_target,
                 "bytes": int(receipt.get("bytes", -1)),
                 "sha256": str(receipt.get("sha256", "")),
             }
         )
-    if copies != expected:
+        if receipt.get("kind") == "whole_attempt_replacement_validation":
+            whole_attempt_validation_target = retained_target
+    correction = dict(replacement.get("whole_attempt_protocol_correction") or {})
+    expected_references: list[dict[str, str]] = []
+    if correction:
+        historical = _require_dict(
+            correction.get("historical_validation"),
+            "whole-attempt historical-validation binding",
+        )
+        whole_attempt_validation = next(
+            (
+                item
+                for item in evidence
+                if isinstance(item, dict)
+                and item.get("kind") == "whole_attempt_replacement_validation"
+            ),
+            None,
+        )
+        if (
+            whole_attempt_validation is None
+            or whole_attempt_validation_target is None
+            or historical.get("receipt_path") != whole_attempt_validation.get("path")
+            or historical.get("receipt_bytes") != whole_attempt_validation.get("bytes")
+            or historical.get("receipt_sha256")
+            != whole_attempt_validation.get("sha256")
+        ):
+            raise AnalysisValidationError(
+                "historical validation is not the whole-attempt evidence"
+            )
+        expected_references.append(
+            {
+                "role": "gate:historical_validation",
+                "retained_path": whole_attempt_validation_target,
+            }
+        )
+    if copies != expected or references != expected_references:
         raise AnalysisValidationError(
             "formal replacement retention plan differs from launch binding"
         )
@@ -1473,6 +1765,16 @@ def _validate_replacement_retention(
         _validate_retained_copy(root, item, "replacement retained copy")[1]
         for item in copies
     ]
+    canary_retained = [
+        {"relative": Path(item["retained_path"])}
+        for item in copies
+        if Path(item["retained_path"]).parent
+        == Path("replacement/evidence/002-all_partition_paw_cache_canary")
+    ]
+    try:
+        attempts_contract._validate_retained_canary_archive_copy(root, canary_retained)
+    except attempts_contract.SystemsHarnessError as exc:
+        raise AnalysisValidationError(str(exc)) from exc
     receipt_path = retained_paths[0]
     try:
         raw_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -1481,9 +1783,8 @@ def _validate_replacement_retention(
             f"retained replacement receipt is invalid: {exc}"
         ) from exc
     raw_receipt = _require_dict(raw_receipt, "retained replacement receipt")
-    if (
-        _sha256_bytes(_canonical_json_bytes(raw_receipt))
-        != replacement.get("canonical_receipt_sha256")
+    if _sha256_bytes(_canonical_json_bytes(raw_receipt)) != replacement.get(
+        "canonical_receipt_sha256"
     ):
         raise AnalysisValidationError(
             "retained replacement receipt canonical digest mismatch"
@@ -1502,28 +1803,37 @@ def _validate_replacement_retention(
             raise AnalysisValidationError(
                 f"retained replacement receipt differs on {name}"
             )
+    for name in ("successor_source", "whole_attempt_protocol_correction"):
+        if name in replacement and raw_receipt.get(name) != replacement.get(name):
+            raise AnalysisValidationError(
+                f"retained replacement receipt differs on {name}"
+            )
     raw_evidence = list(raw_receipt.get("evidence_receipts") or [])
+    expected_raw_fields = {
+        "schema_version",
+        "created_utc",
+        "successor_raw_attempt_id",
+        "predecessor_raw_attempt_id",
+        "classification",
+        "original_status",
+        "reason",
+        "affected_boundary",
+        "predecessor_artifacts",
+        "predecessor_tree",
+        "evidence_receipts",
+        "scheduler_adjudication",
+    }
+    whole_attempt_correction = bool(correction)
+    if whole_attempt_correction:
+        expected_raw_fields.update(
+            {"successor_source", "whole_attempt_protocol_correction"}
+        )
     if (
-        set(raw_receipt)
-        != {
-            "schema_version",
-            "created_utc",
-            "successor_raw_attempt_id",
-            "predecessor_raw_attempt_id",
-            "classification",
-            "original_status",
-            "reason",
-            "affected_boundary",
-            "predecessor_artifacts",
-            "predecessor_tree",
-            "evidence_receipts",
-            "scheduler_adjudication",
-        }
-        or raw_receipt.get("schema_version") != 1
+        set(raw_receipt) != expected_raw_fields
+        or raw_receipt.get("schema_version") != (2 if whole_attempt_correction else 1)
         or raw_receipt.get("predecessor_artifacts")
         != replacement.get("predecessor_artifacts")
-        or raw_receipt.get("predecessor_tree")
-        != replacement.get("predecessor_tree")
+        or raw_receipt.get("predecessor_tree") != replacement.get("predecessor_tree")
         or len(raw_evidence) != len(evidence)
         or not all(
             isinstance(raw, dict) and isinstance(bound, dict)
@@ -1565,14 +1875,22 @@ def _validate_replacement_retention(
             and classification == "harness_error"
             and original_status == "completed_with_system_violations"
         )
+        exact_component_correction = (
+            replacement.get("predecessor_raw_attempt_id")
+            == attempts_contract._COMPONENT_PREDECESSOR_ID
+            and replacement.get("successor_raw_attempt_id")
+            == attempts_contract._COMPONENT_SUCCESSOR_ID
+            and classification == attempts_contract._COMPONENT_CLASSIFICATION
+        )
         if (
             attempts_contract._result_contains_system_violation(predecessor_result)
             and not exact_outcome_aware_edge
+            and not exact_component_correction
         ):
             raise AnalysisValidationError(
                 "retained predecessor contains a non-replaceable system violation"
             )
-        if not exact_outcome_aware_edge:
+        if not exact_outcome_aware_edge and not exact_component_correction:
             allowed_statuses = {f"incomplete_{classification}"}
             if classification == "infrastructure_error":
                 allowed_statuses.add("incomplete_unclassified_failure")
@@ -1580,7 +1898,9 @@ def _validate_replacement_retention(
                 raise AnalysisValidationError(
                     "retained predecessor status is not replacement-eligible"
                 )
-    elif original_status != "missing" or classification != "infrastructure_error":
+    elif original_status != "missing" or (
+        classification != "infrastructure_error" and not whole_attempt_correction
+    ):
         raise AnalysisValidationError(
             "missing retained predecessor result is not infrastructure-eligible"
         )
@@ -1594,9 +1914,7 @@ def _validate_replacement_retention(
             1
             + sum(item.get("type") == "regular_file" for item in predecessor_tree)
             + index
-        ][
-            "retained_path"
-        ]
+        ]["retained_path"]
         if kind in {"scheduler_sacct", "scheduler_scontrol"}:
             try:
                 evidence_text[kind] = (root / retained_name).read_text(
@@ -1622,9 +1940,7 @@ def _validate_replacement_retention(
             raise AnalysisValidationError(
                 "retained scheduler replacement evidence is not exact-once"
             )
-        adjudication = _require_dict(
-            adjudication, "retained scheduler adjudication"
-        )
+        adjudication = _require_dict(adjudication, "retained scheduler adjudication")
         if set(adjudication) != {
             "scheduler_job_id",
             "state",
@@ -1659,8 +1975,7 @@ def _validate_replacement_retention(
         for kind in ("scheduler_sacct", "scheduler_scontrol"):
             text = evidence_text.get(kind, "")
             if (
-                re.search(rf"(?<![0-9]){re.escape(job_id)}(?![0-9])", text)
-                is None
+                re.search(rf"(?<![0-9]){re.escape(job_id)}(?![0-9])", text) is None
                 or re.search(
                     rf"(?<![A-Z0-9_]){re.escape(state)}(?![A-Z0-9_])",
                     text,
@@ -1674,6 +1989,7 @@ def _validate_replacement_retention(
         raise AnalysisValidationError(
             "retained scheduler adjudication is present outside its allowed case"
         )
+
 
 def _validate_tree_receipt(value: Any, label: str) -> dict[str, Any]:
     receipt = _require_dict(value, label)
@@ -1724,21 +2040,42 @@ def _validate_tracked_file_receipt(
     return receipt
 
 
+def _effective_formal_runtime_profile(
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    if contract.get("amendment_id") != "protocol-v3-amendment-008":
+        return _require_dict(
+            contract.get("formal_runtime_profile"), "formal runtime profile"
+        )
+    base = _require_dict(
+        _load_json(REPO_ROOT / PROTOCOL_PATHS_007[-1]), "amendment 007"
+    )
+    profile = json.loads(json.dumps(base.get("formal_runtime_profile") or {}))
+    dependency = dict(profile.get("cache_and_dependency_receipt") or {})
+    correction = _require_dict(
+        contract.get("corrected_direct_paw_cache_contract"),
+        "amendment-008 cache correction",
+    )
+    dependency["formal_cache_dir"] = correction.get("r03_paw_cache_dir_exact")
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v4.json"
+    profile["cache_and_dependency_receipt"] = dependency
+    thread_environment = dict(profile.get("thread_environment") or {})
+    thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
+    profile["thread_environment"] = thread_environment
+    return profile
+
+
 def _validate_formal_runtime(
     root: Path,
     identity: Mapping[str, Any],
     contract: Mapping[str, Any],
 ) -> None:
     runtime = _require_dict(identity.get("formal_runtime"), "formal runtime receipt")
-    profile = _require_dict(
-        contract.get("formal_runtime_profile"), "formal runtime profile"
-    )
+    profile = _effective_formal_runtime_profile(contract)
     scheduler_profile = _require_dict(
         profile.get("scheduler"), "formal scheduler profile"
     )
-    cpu_profile = _require_dict(
-        profile.get("cpu_and_inference"), "formal CPU profile"
-    )
+    cpu_profile = _require_dict(profile.get("cpu_and_inference"), "formal CPU profile")
     dependency = _require_dict(
         profile.get("cache_and_dependency_receipt"),
         "formal dependency profile",
@@ -1755,7 +2092,10 @@ def _validate_formal_runtime(
     )
     affinity_ids = list(scheduler.get("affinity_ids") or [])
     affinity_valid = bool(
-        all(isinstance(item, int) and not isinstance(item, bool) for item in affinity_ids)
+        all(
+            isinstance(item, int) and not isinstance(item, bool)
+            for item in affinity_ids
+        )
         and affinity_ids == sorted(set(affinity_ids))
     )
     if (
@@ -1774,17 +2114,13 @@ def _validate_formal_runtime(
         < int(scheduler_profile["minimum_time_limit_seconds"])
         or int(scheduler.get("affinity_cardinality", -1))
         != int(cpu_profile["affinity_cardinality"])
-        or len(affinity_ids)
-        != int(cpu_profile["affinity_cardinality"])
+        or len(affinity_ids) != int(cpu_profile["affinity_cardinality"])
         or scheduler.get("shared_node_contention_uncontrolled") is not True
         or scheduler.get("exclusive_node_claimed") is not False
-        or str(selected.get("JobId", "")).split("_")[0]
-        != job_id.split("_")[0]
+        or str(selected.get("JobId", "")).split("_")[0] != job_id.split("_")[0]
         or "gres/gpu" in str(selected.get("AllocTRES", "")).lower()
         or not affinity_valid
-        or re.fullmatch(
-            r"[0-9a-f]{64}", str(scheduler.get("scontrol_raw_sha256", ""))
-        )
+        or re.fullmatch(r"[0-9a-f]{64}", str(scheduler.get("scontrol_raw_sha256", "")))
         is None
     ):
         raise AnalysisValidationError("formal scheduler receipt differs from profile")
@@ -1870,6 +2206,7 @@ def _validate_formal_runtime(
         "PAW_CACHE_DIR": str(dependency["formal_cache_dir"]),
         "PAW_GPU_LAYERS": str(cpu_profile["paw_gpu_layers_environment"]),
         "HOME": f"/tmp/rap-eacl-systems-formal-v3-{job_id}/home",
+        "RAP_EACL_SOCKET_ROOT": f"/tmp/rf3-{job_id}",
         **{
             name: None
             for name, expected in _require_dict(
@@ -1891,14 +2228,50 @@ def _validate_formal_runtime(
         launcher_formal,
         "formal launcher",
     )
-    wheelhouse = _validate_tree_receipt(
-        runtime.get("wheelhouse"), "formal wheelhouse"
-    )
+    wheelhouse = _validate_tree_receipt(runtime.get("wheelhouse"), "formal wheelhouse")
     if wheelhouse.get("root") != str(dependency["formal_wheelhouse"]):
         raise AnalysisValidationError("formal wheelhouse root differs from profile")
     paw_cache = _require_dict(runtime.get("paw_cache"), "formal PAW cache")
     if paw_cache.get("declared_root") != str(dependency["formal_cache_dir"]):
         raise AnalysisValidationError("formal PAW cache root differs from profile")
+    if contract.get("amendment_id") == "protocol-v3-amendment-008" and (
+        paw_cache.get("root") != str(dependency["formal_cache_dir"])
+        or paw_cache.get("required_direct_children")
+        != ["base_models", "programs", "runtimes"]
+        or sorted(paw_cache.get("direct_children") or [])
+        != ["base_models", "programs", "runtimes"]
+        or "programasweights_subtree" in paw_cache
+    ):
+        raise AnalysisValidationError(
+            "formal PAW receipt does not bind the corrected direct content root"
+        )
+    raw_paw_cache = _validate_raw_tree_receipt(
+        paw_cache.get("raw_tree"), "formal PAW raw-tree receipt"
+    )
+    temporal_fields = {
+        "uid",
+        "gid",
+        "device",
+        "inode",
+        "link_count",
+        "mtime_ns",
+        "ctime_ns",
+    }
+    if contract.get("amendment_id") == "protocol-v3-amendment-008" and (
+        raw_paw_cache.get("declared_root") != str(dependency["formal_cache_dir"])
+        or raw_paw_cache.get("root_type") != "directory"
+        or raw_paw_cache.get("errors")
+        or any(
+            not temporal_fields.issubset(item)
+            for item in [
+                raw_paw_cache.get("root_entry") or {},
+                *(raw_paw_cache.get("entries") or []),
+            ]
+        )
+    ):
+        raise AnalysisValidationError(
+            "formal PAW direct-root temporal inventory is incomplete"
+        )
     _validate_tree_receipt(
         paw_cache.get("complete_tree"), "formal PAW complete-tree receipt"
     )
@@ -1907,8 +2280,12 @@ def _validate_formal_runtime(
         identity.get("artifact_provenance"), "formal artifact provenance"
     )
     rule_order = list(provenance.get("rule_order") or [])
-    if rule_order != list(systems.EXTERNAL_RULE_ORDER) or len(programs) != len(rule_order):
-        raise AnalysisValidationError("formal PAW cache/program count is not eight-rule bound")
+    if rule_order != list(systems.EXTERNAL_RULE_ORDER) or len(programs) != len(
+        rule_order
+    ):
+        raise AnalysisValidationError(
+            "formal PAW cache/program count is not eight-rule bound"
+        )
     for name in ("manifest", "dataset", "output"):
         tracked = _require_dict(provenance.get(name), f"formal artifact {name}")
         relative = Path(str(tracked.get("path", "")))
@@ -1916,7 +2293,9 @@ def _validate_formal_runtime(
         try:
             path.relative_to(REPO_ROOT)
         except ValueError as exc:
-            raise AnalysisValidationError("formal artifact path escapes repository") from exc
+            raise AnalysisValidationError(
+                "formal artifact path escapes repository"
+            ) from exc
         if not path.is_file() or tracked.get("sha256") != _sha256(path):
             raise AnalysisValidationError(f"formal artifact {name} hash mismatch")
     manifest_path = REPO_ROOT / str(provenance["manifest"]["path"])
@@ -1926,10 +2305,9 @@ def _validate_formal_runtime(
         ),
         "formal compiled program IDs",
     )
-    if (
-        set(manifest_programs) != set(rule_order)
-        or set(str(item) for item in manifest_programs.values()) != set(programs)
-    ):
+    if set(manifest_programs) != set(rule_order) or set(
+        str(item) for item in manifest_programs.values()
+    ) != set(programs):
         raise AnalysisValidationError(
             "formal PAW cache program IDs differ from compiled manifest"
         )
@@ -1944,7 +2322,9 @@ def _validate_formal_runtime(
         runtime_lock_formal,
         "formal runtime lock file",
     )
-    lock_content = _require_dict(runtime_lock.get("content"), "formal runtime lock content")
+    lock_content = _require_dict(
+        runtime_lock.get("content"), "formal runtime lock content"
+    )
     if (
         lock_content != _load_json(runtime_lock_current)
         or lock_content.get("wheelhouse") != wheelhouse
@@ -1988,8 +2368,12 @@ def _validate_formal_runtime(
         "setup_log_path": setup_log["resolved_path"],
         "setup_log_sha256": setup_log["sha256"],
     }
+    if contract.get("amendment_id") == "protocol-v3-amendment-008":
+        required_setup["study_mode"] = _COMPONENT_STUDY_MODE
     if any(setup.get(name) != expected for name, expected in required_setup.items()):
-        raise AnalysisValidationError("formal setup receipt differs from runtime identity")
+        raise AnalysisValidationError(
+            "formal setup receipt differs from runtime identity"
+        )
     _validate_setup_socket_preflight(root, identity, setup)
     setup_log_content = setup.get("setup_log_content")
     if (
@@ -2009,15 +2393,15 @@ def _validate_formal_runtime(
             "returncode"
         )
         != 0
-        or _require_dict(setup.get("pip_freeze"), "formal pip freeze").get(
-            "returncode"
-        )
+        or _require_dict(setup.get("pip_freeze"), "formal pip freeze").get("returncode")
         != 0
     ):
         raise AnalysisValidationError("formal node-local setup did not succeed offline")
 
     packages = _require_dict(runtime.get("packages"), "formal package receipts")
-    package_versions = _require_dict(identity.get("packages"), "formal package versions")
+    package_versions = _require_dict(
+        identity.get("packages"), "formal package versions"
+    )
     expected_packages = {
         "rules-as-programs",
         "programasweights",
@@ -2036,9 +2420,67 @@ def _validate_formal_runtime(
             or not {"METADATA", "RECORD"}.issubset(metadata)
             or package.get("module_origin") is None
         ):
-            raise AnalysisValidationError(f"formal package {name} provenance is incomplete")
+            raise AnalysisValidationError(
+                f"formal package {name} provenance is incomplete"
+            )
         for receipt in [*metadata.values(), package["module_origin"]]:
             _validate_file_receipt_shape(receipt, f"formal package {name} file")
+    if contract.get("amendment_id") == "protocol-v3-amendment-008":
+        anchors = _require_dict(
+            _require_dict(
+                contract.get("known_at_draft"), "amendment-008 known facts"
+            ).get("direct_paw_semantics_anchors"),
+            "amendment-008 direct PAW anchors",
+        )
+        semantic_modules = _require_dict(
+            _require_dict(packages["programasweights"], "ProgramAsWeights package").get(
+                "semantic_modules"
+            ),
+            "ProgramAsWeights semantic modules",
+        )
+        expected_semantic = {
+            "programasweights.config": anchors.get("installed_config_py_sha256"),
+            "programasweights.cache": anchors.get("installed_cache_py_sha256"),
+        }
+        if set(semantic_modules) != set(expected_semantic):
+            raise AnalysisValidationError(
+                "ProgramAsWeights semantic module receipt set is incomplete"
+            )
+        for module, expected_sha256 in expected_semantic.items():
+            receipt = _validate_file_receipt_shape(
+                semantic_modules[module], f"formal package {module}"
+            )
+            if receipt.get("sha256") != expected_sha256:
+                raise AnalysisValidationError(
+                    f"formal package semantic anchor differs: {module}"
+                )
+        wheel_candidates = [
+            item
+            for item in wheelhouse.get("files") or []
+            if Path(str(item.get("path", ""))).name.startswith("programasweights-")
+            and str(item.get("path", "")).endswith(".whl")
+        ]
+        if len(wheel_candidates) != 1 or wheel_candidates[0].get(
+            "sha256"
+        ) != anchors.get("programasweights_wheel_sha256"):
+            raise AnalysisValidationError(
+                "formal ProgramAsWeights wheel differs from amendment 008"
+            )
+        expected_model = _require_dict(
+            anchors.get("base_model"), "amendment-008 base-model anchor"
+        )
+        models = _require_dict(paw_cache.get("base_models"), "formal base models")
+        matching_models = [
+            value
+            for value in models.values()
+            if isinstance(value, dict)
+            and (value.get("local") or {}).get("bytes") == expected_model.get("bytes")
+            and (value.get("local") or {}).get("sha256") == expected_model.get("sha256")
+        ]
+        if len(matching_models) != 1:
+            raise AnalysisValidationError(
+                "formal base model differs from amendment-008 exact bytes"
+            )
 
     retention = _require_dict(
         identity.get("runtime_preflight_retention"),
@@ -2059,13 +2501,20 @@ def _validate_formal_runtime(
         },
     ]
     if retention != {"self_contained": True, "copies": expected_retention}:
-        raise AnalysisValidationError("formal runtime preflight retention plan mismatch")
+        raise AnalysisValidationError(
+            "formal runtime preflight retention plan mismatch"
+        )
     retained = [
         _validate_retained_copy(root, item, "runtime preflight retained copy")[1]
         for item in expected_retention
     ]
-    if _load_json(retained[0]) != setup or retained[1].read_text(encoding="utf-8") != setup_log_content:
-        raise AnalysisValidationError("formal retained runtime preflight bytes disagree")
+    if (
+        _load_json(retained[0]) != setup
+        or retained[1].read_text(encoding="utf-8") != setup_log_content
+    ):
+        raise AnalysisValidationError(
+            "formal retained runtime preflight bytes disagree"
+        )
 
 
 def _static_analysis_binding(analysis_id: str) -> dict[str, Any]:
@@ -2100,10 +2549,22 @@ def _static_analysis_binding(analysis_id: str) -> dict[str, Any]:
         ],
         "protocol_documents": protocols,
         "reducer_config": REDUCER_CONFIG,
-        "reducer_config_sha256": _sha256_bytes(
-            _canonical_json_bytes(REDUCER_CONFIG)
-        ),
+        "reducer_config_sha256": _sha256_bytes(_canonical_json_bytes(REDUCER_CONFIG)),
     }
+
+
+def _component_static_analysis_binding(analysis_id: str) -> dict[str, Any]:
+    binding = _static_analysis_binding(analysis_id)
+    binding["analysis_version"] = COMPONENT_ANALYSIS_ID
+    binding["protocol_documents"] = [
+        {"path": relative, "sha256": _sha256(REPO_ROOT / relative)}
+        for relative in PROTOCOL_PATHS_008
+    ]
+    binding["reducer_config"] = COMPONENT_REDUCER_CONFIG
+    binding["reducer_config_sha256"] = _sha256_bytes(
+        _canonical_json_bytes(COMPONENT_REDUCER_CONFIG)
+    )
+    return binding
 
 
 def _read_journal(path: Path) -> list[dict[str, Any]]:
@@ -2128,7 +2589,11 @@ def _read_journal(path: Path) -> list[dict[str, Any]]:
 
 
 def _validate_units(
-    root: Path, plan: Sequence[dict[str, Any]], result: Mapping[str, Any]
+    root: Path,
+    plan: Sequence[dict[str, Any]],
+    result: Mapping[str, Any],
+    *,
+    exact_terminal_phase: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     planned_keys = [(_component(item), _unit_id(item)) for item in plan]
     planned_key_set = set(planned_keys)
@@ -2146,7 +2611,11 @@ def _validate_units(
             raise AnalysisValidationError(f"unexpected journal unit: {key}")
         if key in journal_by_key:
             raise AnalysisValidationError(f"duplicate terminal journal unit: {key}")
-        if record.get("phase") not in {"terminal", "completed", "error"}:
+        if (
+            record.get("phase") != "terminal"
+            if exact_terminal_phase
+            else record.get("phase") not in {"terminal", "completed", "error"}
+        ):
             raise AnalysisValidationError(f"nonterminal journal phase for {key}")
         journal_by_key[key] = record
 
@@ -2155,10 +2624,14 @@ def _validate_units(
         indexed = _require_dict(indexed_value, f"unit_index entry {expected_key}")
         key = (str(indexed.get("component", "")), str(indexed.get("unit_id", "")))
         if key != expected_key or indexed.get("plan") != planned:
-            raise AnalysisValidationError(f"unit_index plan mismatch for {expected_key}")
+            raise AnalysisValidationError(
+                f"unit_index plan mismatch for {expected_key}"
+            )
         status = str(indexed.get("status", ""))
         if status not in TERMINAL_STATUSES:
-            raise AnalysisValidationError(f"noncanonical unit status for {key}: {status!r}")
+            raise AnalysisValidationError(
+                f"noncanonical unit status for {key}: {status!r}"
+            )
         relative = indexed.get("terminal_record")
         indexed_hash = indexed.get("terminal_record_sha256")
         journal_record = journal_by_key.get(key)
@@ -2182,9 +2655,13 @@ def _validate_units(
                 raise AnalysisValidationError(f"invalid aborted unit index for {key}")
         else:
             if not isinstance(relative, str) or journal_record is None:
-                raise AnalysisValidationError(f"terminal index/journal disagreement for {key}")
+                raise AnalysisValidationError(
+                    f"terminal index/journal disagreement for {key}"
+                )
             if indexed.get("started") is not True:
-                raise AnalysisValidationError(f"terminal unit was not marked started: {key}")
+                raise AnalysisValidationError(
+                    f"terminal unit was not marked started: {key}"
+                )
             terminal_path = _checked_file(root, relative)
             value = _require_dict(_load_json(terminal_path), f"terminal record {key}")
             record_hash = _sha256(terminal_path)
@@ -2194,7 +2671,9 @@ def _validate_units(
                 or journal_record.get("status") != status
                 or indexed_hash != record_hash
             ):
-                raise AnalysisValidationError(f"journal/index/file receipt mismatch for {key}")
+                raise AnalysisValidationError(
+                    f"journal/index/file receipt mismatch for {key}"
+                )
             if str(value.get("status", "")) != status:
                 raise AnalysisValidationError(f"terminal status mismatch for {key}")
         units.append(
@@ -2366,13 +2845,15 @@ def _validate_formal_plan(
     config_value = _require_dict(identity.get("config"), "launch config")
     names = {item.name for item in fields(systems.MatrixConfig)}
     if set(config_value) != names:
-        raise AnalysisValidationError("launch config does not bind every MatrixConfig field")
+        raise AnalysisValidationError(
+            "launch config does not bind every MatrixConfig field"
+        )
     contract = _require_dict(
         _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 007"
     )
-    if contract.get("freeze_state") != "frozen_outcome_aware_repair" or not contract.get(
-        "frozen_utc"
-    ):
+    if contract.get(
+        "freeze_state"
+    ) != "frozen_outcome_aware_repair" or not contract.get("frozen_utc"):
         raise AnalysisValidationError("formal amendment 007 was not frozen")
     required_git = _require_dict(
         _require_dict(
@@ -2429,6 +2910,102 @@ def _validate_formal_plan(
         raise AnalysisValidationError("result config differs from launch identity")
     if result.get("plan") is not None and result.get("plan") != list(plan):
         raise AnalysisValidationError("result plan differs from immutable plan.json")
+    _validate_replacement_retention(root, identity)
+    _validate_formal_runtime(root, identity, contract)
+
+
+def _validate_whole_attempt_plan(
+    root: Path,
+    identity: Mapping[str, Any],
+    result: Mapping[str, Any],
+    plan: Sequence[dict[str, Any]],
+    contract: Mapping[str, Any],
+) -> None:
+    if (
+        identity.get("study_mode") != _COMPONENT_STUDY_MODE
+        or result.get("study_mode") != _COMPONENT_STUDY_MODE
+        or result.get("protocol_status") != _COMPONENT_STUDY_MODE
+    ):
+        raise AnalysisValidationError("r03 is not the amendment-008 whole attempt")
+    if not isinstance(identity.get("formal_runtime"), dict):
+        raise AnalysisValidationError("r03 launch lacks formal runtime identity")
+    git = _require_dict(identity.get("git"), "r03 Git identity")
+    required_git = systems._required_git_state(contract)
+    commit = str(git.get("commit", ""))
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", commit) is None
+        or git.get("dirty") is not required_git.get("dirty_must_equal")
+        or git.get("scope") != required_git.get("dirty_scope")
+    ):
+        raise AnalysisValidationError("r03 Git identity differs from amendment 008")
+    try:
+        topology = systems._validate_formal_git_topology(commit, required_git)
+    except systems.SystemsHarnessError as exc:
+        raise AnalysisValidationError(
+            f"r03 P4/I4/H4 topology is invalid: {exc}"
+        ) from exc
+    if identity.get("git_topology") != topology:
+        raise AnalysisValidationError("r03 Git topology was not reconstructed")
+    overrides = _require_dict(
+        _require_dict(
+            contract.get("effective_protocol_identity"),
+            "amendment-008 effective protocol identity",
+        ).get("explicit_one_time_overrides"),
+        "amendment-008 explicit overrides",
+    )
+    if (
+        overrides.get("formal_effective_config.fault_names_in_order")
+        != systems.FORMAL_FAULT_OVERRIDE_TEXT
+    ):
+        raise AnalysisValidationError("r03 fault_names_in_order override differs")
+    if (
+        overrides.get("formal_effective_config.study_mode")
+        != systems.FORMAL_STUDY_MODE_OVERRIDE_TEXT
+    ):
+        raise AnalysisValidationError("r03 study_mode override differs")
+
+    config_value = _require_dict(identity.get("config"), "r03 config")
+    names = {item.name for item in fields(systems.MatrixConfig)}
+    if set(config_value) != names:
+        raise AnalysisValidationError("r03 config omits a MatrixConfig field")
+    base = _require_dict(
+        _load_json(REPO_ROOT / PROTOCOL_PATHS_007[-1]), "amendment 007"
+    )
+    effective = _require_dict(
+        base.get("formal_effective_config"), "amendment-007 effective config"
+    )
+    mismatches = {
+        name: {"expected": effective.get(name), "observed": config_value.get(name)}
+        for name in sorted(names)
+        if name not in effective or config_value.get(name) != effective.get(name)
+    }
+    if mismatches:
+        raise AnalysisValidationError(
+            "r03 config differs from inherited formal config: "
+            + json.dumps(mismatches, sort_keys=True)
+        )
+    kwargs = dict(config_value)
+    for name in ("rule_counts", "project_counts", "burst_sizes"):
+        kwargs[name] = tuple(kwargs[name])
+    config = systems.MatrixConfig(**kwargs)
+    full_attempt = systems.build_full_attempt_plan(config)
+    if list(plan) != full_attempt["full_plan"]:
+        raise AnalysisValidationError("r03 raw plan is not the exact full 430-row plan")
+    expected_binding = {
+        "analysis_id": COMPONENT_ANALYSIS_ID,
+        "full_plan_unit_count": 430,
+        "full_plan_sha256": systems.FORMAL_FULL_PLAN_SHA256,
+        "full_plan_stored_sha256": systems.FORMAL_FULL_PLAN_STORED_SHA256,
+        "ordered_membership_sha256": systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
+        "primary_source_attempt_id": attempts_contract._COMPONENT_SUCCESSOR_ID,
+        "execution_roles": full_attempt["execution_roles"],
+    }
+    if identity.get("whole_attempt_protocol_correction") != expected_binding:
+        raise AnalysisValidationError("r03 launch lacks exact whole-attempt identities")
+    if result.get("config") is not None and result.get("config") != config_value:
+        raise AnalysisValidationError("r03 result config differs from launch")
+    if result.get("plan") is not None and result.get("plan") != list(plan):
+        raise AnalysisValidationError("r03 result plan differs from plan.json")
     _validate_replacement_retention(root, identity)
     _validate_formal_runtime(root, identity, contract)
 
@@ -2496,9 +3073,7 @@ def _validate_soak_query_summaries(
     for index, batch_value in enumerate(value.get("batches") or []):
         batch = _require_dict(batch_value, f"soak batch {index}")
         wait = _require_dict(batch.get("wait"), f"soak batch {index} wait")
-        latencies = consume(
-            wait.get("history_checkpoint"), f"soak batch {index}"
-        )
+        latencies = consume(wait.get("history_checkpoint"), f"soak batch {index}")
         expected = _query_summary(latencies)
         if batch.get("evaluation_history_query") != expected:
             raise AnalysisValidationError(
@@ -2560,8 +3135,7 @@ def _validate_soak_checkpoint_chain(
         summary = _require_dict(summary_value, f"{label} summary")
         if (
             summary.get("batch_id") != batch_id
-            or summary.get("expected_key_set_sha256")
-            != expected_key_set_sha256
+            or summary.get("expected_key_set_sha256") != expected_key_set_sha256
             or expected_terminal != len(expected_keys)
         ):
             raise AnalysisValidationError(f"{label} batch/key-set binding is invalid")
@@ -2579,8 +3153,7 @@ def _validate_soak_checkpoint_chain(
             queries = list(checkpoint.get("per_project_queries") or [])
             if (
                 checkpoint.get("batch_id") != batch_id
-                or checkpoint.get("expected_key_set_sha256")
-                != expected_key_set_sha256
+                or checkpoint.get("expected_key_set_sha256") != expected_key_set_sha256
                 or int(checkpoint.get("attempt", -1)) != expected_attempt
                 or int(checkpoint.get("expected_terminal_tuples", -1))
                 != expected_terminal
@@ -2594,15 +3167,16 @@ def _validate_soak_checkpoint_chain(
                     f"{label} checkpoint accounting/deadline is invalid"
                 )
             validated_queries = [
-                _validate_timed_history_query(
-                    item, f"{label} project query"
-                )
+                _validate_timed_history_query(item, f"{label} project query")
                 for item in queries
             ]
-            if validated_queries and max(
-                int(item["finished_monotonic_ns"])
-                for item in validated_queries
-            ) > observed:
+            if (
+                validated_queries
+                and max(
+                    int(item["finished_monotonic_ns"]) for item in validated_queries
+                )
+                > observed
+            ):
                 raise AnalysisValidationError(
                     f"{label} checkpoint precedes its History queries"
                 )
@@ -2613,9 +3187,7 @@ def _validate_soak_checkpoint_chain(
             last_within = bool(last["within_deadline"])
             expected_complete = bool(last_missing == 0 and last_within)
             expected_visible = (
-                int(last["observed_monotonic_ns"])
-                if last_missing == 0
-                else None
+                int(last["observed_monotonic_ns"]) if last_missing == 0 else None
             )
         else:
             last_missing = expected_terminal
@@ -2627,8 +3199,7 @@ def _validate_soak_checkpoint_chain(
             for item in expected_keys
         }
         declared_missing_dicts = [
-            _require_dict(item, f"{label} missing key")
-            for item in declared_missing
+            _require_dict(item, f"{label} missing key") for item in declared_missing
         ]
         if any(
             set(item) != {"project_root", "input_sha256", "rule_id"}
@@ -2677,13 +3248,10 @@ def _validate_soak_checkpoint_chain(
         wait = _require_dict(batch.get("wait"), "soak batch wait")
         batch_id = str(batch.get("batch_id", ""))
         expected_batch_id = (
-            f"soak-r{rule_count}-p{project_count}-offset"
-            f"{int(batch.get('offset', -1))}"
+            f"soak-r{rule_count}-p{project_count}-offset{int(batch.get('offset', -1))}"
         )
         expected_keys = list(expected_keys_by_batch.get(batch_id) or [])
-        expected_key_set_sha256 = _sha256_bytes(
-            _canonical_json_bytes(expected_keys)
-        )
+        expected_key_set_sha256 = _sha256_bytes(_canonical_json_bytes(expected_keys))
         expected_terminal = int(batch.get("events", -1)) * rule_count
         if (
             batch_id != expected_batch_id
@@ -2740,9 +3308,7 @@ def _validate_soak_checkpoint_chain(
             )
         last_batch = _require_dict(batches[-1], "last soak batch")
         last_batch_id = str(last_batch.get("batch_id", ""))
-        last_expected_keys = list(
-            expected_keys_by_batch.get(last_batch_id) or []
-        )
+        last_expected_keys = list(expected_keys_by_batch.get(last_batch_id) or [])
         last_expected_key_set_sha256 = _sha256_bytes(
             _canonical_json_bytes(last_expected_keys)
         )
@@ -2795,13 +3361,11 @@ def _validate_soak_checkpoint_chain(
             or set(projection) != {"evaluations", "findings"}
             or not all(isinstance(projection[name], dict) for name in projection)
             or raw
-            != json.dumps(
-                projection, sort_keys=True, separators=(",", ":")
-            ).encode("utf-8")
-        ):
-            raise AnalysisValidationError(
-                f"soak {role} projection is not canonical"
+            != json.dumps(projection, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
             )
+        ):
+            raise AnalysisValidationError(f"soak {role} projection is not canonical")
         return raw
 
     if restart.get("status") == "completed":
@@ -2833,11 +3397,9 @@ def _validate_soak_checkpoint_chain(
         query = _validate_timed_history_query(
             post_restart_queries[0], "soak post-restart History query"
         )
-        if (
-            restart.get("history_query") != query
-            or int(restart.get("first_project_history_rows_query_visible", -1))
-            != int(query["rows"])
-        ):
+        if restart.get("history_query") != query or int(
+            restart.get("first_project_history_rows_query_visible", -1)
+        ) != int(query["rows"]):
             raise AnalysisValidationError(
                 "soak post-restart query receipt disagrees with restart outcome"
             )
@@ -2859,12 +3421,15 @@ def _validate_soak_checkpoint_chain(
             raise AnalysisValidationError(
                 "non-completed soak restart has post-restart evidence"
             )
-    if int(
-        _require_dict(
-            value.get("evaluation_history_query"),
-            "soak aggregate History summary",
-        ).get("count", -1)
-    ) != total_query_count:
+    if (
+        int(
+            _require_dict(
+                value.get("evaluation_history_query"),
+                "soak aggregate History summary",
+            ).get("count", -1)
+        )
+        != total_query_count
+    ):
         raise AnalysisValidationError(
             "soak aggregate History count disagrees with incremental evidence"
         )
@@ -3072,7 +3637,9 @@ def _validate_soak_evidence(root: Path, units: Sequence[dict[str, Any]]) -> None
             <= drain_finished
         ]
         if not rss_window:
-            raise AnalysisValidationError("soak RSS claim window has no retained samples")
+            raise AnalysisValidationError(
+                "soak RSS claim window has no retained samples"
+            )
         if resources.get("rss_slope") != systems._rss_slope(rss_window):
             raise AnalysisValidationError("soak RSS slope is not recomputed")
         if int(resources.get("peak_sampled_rss_bytes", -1)) != max(
@@ -3081,9 +3648,7 @@ def _validate_soak_evidence(root: Path, units: Sequence[dict[str, Any]]) -> None
             raise AnalysisValidationError("soak peak RSS is not recomputed")
         before = _require_dict(resources.get("before"), "soak resources before")
         after = _require_dict(resources.get("after"), "soak resources after")
-        rss_change = int(after.get("rss_bytes", -1)) - int(
-            before.get("rss_bytes", -1)
-        )
+        rss_change = int(after.get("rss_bytes", -1)) - int(before.get("rss_bytes", -1))
         if (
             int(resources.get("rss_change_bytes", 0)) != rss_change
             or resources.get("rss_change_bytes_per_event")
@@ -3110,8 +3675,7 @@ def _validate_soak_evidence(root: Path, units: Sequence[dict[str, Any]]) -> None
                 or int(batch.get("offset", -1)) != next_offset
                 or int(batch.get("events", 0)) <= 0
                 or int(batch.get("events", 0)) > formal_batch_size
-                or int(batch.get("events", 0)) * int(value.get("rule_count", -1))
-                > 512
+                or int(batch.get("events", 0)) * int(value.get("rule_count", -1)) > 512
             ):
                 raise AnalysisValidationError("soak batches are not contiguous")
             next_offset += int(batch["events"])
@@ -3120,9 +3684,11 @@ def _validate_soak_evidence(root: Path, units: Sequence[dict[str, Any]]) -> None
                 "soak batch coverage differs from events_submitted"
             )
         full = _require_dict(
-            (((value.get("post_drain") or {}).get("final_drain_wait") or {}).get(
-                "full_journal_accounting"
-            )),
+            (
+                ((value.get("post_drain") or {}).get("final_drain_wait") or {}).get(
+                    "full_journal_accounting"
+                )
+            ),
             "soak full-journal accounting",
         )
         for name in (
@@ -3212,7 +3778,9 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
             )
         checkpoints = values["history_checkpoints"]
         if not checkpoints or not all(isinstance(item, dict) for item in checkpoints):
-            raise AnalysisValidationError("matrix history checkpoints are empty/invalid")
+            raise AnalysisValidationError(
+                "matrix history checkpoints are empty/invalid"
+            )
         allowed = {"journal_transition_confirmation", "condition_quiescence"}
         if any(item.get("kind") not in allowed for item in checkpoints):
             raise AnalysisValidationError("matrix history checkpoint kind is invalid")
@@ -3225,9 +3793,7 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
             for item in checkpoints
             if item.get("kind") == "journal_transition_confirmation"
         ]
-        if any(
-            not _is_exact_int(item) or item < 0 for item in query_latencies
-        ):
+        if any(not _is_exact_int(item) or item < 0 for item in query_latencies):
             raise AnalysisValidationError(
                 "matrix History checkpoint query latency is invalid"
             )
@@ -3240,16 +3806,12 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
         if not any(item.get("kind") == "condition_quiescence" for item in checkpoints):
             raise AnalysisValidationError("matrix lacks a quiescence checkpoint")
         samples = list(value.get("samples") or [])
-        sample_by_hash = {
-            str(item.get("input_sha256", "")): item for item in samples
-        }
+        sample_by_hash = {str(item.get("input_sha256", "")): item for item in samples}
         sample_hashes = set(sample_by_hash)
         if len(sample_by_hash) != len(samples):
             raise AnalysisValidationError("matrix sample hashes are not unique")
         formal_config = _require_dict(
-            _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]).get(
-                "formal_effective_config"
-            ),
+            _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]).get("formal_effective_config"),
             "formal effective config",
         )
         submissions = [int(item.get("submitted_monotonic_ns", -1)) for item in samples]
@@ -3304,9 +3866,7 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
                 ("first_visible_confirmed", first_confirmed),
                 ("all_visible_confirmed", all_confirmed),
             ):
-                confirmations = {
-                    str(item) for item in checkpoint.get(name) or []
-                }
+                confirmations = {str(item) for item in checkpoint.get(name) or []}
                 if not confirmations.issubset(triggers):
                     raise AnalysisValidationError(
                         "matrix checkpoint confirms an untriggered input"
@@ -3370,8 +3930,7 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
                     f"matrix {field} summary is not recomputed from samples"
                 )
         quiescence = [
-            item for item in checkpoints
-            if item.get("kind") == "condition_quiescence"
+            item for item in checkpoints if item.get("kind") == "condition_quiescence"
         ]
         ordered_hashes = [
             str(item["input_sha256"])
@@ -3442,9 +4001,7 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
                 raise AnalysisValidationError(
                     "matrix sequential waits do not cover every event"
                 )
-            by_input = {
-                str(item.get("input_sha256", "")): item for item in per_event
-            }
+            by_input = {str(item.get("input_sha256", "")): item for item in per_event}
             if set(by_input) != sample_hashes:
                 raise AnalysisValidationError(
                     "matrix sequential wait/input binding is invalid"
@@ -3452,9 +4009,7 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
             for input_hash, per_wait in by_input.items():
                 per_missing = [] if input_hash in all_confirmed else [input_hash]
                 per_saturated = input_hash in saturated_inputs
-                per_integrity = bool(
-                    per_saturated or not group_complete[input_hash]
-                )
+                per_integrity = bool(per_saturated or not group_complete[input_hash])
                 settle = _require_dict(
                     per_wait.get("settle"), "matrix sequential settle"
                 )
@@ -3463,8 +4018,7 @@ def _validate_matrix_evidence(root: Path, units: Sequence[dict[str, Any]]) -> No
                     int(per_wait.get("deadline_monotonic_ns", -1))
                     != deadlines[input_hash]
                     or per_wait.get("timed_out") is not bool(per_missing)
-                    or sorted(per_wait.get("missing_input_sha256") or [])
-                    != per_missing
+                    or sorted(per_wait.get("missing_input_sha256") or []) != per_missing
                     or per_wait.get("history_limit_saturated") is not per_saturated
                     or per_wait.get("integrity_violation") is not per_integrity
                     or settle.get("complete") is not group_complete[input_hash]
@@ -3725,8 +4279,7 @@ def _validate_fault_settle(value: Any, label: str) -> dict[str, Any]:
         or started < 0
         or deadline < started
         or finished < started
-        or settle.get("poll_interval_seconds")
-        != systems.QUERY_POLL_INTERVAL_SECONDS
+        or settle.get("poll_interval_seconds") != systems.QUERY_POLL_INTERVAL_SECONDS
         or not isinstance(settle.get("completed_within_deadline"), bool)
         or not isinstance(settle.get("observations"), list)
     ):
@@ -3758,9 +4311,7 @@ def _validate_fault_settle(value: Any, label: str) -> dict[str, Any]:
         raise AnalysisValidationError(f"{label} has no scan observations")
     previous_finished = started
     for index, observation_value in enumerate(observations):
-        observation = _require_dict(
-            observation_value, f"{label} observation {index}"
-        )
+        observation = _require_dict(observation_value, f"{label} observation {index}")
         if set(observation) != {
             "query_started_monotonic_ns",
             "query_finished_monotonic_ns",
@@ -3779,8 +4330,7 @@ def _validate_fault_settle(value: Any, label: str) -> dict[str, Any]:
             or not _is_exact_int(query_finished)
             or query_started < previous_finished
             or query_finished < query_started
-            or observation.get("within_deadline")
-            is not (query_finished <= deadline)
+            or observation.get("within_deadline") is not (query_finished <= deadline)
         ):
             raise AnalysisValidationError(
                 f"{label} observation {index} timing is invalid"
@@ -4037,12 +4587,9 @@ def _validate_fault_cleanup(
             expected_state_dir=expected_state_dir,
             initial_orphans=initial.get("final_orphan_processes"),
         )
-        if (
-            initial.get("finished_monotonic_ns")
-            > forced.get("started_monotonic_ns")
-            or forced.get("finished_monotonic_ns")
-            > final.get("started_monotonic_ns")
-        ):
+        if initial.get("finished_monotonic_ns") > forced.get(
+            "started_monotonic_ns"
+        ) or forced.get("finished_monotonic_ns") > final.get("started_monotonic_ns"):
             raise AnalysisValidationError(f"{label} phase timestamps overlap")
     final_orphans = final.get("final_orphan_processes")
     final_scan_errors = final.get("final_scan_errors")
@@ -4123,9 +4670,7 @@ def _validate_component_internal_consistency(
         return
 
     if component == "matrix":
-        expected = int(value.get("event_count", -1)) * int(
-            value.get("rule_count", -1)
-        )
+        expected = int(value.get("event_count", -1)) * int(value.get("rule_count", -1))
         _require_expected_evaluations(
             value.get("accounting"), expected, f"{label} accounting"
         )
@@ -4135,9 +4680,7 @@ def _validate_component_internal_consistency(
         events = int(value.get("events", -1))
         submitted = int(value.get("events_submitted", -1))
         rule_count = int(value.get("rule_count", -1))
-        not_submitted = int(
-            value.get("events_not_submitted_after_drain_timeout", -1)
-        )
+        not_submitted = int(value.get("events_not_submitted_after_drain_timeout", -1))
         if (
             events < 0
             or submitted < 0
@@ -4191,11 +4734,10 @@ def _validate_component_internal_consistency(
             f"{label} global accounting",
         )
         full = (
-            (((value.get("post_drain") or {}).get("final_drain_wait") or {}).get(
+            ((value.get("post_drain") or {}).get("final_drain_wait") or {}).get(
                 "full_journal_accounting"
-            ))
-            or {}
-        )
+            )
+        ) or {}
         _require_expected_evaluations(
             full.get("accounting"),
             expected_terminal,
@@ -4224,14 +4766,10 @@ def _validate_component_internal_consistency(
                     )
         paired = value.get("paired_event_to_all_latency")
         if isinstance(paired, dict):
-            online_sample = ((value.get("online") or {}).get("sample") or {})
-            offline_sample = ((value.get("offline") or {}).get("sample") or {})
-            online_ns = online_sample.get(
-                "event_to_all_query_visible_evaluations_ns"
-            )
-            offline_ns = offline_sample.get(
-                "event_to_all_query_visible_evaluations_ns"
-            )
+            online_sample = (value.get("online") or {}).get("sample") or {}
+            offline_sample = (value.get("offline") or {}).get("sample") or {}
+            online_ns = online_sample.get("event_to_all_query_visible_evaluations_ns")
+            offline_ns = offline_sample.get("event_to_all_query_visible_evaluations_ns")
             expected_paired = {
                 "online_ns": online_ns,
                 "offline_ns": offline_ns,
@@ -4295,9 +4833,13 @@ def _validate_offline_boundary_evidence(
     value: Mapping[str, Any], root: Path | None = None
 ) -> None:
     if value.get("prepared_online") is not True:
-        raise AnalysisValidationError("offline probe did not retain prepared-online evidence")
+        raise AnalysisValidationError(
+            "offline probe did not retain prepared-online evidence"
+        )
     if value.get("network_boundary") != systems._python_socket_boundary():
-        raise AnalysisValidationError("offline network-boundary declaration is not canonical")
+        raise AnalysisValidationError(
+            "offline network-boundary declaration is not canonical"
+        )
     source_receipt = _require_dict(
         value.get("boundary_source_receipt"), "offline boundary source receipt"
     )
@@ -4305,7 +4847,9 @@ def _validate_offline_boundary_evidence(
         {"path", "bytes", "sha256"},
         {"path", "attempt_relative_path", "bytes", "sha256"},
     ):
-        raise AnalysisValidationError("offline boundary source receipt schema is invalid")
+        raise AnalysisValidationError(
+            "offline boundary source receipt schema is invalid"
+        )
     expected_source = systems._network_blocker_source().encode("utf-8")
     if (
         source_receipt.get("bytes") != len(expected_source)
@@ -4326,10 +4870,9 @@ def _validate_offline_boundary_evidence(
     records_value = value.get("blocked_attempt_records")
     if not isinstance(records_value, list):
         raise AnalysisValidationError("offline blocked-attempt records must be a list")
-    if (
-        not _is_exact_int(value.get("blocked_internet_attempts"))
-        or value.get("blocked_internet_attempts") != len(records_value)
-    ):
+    if not _is_exact_int(value.get("blocked_internet_attempts")) or value.get(
+        "blocked_internet_attempts"
+    ) != len(records_value):
         raise AnalysisValidationError(
             "offline blocked-attempt count differs from retained records"
         )
@@ -4369,9 +4912,7 @@ def _validate_offline_boundary_evidence(
         activation_by_pid[int(activation["pid"])].append(float(timestamp))
 
     for index, record_value in enumerate(records_value):
-        record = _require_dict(
-            record_value, f"offline blocked-attempt record {index}"
-        )
+        record = _require_dict(record_value, f"offline blocked-attempt record {index}")
         if set(record) != {"pid", "time", "api", "family", "address"}:
             raise AnalysisValidationError(
                 f"offline blocked-attempt record {index} has an invalid schema"
@@ -4424,10 +4965,9 @@ def _validate_offline_boundary_evidence(
             raise AnalysisValidationError(
                 "offline arm did not retain a later fresh-daemon identity"
             )
-        if (
-            offline_identity.get("protocol") != online_identity.get("protocol")
-            or offline_identity.get("version") != online_identity.get("version")
-        ):
+        if offline_identity.get("protocol") != online_identity.get(
+            "protocol"
+        ) or offline_identity.get("version") != online_identity.get("version"):
             raise AnalysisValidationError(
                 "online/offline daemon identity versions differ"
             )
@@ -4487,8 +5027,7 @@ def _validate_offline_boundary_evidence(
         )
         if (
             nested_evidence.get("blocked_attempt_records") != records_value
-            or nested_evidence.get("boundary_activation_records")
-            != activation_values
+            or nested_evidence.get("boundary_activation_records") != activation_values
         ):
             raise AnalysisValidationError(
                 "failed offline-arm boundary evidence differs from the top-level receipt"
@@ -4508,7 +5047,10 @@ def _validate_offline_boundary_evidence(
         "tool_name",
         "cwd",
     }
-    if set(online_envelope) != envelope_fields or set(offline_envelope) != envelope_fields:
+    if (
+        set(online_envelope) != envelope_fields
+        or set(offline_envelope) != envelope_fields
+    ):
         raise AnalysisValidationError("offline arm envelope schema is invalid")
     if any(
         not isinstance(envelope.get(name), str) or not envelope.get(name)
@@ -4517,7 +5059,10 @@ def _validate_offline_boundary_evidence(
     ):
         raise AnalysisValidationError("offline arm envelope fields are invalid")
     for identity_field in ("session_id", "turn_id", "tool_use_id"):
-        if offline_envelope[identity_field] != f"{online_envelope[identity_field]}-offline":
+        if (
+            offline_envelope[identity_field]
+            != f"{online_envelope[identity_field]}-offline"
+        ):
             raise AnalysisValidationError(
                 f"offline envelope {identity_field} is not paired to the online arm"
             )
@@ -4584,7 +5129,7 @@ def _normal_unit_expected_status(
         batch_failure = any(
             bool(((batch.get("wait") or {}).get("timed_out")))
             or not bool(
-                ((((batch.get("wait") or {}).get("settle") or {}).get("complete")))
+                (((batch.get("wait") or {}).get("settle") or {}).get("complete"))
             )
             for batch in batches
             if isinstance(batch, dict)
@@ -4598,13 +5143,11 @@ def _normal_unit_expected_status(
             or post_drain.get("status") != "completed"
             or restart.get("status") != "completed"
             or restart.get("exact_projection_bytes_preserved") is not True
-            or not systems._accounting_is_clean(
-                restart.get("post_restart_accounting")
-            )
+            or not systems._accounting_is_clean(restart.get("post_restart_accounting"))
             or not bool(
-                (
-                    ((restart.get("post_restart_event") or {}).get("hook") or {})
-                ).get("contract_preserved")
+                ((restart.get("post_restart_event") or {}).get("hook") or {}).get(
+                    "contract_preserved"
+                )
             )
         )
         return "system_violation" if failed else "completed"
@@ -4728,9 +5271,9 @@ def _normal_unit_expected_status(
             or (
                 not startup_failed
                 and not bool(
-                ((offline.get("sample") or {}).get("hook") or {}).get(
-                    "contract_preserved"
-                )
+                    ((offline.get("sample") or {}).get("hook") or {}).get(
+                        "contract_preserved"
+                    )
                 )
             )
             or not systems._accounting_is_clean(online.get("accounting"))
@@ -4795,9 +5338,9 @@ def _validate_component_gates(
                 value.get("standardized_outcomes"),
                 f"fault standardized outcomes {unit['unit_id']}",
             )
-            if standardized.get("schema_version") != 1 or not required_standardized.issubset(
-                standardized
-            ):
+            if standardized.get(
+                "schema_version"
+            ) != 1 or not required_standardized.issubset(standardized):
                 raise AnalysisValidationError(
                     f"fault standardized outcome schema mismatch for {unit['unit_id']}"
                 )
@@ -4812,8 +5355,8 @@ def _validate_component_gates(
                         value.get("probe_specific"),
                         f"fault probe-specific result {unit['unit_id']}",
                     )
-                    expected_standardized = systems._unknown_standardized_fault_outcomes(
-                        fault
+                    expected_standardized = (
+                        systems._unknown_standardized_fault_outcomes(fault)
                     )
                     expected_standardized["orphan_process_count"] = probe.get(
                         "orphan_process_count"
@@ -4977,6 +5520,17 @@ def _validate_raw_tree_receipt(value: Any, label: str) -> dict[str, Any]:
         entry = _require_dict(entry_value, f"{label} entry")
         entry_type = str(entry.get("type", ""))
         expected = {"path", "type", "mode"}
+        temporal = {
+            "uid",
+            "gid",
+            "device",
+            "inode",
+            "link_count",
+            "mtime_ns",
+            "ctime_ns",
+        }
+        if set(entry) & temporal:
+            expected |= temporal
         if entry_type == "regular":
             expected |= {"bytes", "sha256"}
         elif entry_type == "symlink":
@@ -4990,10 +5544,15 @@ def _validate_raw_tree_receipt(value: Any, label: str) -> dict[str, Any]:
             raise AnalysisValidationError(f"{label} entry path is invalid")
         if not isinstance(entry.get("mode"), int) or not 0 <= entry["mode"] <= 0o7777:
             raise AnalysisValidationError(f"{label} entry mode is invalid")
+        if temporal.issubset(entry) and any(
+            not _is_exact_int(entry[name]) or entry[name] < 0 for name in temporal
+        ):
+            raise AnalysisValidationError(f"{label} entry metadata is invalid")
         if entry_type == "regular":
             digest = entry.get("sha256")
             if int(entry.get("bytes", -1)) < 0 or (
-                digest is not None and re.fullmatch(r"[0-9a-f]{64}", str(digest)) is None
+                digest is not None
+                and re.fullmatch(r"[0-9a-f]{64}", str(digest)) is None
             ):
                 raise AnalysisValidationError(f"{label} regular entry is invalid")
             if digest is None and not any(error["path"] == path for error in errors):
@@ -5010,7 +5569,9 @@ def _validate_raw_tree_receipt(value: Any, label: str) -> dict[str, Any]:
     else:
         root_entry = validate_entry(root_entry, root=True)
         if root_type != root_entry.get("type"):
-            raise AnalysisValidationError(f"{label} root type disagrees with root entry")
+            raise AnalysisValidationError(
+                f"{label} root type disagrees with root entry"
+            )
     entries = [validate_entry(item) for item in list(receipt.get("entries") or [])]
     if entries != sorted(entries, key=lambda item: (item["path"], item["type"])):
         raise AnalysisValidationError(f"{label} entries are not canonical")
@@ -5060,11 +5621,14 @@ def _validate_cache_receipt(
         raise AnalysisValidationError("cache-end outcome has a noncanonical status")
     if outcome.get("error") is not None:
         error = _require_dict(outcome.get("error"), "cache-end error")
-        if not all(isinstance(error.get(name), str) and error.get(name) for name in (
-            "type",
-            "message",
-            "traceback",
-        )):
+        if not all(
+            isinstance(error.get(name), str) and error.get(name)
+            for name in (
+                "type",
+                "message",
+                "traceback",
+            )
+        ):
             raise AnalysisValidationError("cache-end error evidence is incomplete")
         status = str(outcome.get("status", ""))
         if status == "system_violation":
@@ -5072,32 +5636,29 @@ def _validate_cache_receipt(
                 raise AnalysisValidationError(
                     "cache-end system violation lacks a runtime-contract cause"
                 )
-        elif not isinstance(outcome.get("classification_basis"), str) or not outcome.get(
-            "classification_basis"
-        ):
+        elif not isinstance(
+            outcome.get("classification_basis"), str
+        ) or not outcome.get("classification_basis"):
             raise AnalysisValidationError(
                 "cache-end non-system error lacks a classification basis"
             )
         if outcome.get("unchanged") not in {None, False}:
-            raise AnalysisValidationError("cache-end error cannot claim unchanged cache")
+            raise AnalysisValidationError(
+                "cache-end error cannot claim unchanged cache"
+            )
         return statuses
     if outcome.get("status") not in {"completed", "system_violation"}:
         raise AnalysisValidationError("cache-end receipt has an invalid success status")
     launch_cache = (
-        (_require_dict(identity.get("formal_runtime"), "formal runtime")).get(
-            "paw_cache"
-        )
-        or {}
-    )
+        _require_dict(identity.get("formal_runtime"), "formal runtime")
+    ).get("paw_cache") or {}
     if outcome.get("launch_receipt_sha256") != _sha256_bytes(
         _canonical_json_bytes(launch_cache)
     ):
         raise AnalysisValidationError("cache-end launch receipt hash mismatch")
     end = outcome.get("end_receipt")
     end = end if end is not None else outcome.get("raw_end_tree")
-    if outcome.get("end_receipt_sha256") != _sha256_bytes(
-        _canonical_json_bytes(end)
-    ):
+    if outcome.get("end_receipt_sha256") != _sha256_bytes(_canonical_json_bytes(end)):
         raise AnalysisValidationError("cache-end receipt hash mismatch")
     raw_before = _validate_raw_tree_receipt(
         launch_cache.get("raw_tree"), "raw cache launch tree"
@@ -5106,7 +5667,9 @@ def _validate_cache_receipt(
         outcome.get("raw_end_tree"), "raw cache-end tree"
     )
     if isinstance(end, dict) and end.get("raw_tree") != raw_end:
-        raise AnalysisValidationError("strict cache-end receipt has a different raw tree")
+        raise AnalysisValidationError(
+            "strict cache-end receipt has a different raw tree"
+        )
 
     def index_raw(receipt: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         indexed: dict[str, dict[str, Any]] = {}
@@ -5120,6 +5683,10 @@ def _validate_cache_receipt(
     before_entries = index_raw(raw_before)
     after_all_entries = index_raw(raw_end)
     entry_changes = []
+    permitted_runtime_manifest_temporal_changes = []
+    allow_runtime_manifest_temporal_change = (
+        identity.get("study_mode") == _COMPONENT_STUDY_MODE
+    )
     for path in sorted(after_all_entries):
         after = after_all_entries[path]
         before = before_entries.get(path)
@@ -5128,6 +5695,29 @@ def _validate_cache_receipt(
                 {"path": path, "change": "added", "before": None, "after": after}
             )
         elif before != after:
+            changed_fields = sorted(
+                key
+                for key in set(before) | set(after)
+                if before.get(key) != after.get(key)
+            )
+            if (
+                allow_runtime_manifest_temporal_change
+                and path == "runtimes/qwen3-0.6b-q6_k.json"
+                and changed_fields
+                and set(changed_fields).issubset({"mtime_ns", "ctime_ns"})
+                and before.get("type") == "regular"
+                and after.get("type") == "regular"
+            ):
+                permitted_runtime_manifest_temporal_changes.append(
+                    {
+                        "path": path,
+                        "changed_fields": changed_fields,
+                        "before": before,
+                        "after": after,
+                        "bytes_sha256_and_identity_unchanged": True,
+                    }
+                )
+                continue
             entry_changes.append(
                 {
                     "path": path,
@@ -5151,10 +5741,20 @@ def _validate_cache_receipt(
     ]
     for name, expected in (
         ("entry_changes", entry_changes),
+        (
+            "permitted_runtime_manifest_temporal_changes",
+            permitted_runtime_manifest_temporal_changes,
+        ),
         ("deleted_entries", deleted_entries),
         ("special_entries", special_entries),
     ):
-        if outcome.get(name) != expected:
+        observed = (
+            outcome.get(name, [])
+            if name == "permitted_runtime_manifest_temporal_changes"
+            and not allow_runtime_manifest_temporal_change
+            else outcome.get(name)
+        )
+        if observed != expected:
             raise AnalysisValidationError(f"cache-end {name} disagrees with raw trees")
     before_files = {
         str(item.get("path", "")): dict(item)
@@ -5194,7 +5794,9 @@ def _validate_cache_receipt(
         ),
     ):
         if observed != expected:
-            raise AnalysisValidationError(f"cache-end {name} disagrees with inventories")
+            raise AnalysisValidationError(
+                f"cache-end {name} disagrees with inventories"
+            )
     strict_error = outcome.get("strict_validation_error")
     comparison_errors = list(outcome.get("comparison_errors") or [])
     if outcome.get("prelaunch_raw_tree_missing") is not False:
@@ -5255,7 +5857,7 @@ def _validate_cache_receipt(
 def validate_attempt(
     path: Path,
     *,
-    _expected_component_counts: Mapping[str, int] = FORMAL_COMPONENT_COUNTS,
+    _expected_component_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """Validate an attempt; the private count seam supports compact unit fixtures."""
     expanded = path.expanduser()
@@ -5301,15 +5903,38 @@ def validate_attempt(
     amendment_007 = _require_dict(
         _load_json(REPO_ROOT / PROTOCOL_PATHS[-1]), "amendment 007"
     )
+    amendment_008 = _load_amendment_008()
     legacy_r01 = _is_anchored_r01(raw_attempt_id, amendment_007)
-    protocols = _validate_sources(identity, legacy_r01=legacy_r01)
+    anchored_r02 = _is_anchored_r02(raw_attempt_id, amendment_008)
+    component_r03 = identity.get("study_mode") == _COMPONENT_STUDY_MODE
+    if component_r03 and raw_attempt_id != attempts_contract._COMPONENT_SUCCESSOR_ID:
+        raise AnalysisValidationError("amendment-008 mode is restricted to exact r03")
+    protocols = _validate_sources(
+        identity,
+        legacy_r01=legacy_r01,
+        runner_anchor=anchored_r02,
+        protocol_paths=(
+            PROTOCOL_PATHS_008
+            if component_r03
+            else PROTOCOL_PATHS_007[:-1]
+            if legacy_r01 is not None
+            else PROTOCOL_PATHS_007
+        ),
+    )
     observed_counts = dict(Counter(_component(item) for item in plan))
-    if observed_counts != dict(_expected_component_counts):
+    expected_component_counts = dict(
+        _expected_component_counts
+        if _expected_component_counts is not None
+        else FORMAL_R03_COMPONENT_COUNTS
+        if component_r03
+        else FORMAL_COMPONENT_COUNTS
+    )
+    if observed_counts != expected_component_counts:
         raise AnalysisValidationError(
             "plan component counts mismatch: "
-            f"expected {dict(_expected_component_counts)}, observed {observed_counts}"
+            f"expected {expected_component_counts}, observed {observed_counts}"
         )
-    if dict(_expected_component_counts) == FORMAL_COMPONENT_COUNTS:
+    if not component_r03 and expected_component_counts == FORMAL_COMPONENT_COUNTS:
         contract = amendment_007
         try:
             launched = datetime.fromisoformat(
@@ -5324,24 +5949,55 @@ def validate_attempt(
             ) from exc
         if (
             legacy_r01 is None
-            and (
-            launched.tzinfo is None
-            or frozen.tzinfo is None
-            or launched < frozen
-            )
+            and anchored_r02 is None
+            and (launched.tzinfo is None or frozen.tzinfo is None or launched < frozen)
         ):
             raise AnalysisValidationError(
                 "formal attempt launch predates amendment-007 freeze"
             )
         if legacy_r01 is not None:
-            _validate_anchored_r01(
-                identity, result, launch, legacy_r01, contract, root
+            _validate_anchored_r01(identity, result, launch, legacy_r01, contract, root)
+        elif anchored_r02 is not None:
+            assert amendment_008 is not None
+            _validate_anchored_r02(
+                identity,
+                result,
+                launch,
+                anchored_r02,
+                amendment_008,
+                root,
             )
+            _validate_formal_plan(root, identity, result, plan)
         else:
             _validate_formal_plan(root, identity, result, plan)
-    units, plan_accounting = _validate_units(root, plan, result)
+    elif component_r03:
+        if amendment_008 is None:
+            raise AnalysisValidationError("r03 requires frozen amendment 008")
+        try:
+            launched = datetime.fromisoformat(
+                str(launch.get("created_utc", "")).replace("Z", "+00:00")
+            )
+            frozen = datetime.fromisoformat(
+                str(amendment_008.get("frozen_utc", "")).replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise AnalysisValidationError(
+                "r03 launch/freeze timestamp is invalid"
+            ) from exc
+        if launched.tzinfo is None or frozen.tzinfo is None or launched < frozen:
+            raise AnalysisValidationError("r03 launch predates amendment-008 freeze")
+        _validate_whole_attempt_plan(root, identity, result, plan, amendment_008)
+    units, plan_accounting = _validate_units(
+        root, plan, result, exact_terminal_phase=component_r03
+    )
+    if component_r03 and any(
+        unit["terminal_record"] is not None
+        and (unit.get("value") or {}).get("study_mode") != _COMPONENT_STUDY_MODE
+        for unit in units
+    ):
+        raise AnalysisValidationError("r03 terminal result study_mode differs")
     _validate_unit_plan_bindings(units)
-    if identity.get("study_mode") == _FORMAL_STUDY_MODE:
+    if identity.get("study_mode") in {_FORMAL_STUDY_MODE, _COMPONENT_STUDY_MODE}:
         _validate_socket_endpoint_receipts(root, identity, units)
     for unit in units:
         _validate_component_internal_consistency(unit, root)
@@ -5355,7 +6011,9 @@ def validate_attempt(
     source_end = result_git.get("end")
     source_unchanged = result_git.get("unchanged_during_attempt")
     if source_start != identity.get("git"):
-        raise AnalysisValidationError("result source start differs from launch Git identity")
+        raise AnalysisValidationError(
+            "result source start differs from launch Git identity"
+        )
     if source_unchanged is not (source_start == source_end):
         raise AnalysisValidationError("result source unchanged flag is not recomputed")
     all_statuses = [*(unit["status"] for unit in units), *global_statuses]
@@ -5386,26 +6044,17 @@ def validate_attempt(
         source_mutated
         or source_unchanged is not True
         or "unclassified_failure" in all_statuses
-        or (
-            has_abort
-            and abort_status in {"system_violation", "unclassified_failure"}
-        )
+        or (has_abort and abort_status in {"system_violation", "unclassified_failure"})
     )
     has_infrastructure = bool(
         "infrastructure_error" in all_statuses
-        or (
-            has_abort and abort_status == "infrastructure_error"
-        )
+        or (has_abort and abort_status == "infrastructure_error")
     )
     has_harness = bool(
         "harness_error" in all_statuses
-        or (
-            has_abort and abort_status == "harness_error"
-        )
+        or (has_abort and abort_status == "harness_error")
     )
-    system_violations = sum(
-        status == "system_violation" for status in all_statuses
-    )
+    system_violations = sum(status == "system_violation" for status in all_statuses)
     expected_abort_system_violation = bool(
         has_abort
         and (
@@ -5438,13 +6087,15 @@ def validate_attempt(
         raise AnalysisValidationError(
             f"result status disagrees with ledger/global outcomes: expected {expected_status}"
         )
-    expected_histogram = dict(
-        sorted(Counter(unit["status"] for unit in units).items())
-    )
+    expected_histogram = dict(sorted(Counter(unit["status"] for unit in units).items()))
     if result.get("unit_status_histogram") != expected_histogram:
-        raise AnalysisValidationError("result unit status histogram disagrees with ledger")
+        raise AnalysisValidationError(
+            "result unit status histogram disagrees with ledger"
+        )
     if result.get("system_violation_units") != system_violations:
-        raise AnalysisValidationError("result system-violation count disagrees with ledger")
+        raise AnalysisValidationError(
+            "result system-violation count disagrees with ledger"
+        )
     if result.get("terminal_units") is not None:
         expected_terminal_units = [
             {
@@ -5462,7 +6113,10 @@ def validate_attempt(
     process_stream_receipts = _validate_process_streams(
         root,
         result,
-        require_lossless=dict(_expected_component_counts) == FORMAL_COMPONENT_COUNTS,
+        require_lossless=(
+            expected_component_counts == FORMAL_COMPONENT_COUNTS
+            or expected_component_counts == FORMAL_R03_COMPONENT_COUNTS
+        ),
     )
     input_hashes = {
         name: _sha256(required[name])
@@ -5475,10 +6129,7 @@ def validate_attempt(
     }
     input_hashes["units.jsonl"] = _sha256(root / "units.jsonl")
     input_hashes.update(
-        {
-            name: receipt["sha256"]
-            for name, receipt in process_stream_receipts.items()
-        }
+        {name: receipt["sha256"] for name, receipt in process_stream_receipts.items()}
     )
     input_receipts = {
         name: {
@@ -5498,6 +6149,8 @@ def validate_attempt(
         "input_receipts": input_receipts,
         "protocol_documents": protocols,
         "anchored_r01": legacy_r01 is not None,
+        "anchored_r02": anchored_r02 is not None,
+        "component_r03": component_r03,
         "units": units,
         "plan_accounting": plan_accounting,
         "eligible": eligible,
@@ -5510,7 +6163,7 @@ def analyze(
     path: Path,
     analysis_id: str,
     *,
-    _expected_component_counts: Mapping[str, int] = FORMAL_COMPONENT_COUNTS,
+    _expected_component_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     if ANALYSIS_ID_PATTERN.fullmatch(analysis_id) is None:
         raise AnalysisValidationError(
@@ -5562,15 +6215,13 @@ def analyze(
             "input_receipts": validated["input_receipts"],
             "status": validated["result"].get("status"),
             "startup_only_numeric_aggregate_excluded": validated["anchored_r01"],
+            "amendment_008_historical_anchor": validated["anchored_r02"],
+            "component_repair_attempt": validated["component_r03"],
             "plan_accounting": validated["plan_accounting"],
             "global_statuses": validated["global_statuses"],
             "source_unchanged_during_attempt": validated["source_unchanged"],
-            "attempt_replacement": validated["identity"].get(
-                "attempt_replacement"
-            ),
-            "replacement_retention": validated["identity"].get(
-                "replacement_retention"
-            ),
+            "attempt_replacement": validated["identity"].get("attempt_replacement"),
+            "replacement_retention": validated["identity"].get("replacement_retention"),
         },
         "attempt_ledger": [
             {
@@ -5729,9 +6380,7 @@ def analyze_attempts_root(
                     ],
                     "status": report["raw_attempt"]["status"],
                     "input_sha256": report["raw_attempt"]["input_sha256"],
-                    "analysis_binding_sha256": report[
-                        "analysis_binding_sha256"
-                    ],
+                    "analysis_binding_sha256": report["analysis_binding_sha256"],
                     "validation_error": None,
                 }
             )
@@ -5815,10 +6464,8 @@ def analyze_attempts_root(
                     },
                 )
                 exact_outcome_aware_edge = (
-                    predecessor["raw_attempt_id"]
-                    == "formal-v3-20260831t051023z-r01"
-                    and successor["raw_attempt_id"]
-                    == "formal-v3-20260831t051023z-r02"
+                    predecessor["raw_attempt_id"] == "formal-v3-20260831t051023z-r01"
+                    and successor["raw_attempt_id"] == "formal-v3-20260831t051023z-r02"
                 )
                 if exact_outcome_aware_edge:
                     if not receipt_path:
@@ -5846,15 +6493,17 @@ def analyze_attempts_root(
                     raise AnalysisValidationError(
                         "successor replacement binding differs from revalidation"
                     )
-            if recomputed.get("successor_raw_attempt_id") != successor[
-                "raw_attempt_id"
-            ]:
+            if (
+                recomputed.get("successor_raw_attempt_id")
+                != successor["raw_attempt_id"]
+            ):
                 raise AnalysisValidationError(
                     "successor replacement binding names a different successor"
                 )
-            if recomputed.get("predecessor_raw_attempt_id") != predecessor[
-                "raw_attempt_id"
-            ]:
+            if (
+                recomputed.get("predecessor_raw_attempt_id")
+                != predecessor["raw_attempt_id"]
+            ):
                 raise AnalysisValidationError(
                     "successor replacement does not name immediate predecessor"
                 )
@@ -5869,10 +6518,8 @@ def analyze_attempts_root(
             successor["validated_replacement_binding"] = recomputed
             predecessor["replacement_authorized_by_successor"] = True
             if (
-                predecessor["raw_attempt_id"]
-                == "formal-v3-20260831t051023z-r01"
-                and successor["raw_attempt_id"]
-                == "formal-v3-20260831t051023z-r02"
+                predecessor["raw_attempt_id"] == "formal-v3-20260831t051023z-r01"
+                and successor["raw_attempt_id"] == "formal-v3-20260831t051023z-r02"
                 and recomputed.get("classification") == "harness_error"
                 and recomputed.get("original_status")
                 == "completed_with_system_violations"
@@ -5919,16 +6566,12 @@ def analyze_attempts_root(
         "analysis_id": analysis_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "analysis_binding": root_binding,
-        "analysis_binding_sha256": _sha256_bytes(
-            _canonical_json_bytes(root_binding)
-        ),
+        "analysis_binding_sha256": _sha256_bytes(_canonical_json_bytes(root_binding)),
         "attempt_ledger": ledger,
         "primary_numeric": {
             "promoted": selected_id is not None,
             "selected_raw_attempt_id": selected_id,
-            "selection_blocked_by": (
-                blocking["raw_attempt_id"] if blocking else None
-            ),
+            "selection_blocked_by": (blocking["raw_attempt_id"] if blocking else None),
             "selection_rule": (
                 "earliest launch-ordered eligible attempt after only immutable, "
                 "pre-authorized harness/infrastructure replacements"
@@ -5953,19 +6596,491 @@ def analyze_attempts_root(
     }
 
 
+def _reduce_endpoints(
+    plan: Sequence[dict[str, Any]], units: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    matrix_plan = [item for item in plan if _component(item) == "matrix"]
+    matrix_records = []
+    for unit in units:
+        if unit["component"] != "matrix" or unit.get("value") is None:
+            continue
+        record = dict(unit["value"])
+        record.setdefault("condition_id", unit["unit_id"])
+        matrix_records.append(record)
+    return {
+        "matrix": systems.reduce_matrix_attempts(matrix_plan, matrix_records),
+        "soak": _component_endpoint("soak", plan, units),
+        "offline": _component_endpoint("offline", plan, units),
+        "faults": _fault_endpoint(plan, units),
+    }
+
+
+def _revalidate_exact_replacement_edge(
+    predecessor: dict[str, Any], successor: dict[str, Any]
+) -> dict[str, Any]:
+    binding = _require_dict(
+        successor["identity"].get("attempt_replacement"),
+        "successor replacement binding",
+    )
+    receipt_path = binding.get("receipt_path")
+    if not isinstance(receipt_path, str) or not receipt_path:
+        raise AnalysisValidationError("successor does not bind replacement.json")
+    _validate_live_predecessor_artifacts(predecessor["root"], binding)
+    try:
+        recomputed = systems.replacement_launch_binding(successor["root"], receipt_path)
+    except Exception as exc:
+        raise AnalysisValidationError(
+            f"replacement edge failed live revalidation: {exc}"
+        ) from exc
+    if binding != recomputed:
+        raise AnalysisValidationError(
+            "successor replacement binding differs from live revalidation"
+        )
+    if recomputed.get("predecessor_raw_attempt_id") != predecessor["identity"].get(
+        "attempt_id"
+    ) or recomputed.get("successor_raw_attempt_id") != successor["identity"].get(
+        "attempt_id"
+    ):
+        raise AnalysisValidationError(
+            "replacement edge is not exact immediate adjacency"
+        )
+    return recomputed
+
+
+def analyze_component_composite(path: Path, analysis_id: str) -> dict[str, Any]:
+    """Reduce the fixed 80-r02/350-r03 amendment-008 component mapping."""
+
+    if analysis_id != COMPONENT_ANALYSIS_ID:
+        raise AnalysisValidationError(
+            f"component analysis_id must equal {COMPONENT_ANALYSIS_ID}"
+        )
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise AnalysisValidationError("component attempts root must not be a symlink")
+    root = expanded.resolve()
+    if not root.is_dir():
+        raise AnalysisValidationError("component attempts root is not a directory")
+    expected_ids = [
+        "formal-v3-20260831t051023z-r01",
+        attempts_contract._COMPONENT_PREDECESSOR_ID,
+        attempts_contract._COMPONENT_SUCCESSOR_ID,
+    ]
+    observed = sorted(child.name for child in root.iterdir())
+    if observed != sorted(expected_ids):
+        raise AnalysisValidationError(
+            "component attempts root must contain exactly immutable r01/r02/r03"
+        )
+    validated = {
+        attempt_id: validate_attempt(root / attempt_id) for attempt_id in expected_ids
+    }
+    r01 = validated[expected_ids[0]]
+    r02 = validated[expected_ids[1]]
+    r03 = validated[expected_ids[2]]
+    if not r01["anchored_r01"] or not r02["anchored_r02"] or not r03["component_r03"]:
+        raise AnalysisValidationError(
+            "raw attempts do not match frozen r01/r02/r03 roles"
+        )
+    edge_12 = _revalidate_exact_replacement_edge(r01, r02)
+    edge_23 = _revalidate_exact_replacement_edge(r02, r03)
+    if (
+        edge_12.get("classification") != "harness_error"
+        or edge_12.get("original_status") != "completed_with_system_violations"
+        or edge_23.get("classification") != attempts_contract._COMPONENT_CLASSIFICATION
+    ):
+        raise AnalysisValidationError("raw replacement chain differs from amendments")
+    forensics = _require_dict(
+        edge_23.get("r02_terminal_forensics"),
+        "r02 terminal-forensics binding",
+    )
+    forensics_labels = forensics.get("ordered_labels")
+    if not isinstance(forensics_labels, list) or len(forensics_labels) != 430:
+        raise AnalysisValidationError(
+            "r02 terminal-forensics binding does not label all 430 rows"
+        )
+    forensics_by_position: dict[int, dict[str, Any]] = {}
+    for label_row in forensics_labels:
+        if (
+            not isinstance(label_row, dict)
+            or type(label_row.get("plan_index")) is not int
+        ):
+            raise AnalysisValidationError("r02 terminal-forensics label row is invalid")
+        position = int(label_row["plan_index"])
+        if position in forensics_by_position:
+            raise AnalysisValidationError("r02 terminal-forensics repeats a position")
+        forensics_by_position[position] = label_row
+    if set(forensics_by_position) != set(range(430)):
+        raise AnalysisValidationError("r02 terminal-forensics positions are incomplete")
+
+    config_value = _require_dict(r03["identity"].get("config"), "r03 config")
+    config_kwargs = dict(config_value)
+    for name in ("rule_counts", "project_counts", "burst_sizes"):
+        config_kwargs[name] = tuple(config_kwargs[name])
+    component_plans = systems.build_component_repair_plans(
+        systems.MatrixConfig(**config_kwargs)
+    )
+    if (
+        r02["plan"] != component_plans["full_plan"]
+        or r03["plan"] != component_plans["repair_plan"]
+        or component_plans["mapping_sha256"] != systems.FORMAL_COMPONENT_MAPPING_SHA256
+    ):
+        raise AnalysisValidationError(
+            "raw plans differ from the fixed component mapping"
+        )
+
+    r02_units = r02["units"]
+    r03_units = r03["units"]
+    composite_units: list[dict[str, Any]] = []
+    sensitivity_rows: list[dict[str, Any]] = []
+    for row in component_plans["mapping"]["rows"]:
+        canonical_position = int(row["canonical_position"])
+        if row["source_attempt_id"] == attempts_contract._COMPONENT_PREDECESSOR_ID:
+            source = r02_units[int(row["source_plan_position"])]
+        else:
+            source = r03_units[int(row["source_plan_position"])]
+            r02_source = r02_units[canonical_position]
+            forensic = forensics_by_position[canonical_position]
+            if (
+                forensic.get("component") != r02_source["component"]
+                or forensic.get("unit_id") != r02_source["unit_id"]
+                or forensic.get("dependency_class") != "direct_paw"
+                or forensic.get("primary_disposition") != "replace_from_r03"
+                or forensic.get("raw_status") != r02_source["status"]
+                or forensic.get("repair_sensitivity_label")
+                not in {
+                    "premeasurement_cache_failure",
+                    "measured_after_unbound_cache_convergence",
+                    "other_structural_phase",
+                }
+            ):
+                raise AnalysisValidationError(
+                    "r02 terminal-forensics direct row differs from raw ledger"
+                )
+            sensitivity_rows.append(
+                {
+                    "canonical_position": canonical_position,
+                    "component": r02_source["component"],
+                    "unit_id": r02_source["unit_id"],
+                    "raw_status": r02_source["status"],
+                    "started": r02_source["started"],
+                    "terminal_record": r02_source["terminal_record"],
+                    "terminal_sha256": r02_source["terminal_sha256"],
+                    "repair_sensitivity_label": forensic["repair_sensitivity_label"],
+                    "matched_predicate_id": forensic["matched_predicate_id"],
+                    "raw_value": r02_source["value"],
+                }
+            )
+        if (
+            source["component"] != row["component"]
+            or source["unit_id"] != row["unit_id"]
+        ):
+            raise AnalysisValidationError("mapping row selects a different raw unit")
+        composite_units.append(
+            {
+                **source,
+                "canonical_position": canonical_position,
+                "source_attempt_id": row["source_attempt_id"],
+                "source_plan_position": row["source_plan_position"],
+            }
+        )
+    if len(composite_units) != 430 or len(sensitivity_rows) != 350:
+        raise AnalysisValidationError("component mapping does not cover 430/350 rows")
+    if [row["canonical_position"] for row in sensitivity_rows] != list(range(350)):
+        raise AnalysisValidationError("r02 direct-PAW sensitivity ledger is incomplete")
+    for position in range(350, 430):
+        forensic = forensics_by_position[position]
+        r02_source = r02_units[position]
+        if (
+            forensic.get("component") != r02_source["component"]
+            or forensic.get("unit_id") != r02_source["unit_id"]
+            or forensic.get("dependency_class") != "deterministic_no_paw"
+            or forensic.get("primary_disposition") != "carry_from_r02"
+            or forensic.get("repair_sensitivity_label") != "other_structural_phase"
+            or forensic.get("raw_status") != r02_source["status"]
+        ):
+            raise AnalysisValidationError(
+                "r02 terminal-forensics carry row differs from raw ledger"
+            )
+
+    carry_units = [
+        unit
+        for unit in composite_units
+        if unit["source_attempt_id"] == attempts_contract._COMPONENT_PREDECESSOR_ID
+    ]
+    repaired_units = [
+        unit
+        for unit in composite_units
+        if unit["source_attempt_id"] == attempts_contract._COMPONENT_SUCCESSOR_ID
+    ]
+    promoted = bool(
+        len(carry_units) == 80
+        and len(repaired_units) == 350
+        and r02["source_unchanged"] is True
+        and all(unit["status"] in PRIMARY_ELIGIBLE_STATUSES for unit in carry_units)
+        and r03["eligible"]
+    )
+    endpoints = (
+        _reduce_endpoints(component_plans["full_plan"], composite_units)
+        if promoted
+        else None
+    )
+    sensitivity_units = r02_units[:350]
+    sensitivity = {
+        "raw_attempt_id": attempts_contract._COMPONENT_PREDECESSOR_ID,
+        "raw_status": r02["result"].get("status"),
+        "row_count": len(sensitivity_rows),
+        "rows": sensitivity_rows,
+        "label_counts": forensics.get("label_counts"),
+        "boundaries": forensics.get("boundaries"),
+        "forensics_payload_sha256": forensics.get("payload_sha256"),
+        "endpoints": _reduce_endpoints(
+            component_plans["repair_plan"], sensitivity_units
+        ),
+        "selection_effect": "none; every row is diagnostic and r03 remains the fixed primary source",
+    }
+    amendment = _load_amendment_008()
+    if amendment is None:
+        raise AnalysisValidationError(
+            "frozen amendment 008 disappeared during reduction"
+        )
+    binding = {
+        **_component_static_analysis_binding(analysis_id),
+        "component_mapping": component_plans["mapping"],
+        "component_mapping_sha256": component_plans["mapping_sha256"],
+        "raw_attempt_inputs": {
+            attempt_id: validated[attempt_id]["input_receipts"]
+            for attempt_id in expected_ids
+        },
+        "replacement_edges": {
+            "r01_to_r02": {
+                "receipt_sha256": edge_12.get("receipt_sha256"),
+                "classification": edge_12.get("classification"),
+            },
+            "r02_to_r03": {
+                "receipt_sha256": edge_23.get("receipt_sha256"),
+                "classification": edge_23.get("classification"),
+                "component_protocol_correction": edge_23.get(
+                    "component_protocol_correction"
+                ),
+                "r02_terminal_forensics": {
+                    key: forensics.get(key)
+                    for key in (
+                        "receipt_type",
+                        "payload_sha256",
+                        "receipt",
+                        "label_counts",
+                        "boundaries",
+                        "counts",
+                        "digests",
+                    )
+                },
+            },
+        },
+        "amendment_008_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_008[-1]),
+    }
+    return {
+        "schema_version": 1,
+        "analysis_id": analysis_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "analysis_binding": binding,
+        "analysis_binding_sha256": _sha256_bytes(_canonical_json_bytes(binding)),
+        "raw_attempt_ledger": [
+            {
+                "raw_attempt_id": attempt_id,
+                "raw_status": validated[attempt_id]["result"].get("status"),
+                "raw_result_sha256": validated[attempt_id]["result_sha256"],
+                "raw_status_preserved": True,
+                "unit_count": len(validated[attempt_id]["units"]),
+                "units": [
+                    {
+                        "source_plan_position": position,
+                        "component": unit["component"],
+                        "unit_id": unit["unit_id"],
+                        "raw_status": unit["status"],
+                        "started": unit["started"],
+                        "terminal_record": unit["terminal_record"],
+                        "terminal_sha256": unit["terminal_sha256"],
+                        "raw_value": unit["value"],
+                    }
+                    for position, unit in enumerate(validated[attempt_id]["units"])
+                ],
+            }
+            for attempt_id in expected_ids
+        ],
+        "component_mapping": component_plans["mapping"],
+        "component_mapping_sha256": component_plans["mapping_sha256"],
+        "composite_primary": {
+            "promoted": promoted,
+            "unit_count": 430 if promoted else 0,
+            "source_counts": {
+                attempts_contract._COMPONENT_PREDECESSOR_ID: len(carry_units),
+                attempts_contract._COMPONENT_SUCCESSOR_ID: len(repaired_units),
+            },
+            "reason": (
+                "all exact replacement, evidence, plan, cache, source, and terminal gates passed"
+                if promoted
+                else "one or more fail-closed component promotion gates did not pass"
+            ),
+        },
+        "endpoints": endpoints,
+        "composite_unit_ledger": [
+            {
+                "canonical_position": unit["canonical_position"],
+                "component": unit["component"],
+                "unit_id": unit["unit_id"],
+                "source_attempt_id": unit["source_attempt_id"],
+                "source_plan_position": unit["source_plan_position"],
+                "raw_status": unit["status"],
+                "started": unit["started"],
+                "terminal_record": unit["terminal_record"],
+                "terminal_sha256": unit["terminal_sha256"],
+                "raw_value": unit["value"],
+            }
+            for unit in composite_units
+        ],
+        "r02_direct_paw_sensitivity": sensitivity,
+    }
+
+
+def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
+    """Reduce exact r03 as the sole primary source and retain r02 as sensitivity."""
+
+    if analysis_id != COMPONENT_ANALYSIS_ID:
+        raise AnalysisValidationError(
+            f"whole-attempt analysis_id must equal {COMPONENT_ANALYSIS_ID}"
+        )
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise AnalysisValidationError("whole-attempt root must not be a symlink")
+    root = expanded.resolve()
+    if not root.is_dir():
+        raise AnalysisValidationError("whole-attempt root is not a directory")
+    expected_ids = [
+        "formal-v3-20260831t051023z-r01",
+        attempts_contract._COMPONENT_PREDECESSOR_ID,
+        attempts_contract._COMPONENT_SUCCESSOR_ID,
+    ]
+    if sorted(child.name for child in root.iterdir()) != sorted(expected_ids):
+        raise AnalysisValidationError(
+            "whole-attempt root must contain exactly immutable r01/r02/r03"
+        )
+    r03 = validate_attempt(root / attempts_contract._COMPONENT_SUCCESSOR_ID)
+    if not r03.get("component_r03"):
+        raise AnalysisValidationError("r03 does not have amendment-008 identity")
+    if (
+        len(r03.get("plan") or []) != 430
+        or len(r03.get("units") or []) != 430
+        or not r03.get("eligible")
+        or r03.get("source_unchanged") is not True
+    ):
+        raise AnalysisValidationError("r03 is not a complete eligible 430-row attempt")
+    identity = _require_dict(r03.get("identity"), "r03 identity")
+    replacement = _require_dict(
+        identity.get("attempt_replacement"), "r03 replacement binding"
+    )
+    if (
+        replacement.get("classification") != attempts_contract._COMPONENT_CLASSIFICATION
+        or replacement.get("predecessor_raw_attempt_id")
+        != attempts_contract._COMPONENT_PREDECESSOR_ID
+        or replacement.get("successor_raw_attempt_id")
+        != attempts_contract._COMPONENT_SUCCESSOR_ID
+    ):
+        raise AnalysisValidationError("r02-to-r03 whole-attempt edge differs")
+    correction = _require_dict(
+        replacement.get("whole_attempt_protocol_correction"),
+        "whole-attempt correction",
+    )
+    if (
+        correction.get("primary_source_attempt_id")
+        != attempts_contract._COMPONENT_SUCCESSOR_ID
+    ):
+        raise AnalysisValidationError("whole-attempt primary source is not exact r03")
+    partial = _require_dict(
+        replacement.get("r02_partial_terminal_forensics"),
+        "r02 partial terminal forensics",
+    )
+    ordered_partial = partial.get("ordered_units")
+    if not isinstance(ordered_partial, list) or len(ordered_partial) != 430:
+        raise AnalysisValidationError("r02 partial forensics does not cover 430 roles")
+    for position, row in enumerate(ordered_partial):
+        if (
+            not isinstance(row, dict)
+            or row.get("plan_index") != position
+            or row.get("primary_source_attempt_id")
+            != attempts_contract._COMPONENT_SUCCESSOR_ID
+        ):
+            raise AnalysisValidationError("r02 partial role ledger differs")
+    endpoints = _reduce_endpoints(r03["plan"], r03["units"])
+    primary_ledger = [
+        {
+            "canonical_position": position,
+            "component": unit["component"],
+            "unit_id": unit["unit_id"],
+            "source_attempt_id": attempts_contract._COMPONENT_SUCCESSOR_ID,
+            "source_plan_position": position,
+            "raw_status": unit["status"],
+            "started": unit["started"],
+            "terminal_record": unit["terminal_record"],
+            "terminal_sha256": unit["terminal_sha256"],
+            "raw_value": unit["value"],
+        }
+        for position, unit in enumerate(r03["units"])
+    ]
+    binding = {
+        **_component_static_analysis_binding(analysis_id),
+        "primary_source_attempt_id": attempts_contract._COMPONENT_SUCCESSOR_ID,
+        "full_plan_sha256": systems.FORMAL_FULL_PLAN_SHA256,
+        "full_plan_stored_sha256": systems.FORMAL_FULL_PLAN_STORED_SHA256,
+        "ordered_membership_sha256": systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
+        "r03_input_receipts": r03["input_receipts"],
+        "r02_partial_forensics_receipt": {
+            key: partial.get(key)
+            for key in (
+                "receipt_type",
+                "payload_sha256",
+                "receipt",
+                "counts",
+                "digests",
+            )
+        },
+    }
+    return {
+        "schema_version": 1,
+        "analysis_id": analysis_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "analysis_binding": binding,
+        "analysis_binding_sha256": _sha256_bytes(_canonical_json_bytes(binding)),
+        "primary_r03": {
+            "promoted": True,
+            "unit_count": 430,
+            "source_attempt_id": attempts_contract._COMPONENT_SUCCESSOR_ID,
+            "reason": "all exact whole-attempt promotion gates passed",
+        },
+        "endpoints": endpoints,
+        "primary_unit_ledger": primary_ledger,
+        "r02_partial_sensitivity": {
+            "raw_attempt_id": attempts_contract._COMPONENT_PREDECESSOR_ID,
+            "primary_selection_effect": "none",
+            "counts": partial.get("counts"),
+            "ordered_units": ordered_partial,
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--input", type=Path)
     source.add_argument("--attempts-root", type=Path)
+    source.add_argument("--component-attempts-root", type=Path)
     parser.add_argument("--analysis-id", required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    value = (
-        analyze_attempts_root(args.attempts_root, args.analysis_id)
-        if args.attempts_root
-        else analyze(args.input, args.analysis_id)
-    )
+    if args.component_attempts_root:
+        value = analyze_whole_attempt(args.component_attempts_root, args.analysis_id)
+    elif args.attempts_root:
+        value = analyze_attempts_root(args.attempts_root, args.analysis_id)
+    else:
+        value = analyze(args.input, args.analysis_id)
     rendered = json.dumps(value, indent=2, sort_keys=True) + "\n"
     if args.output:
         output = args.output.expanduser().resolve()
@@ -5974,7 +7089,9 @@ def main() -> int:
             with output.open("x", encoding="utf-8") as handle:
                 handle.write(rendered)
         except FileExistsError as exc:
-            raise SystemExit(f"refusing to replace immutable analysis: {output}") from exc
+            raise SystemExit(
+                f"refusing to replace immutable analysis: {output}"
+            ) from exc
         print(output)
     else:
         print(rendered, end="")

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=rap-eacl-systems-v3
 #SBATCH --partition=ALL
-#SBATCH --nodelist=watgpu108
+#SBATCH --nodelist=watgpu808
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -30,13 +30,13 @@ readonly WHEELHOUSE_ROOT="${FORMAL_ROOT}/runtime/wheelhouse"
 readonly RAW_ATTEMPTS_ROOT="${FORMAL_ROOT}/attempts"
 readonly SCHEDULER_ROOT="${FORMAL_ROOT}/scheduler"
 readonly RUNNER="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults.py"
-readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v3.json"
+readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v4.json"
 readonly LAUNCH_SCRIPT="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults_watgpu.sbatch"
 
 export PATH="/usr/local/bin:/usr/bin:/bin"
 export PAW_GPU_LAYERS=0
 export CUDA_VISIBLE_DEVICES=
-export PAW_CACHE_DIR="/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache"
+export PAW_CACHE_DIR="/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights"
 export PIP_CONFIG_FILE=/dev/null
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PIP_FIND_LINKS="${WHEELHOUSE_ROOT}"
@@ -47,6 +47,7 @@ export PYTHONNOUSERSITE=1
 export LC_ALL=C
 unset OMP_NUM_THREADS OPENBLAS_NUM_THREADS MKL_NUM_THREADS
 unset VECLIB_MAXIMUM_THREADS NUMEXPR_NUM_THREADS
+unset PROGRAMASWEIGHTS_CACHE_DIR
 
 : "${RAP_EACL_ATTEMPT_ID:?set RAP_EACL_ATTEMPT_ID to a new formal-attempt slug}"
 if [[ ! "${RAP_EACL_ATTEMPT_ID}" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]]; then
@@ -237,6 +238,7 @@ import_preflight_argv = sys.argv[marker + 1:]
 
 sys.path.insert(0, str(repo_root))
 from experiments.eacl2027.scaling_faults_attempts import replacement_launch_binding
+from experiments.eacl2027.run_scaling_faults import FORMAL_STUDY_MODE
 
 def sha256_file(path):
     digest = hashlib.sha256()
@@ -370,6 +372,7 @@ receipt = {
     "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "slurm_job_id": job_id,
     "raw_attempt_id": raw_attempt_id,
+    "study_mode": FORMAL_STUDY_MODE,
     "replacement_chain": replacement_chain,
     "wheelhouse_path": str(wheelhouse),
     "wheelhouse_inventory_sha256": hashlib.sha256(canonical_inventory).hexdigest(),
@@ -428,7 +431,8 @@ export RAP_EACL_SETUP_RECEIPT="${SETUP_RECEIPT}"
 export RAP_EACL_SOCKET_ROOT="${SOCKET_ROOT}"
 
 cd "${REPO_ROOT}"
-exec "${VENV_ROOT}/bin/python" "${RUNNER}" \
+"${VENV_ROOT}/bin/python" "${RUNNER}" \
+    --supervise \
     --formal \
     --attempt-dir "${ATTEMPT_DIR}" \
     --rule-counts 1,2,4,8 \

@@ -32,7 +32,8 @@ def _formal_command(source: str) -> list[str]:
     command = next(
         line.strip()
         for line in logical_source.splitlines()
-        if line.strip().startswith('exec "${VENV_ROOT}/bin/python"')
+        if line.strip().startswith('"${VENV_ROOT}/bin/python"')
+        and '"${RUNNER}"' in line
     )
     return shlex.split(command)
 
@@ -64,7 +65,7 @@ def test_launcher_has_exact_cpu_only_slurm_profile_and_valid_bash():
     assert _directives(source) == {
         "job-name": "rap-eacl-systems-v3",
         "partition": "ALL",
-        "nodelist": "watgpu108",
+        "nodelist": "watgpu808",
         "nodes": "1",
         "ntasks": "1",
         "cpus-per-task": "8",
@@ -88,7 +89,10 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     assert "$PATH" not in source and "${PATH}" not in source
     assert "export PAW_GPU_LAYERS=0" in source
     assert "export CUDA_VISIBLE_DEVICES=" in source
-    assert f'export PAW_CACHE_DIR="{FORMAL_ROOT}/runtime/cache"' in source
+    assert (
+        f'export PAW_CACHE_DIR="{FORMAL_ROOT}/runtime/cache/programasweights"'
+        in source
+    )
     assert 'unset OMP_NUM_THREADS OPENBLAS_NUM_THREADS MKL_NUM_THREADS' in source
     assert 'unset VECLIB_MAXIMUM_THREADS NUMEXPR_NUM_THREADS' in source
     assert "export PIP_NO_INDEX=1" in source
@@ -103,7 +107,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     ) in source
     assert (
         'readonly RUNTIME_LOCK="${REPO_ROOT}/'
-        'experiments/eacl2027/formal-runtime-lock-v3.json"'
+        'experiments/eacl2027/formal-runtime-lock-v4.json"'
     ) in source
     assert '! -f "${RUNTIME_LOCK}"' in source
 
@@ -117,6 +121,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
         "MKL_NUM_THREADS",
         "VECLIB_MAXIMUM_THREADS",
         "NUMEXPR_NUM_THREADS",
+        "PROGRAMASWEIGHTS_CACHE_DIR",
     ]
     for marker in (
         "API_KEY",
@@ -213,6 +218,7 @@ def test_launcher_builds_a_fresh_hashed_node_local_environment_offline():
         '"schema_version": 1',
         '"slurm_job_id": job_id',
         '"raw_attempt_id": raw_attempt_id',
+        '"study_mode": FORMAL_STUDY_MODE',
         '"replacement_chain": replacement_chain',
         '"wheelhouse_path": str(wheelhouse)',
         '"wheelhouse_inventory_sha256":',
@@ -247,9 +253,9 @@ def test_launcher_passes_the_exact_explicit_formal_cli():
     source = _source()
     formal_command = _formal_command(source)
     assert formal_command == [
-        "exec",
         "${VENV_ROOT}/bin/python",
         "${RUNNER}",
+        "--supervise",
         "--formal",
         "--attempt-dir",
         "${ATTEMPT_DIR}",

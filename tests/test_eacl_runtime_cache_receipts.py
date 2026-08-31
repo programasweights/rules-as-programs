@@ -95,13 +95,14 @@ def test_socket_preflight_receipt_rejects_tampering_and_live_endpoint(tmp_path):
 
 
 def _cache_fixture(tmp_path: Path) -> tuple[Path, Path, str]:
-    cache = tmp_path / "cache"
-    content = cache / "programasweights"
+    cache = tmp_path / "cache" / "programasweights"
+    content = cache
     program_id = "program-1"
     program = content / "programs" / program_id
     program.mkdir(parents=True)
+    runtime_id = "qwen3-0.6b-q6_k"
     runtime_manifest = {
-        "runtime_id": "runtime-1",
+        "runtime_id": runtime_id,
         "local_sdk": {
             "n_ctx": 2048,
             "base_model": {"file": "model.gguf", "size_bytes": 5},
@@ -114,7 +115,7 @@ def _cache_fixture(tmp_path: Path) -> tuple[Path, Path, str]:
         encoding="utf-8",
     )
     (content / "runtimes").mkdir()
-    (content / "runtimes" / "runtime-1.json").write_text(
+    (content / "runtimes" / f"{runtime_id}.json").write_text(
         json.dumps(runtime_manifest), encoding="utf-8"
     )
     (content / "base_models").mkdir()
@@ -131,10 +132,15 @@ def _end_receipt(
     program_id: str,
     launch: dict,
     retained_root: Path,
+    *,
+    runtime_lock_path: str | None = None,
 ) -> dict:
+    dependency = {"formal_cache_dir": str(cache)}
+    if runtime_lock_path is not None:
+        dependency["runtime_lock_path"] = runtime_lock_path
     return runtime.retain_cache_end_receipt(
         {
-            "cache_and_dependency_receipt": {"formal_cache_dir": str(cache)},
+            "cache_and_dependency_receipt": dependency,
             "cpu_and_inference": {"paw_function_n_ctx": 2048},
         },
         [program_id],
@@ -176,12 +182,19 @@ def test_raw_tree_receipt_records_directories_links_and_fifos(tmp_path):
     assert receipt["root_entry"]["type"] == "directory"
     assert entries["nested"]["type"] == "directory"
     assert entries["nested/regular"]["type"] == "regular"
-    assert entries["link"] == {
-        "path": "link",
-        "type": "symlink",
-        "mode": entries["link"]["mode"],
-        "target": "nested/regular",
-    }
+    assert {
+        name: entries["link"][name]
+        for name in ("path", "type", "target")
+    } == {"path": "link", "type": "symlink", "target": "nested/regular"}
+    assert {
+        "uid",
+        "gid",
+        "device",
+        "inode",
+        "link_count",
+        "mtime_ns",
+        "ctime_ns",
+    }.issubset(entries["link"])
     assert entries["fifo"]["type"] == "fifo"
     assert not receipt["errors"]
 
@@ -213,11 +226,11 @@ def test_raw_tree_keeps_lstat_evidence_when_regular_bytes_cannot_be_hashed(
 
 def test_cache_receipt_binds_raw_prelaunch_tree_and_unchanged_end(tmp_path):
     cache, content, program_id = _cache_fixture(tmp_path)
-    (content / "empty-directory").mkdir()
+    (content / "programs" / "empty-directory").mkdir()
 
     launch = _cache_receipt(cache, program_id)
     raw_entries = {item["path"]: item for item in launch["raw_tree"]["entries"]}
-    assert raw_entries["empty-directory"]["type"] == "directory"
+    assert raw_entries["programs/empty-directory"]["type"] == "directory"
 
     end = _end_receipt(cache, program_id, launch, tmp_path / "retained")
     assert end["status"] == "completed"
@@ -229,24 +242,81 @@ def test_cache_receipt_binds_raw_prelaunch_tree_and_unchanged_end(tmp_path):
     assert end["deleted"] == []
 
 
+def test_r03_allows_only_current_manifest_mtime_ctime_drift(tmp_path):
+    cache, content, program_id = _cache_fixture(tmp_path)
+    launch = _cache_receipt(cache, program_id)
+    manifest = content / "runtimes" / "qwen3-0.6b-q6_k.json"
+    before = manifest.stat()
+    os.utime(
+        manifest,
+        ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+    )
+
+    end = _end_receipt(
+        cache,
+        program_id,
+        launch,
+        tmp_path / "retained",
+        runtime_lock_path="experiments/eacl2027/formal-runtime-lock-v4.json",
+    )
+
+    assert end["status"] == "completed"
+    assert end["unchanged"] is True
+    assert end["entry_changes"] == []
+    assert len(end["permitted_runtime_manifest_temporal_changes"]) == 1
+    permitted = end["permitted_runtime_manifest_temporal_changes"][0]
+    assert permitted["path"] == "runtimes/qwen3-0.6b-q6_k.json"
+    assert set(permitted["changed_fields"]).issubset({"mtime_ns", "ctime_ns"})
+    assert permitted["before"]["sha256"] == permitted["after"]["sha256"]
+
+
+def test_r03_rejects_temporal_drift_at_every_other_cache_path(tmp_path):
+    cache, content, program_id = _cache_fixture(tmp_path)
+    launch = _cache_receipt(cache, program_id)
+    program = content / "programs" / program_id / "meta.json"
+    before = program.stat()
+    os.utime(
+        program,
+        ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000),
+    )
+
+    end = _end_receipt(
+        cache,
+        program_id,
+        launch,
+        tmp_path / "retained",
+        runtime_lock_path="experiments/eacl2027/formal-runtime-lock-v4.json",
+    )
+
+    assert end["status"] == "system_violation"
+    assert end["unchanged"] is False
+    assert end["permitted_runtime_manifest_temporal_changes"] == []
+    assert any(
+        item["path"] == f"programs/{program_id}/meta.json"
+        for item in end["entry_changes"]
+    )
+
+
 def test_cache_end_reports_added_and_deleted_empty_directories(tmp_path):
     cache, content, program_id = _cache_fixture(tmp_path)
-    (content / "deleted-empty-directory").mkdir()
+    (content / "programs" / "deleted-empty-directory").mkdir()
     launch = _cache_receipt(cache, program_id)
 
-    (content / "deleted-empty-directory").rmdir()
-    (content / "added-empty-directory").mkdir()
+    (content / "programs" / "deleted-empty-directory").rmdir()
+    (content / "programs" / "added-empty-directory").mkdir()
     end = _end_receipt(cache, program_id, launch, tmp_path / "retained")
 
     assert end["status"] == "system_violation"
     assert end["changed_or_new"] == []
     assert end["deleted"] == []
     assert [item["path"] for item in end["entry_changes"]] == [
-        "added-empty-directory"
+        "programs",
+        "programs/added-empty-directory",
     ]
-    assert end["entry_changes"][0]["change"] == "added"
+    assert end["entry_changes"][0]["change"] == "modified"
+    assert end["entry_changes"][1]["change"] == "added"
     assert [item["path"] for item in end["deleted_entries"]] == [
-        "deleted-empty-directory"
+        "programs/deleted-empty-directory"
     ]
     assert end["retained_changed_files_root"] is None
 
@@ -257,7 +327,7 @@ def test_cache_end_reports_added_and_deleted_empty_directories(tmp_path):
 )
 def test_cache_end_reports_special_entry_type_changes(tmp_path):
     cache, content, program_id = _cache_fixture(tmp_path)
-    special = content / "special"
+    special = content / "programs" / "special"
     special.mkdir()
     launch = _cache_receipt(cache, program_id)
 
@@ -265,13 +335,39 @@ def test_cache_end_reports_special_entry_type_changes(tmp_path):
     os.mkfifo(special)
     end = _end_receipt(cache, program_id, launch, tmp_path / "retained")
 
-    change = next(item for item in end["entry_changes"] if item["path"] == "special")
+    change = next(
+        item
+        for item in end["entry_changes"]
+        if item["path"] == "programs/special"
+    )
     assert end["status"] == "system_violation"
     assert change["change"] == "type_changed"
     assert change["before"]["type"] == "directory"
     assert change["after"]["type"] == "fifo"
-    assert [item["path"] for item in end["special_entries"]] == ["special"]
-    assert end["non_regular_or_symlink"] == ["special"]
+    assert [item["path"] for item in end["special_entries"]] == [
+        "programs/special"
+    ]
+    assert end["non_regular_or_symlink"] == ["programs/special"]
+
+
+def test_direct_cache_root_rejects_parent_and_unexpected_direct_child(tmp_path):
+    cache, content, program_id = _cache_fixture(tmp_path)
+
+    with pytest.raises(runtime.RuntimeContractError, match="direct children"):
+        _cache_receipt(cache.parent, program_id)
+
+    (content / "programasweights").mkdir()
+    with pytest.raises(runtime.RuntimeContractError, match="direct children"):
+        _cache_receipt(cache, program_id)
+
+
+def test_direct_cache_root_rejects_symlinked_parent_component(tmp_path):
+    cache, _content, program_id = _cache_fixture(tmp_path)
+    alias = tmp_path / "cache-alias"
+    alias.symlink_to(cache.parent, target_is_directory=True)
+
+    with pytest.raises(runtime.RuntimeContractError, match="symlink component"):
+        _cache_receipt(alias / cache.name, program_id)
 
 
 def test_retained_changed_file_root_has_attempt_relative_locator(tmp_path):

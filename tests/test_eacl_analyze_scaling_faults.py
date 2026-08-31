@@ -1832,3 +1832,116 @@ def test_symlinked_attempt_entry_is_a_ledger_blocker(tmp_path):
     )
     assert report["primary_numeric"]["promoted"] is False
     assert report["primary_numeric"]["selection_blocked_by"] == "formal-v3-r01"
+
+
+def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r01_id = "formal-v3-20260831t051023z-r01"
+    r02_id = analyzer.attempts_contract._COMPONENT_PREDECESSOR_ID
+    r03_id = analyzer.attempts_contract._COMPONENT_SUCCESSOR_ID
+    for attempt_id in (r01_id, r02_id, r03_id):
+        (tmp_path / attempt_id).mkdir()
+
+    full_plan = [
+        {"component": "matrix", "unit_id": f"row-{position:03d}"}
+        for position in range(430)
+    ]
+
+    def unit(item: dict, position: int, *, source: str) -> dict:
+        return {
+            "component": item["component"],
+            "unit_id": item["unit_id"],
+            "plan": item,
+            "started": True,
+            "status": "completed",
+            "terminal_record": f"{source}/{position}.terminal.json",
+            "terminal_sha256": f"{position + 1:064x}"[-64:],
+            "value": {"source": source, "position": position},
+        }
+
+    r03_units = [unit(item, position, source="r03") for position, item in enumerate(full_plan)]
+    ordered_partial = [
+        {
+            "plan_index": position,
+            "component": item["component"],
+            "unit_id": item["unit_id"],
+            "primary_source_attempt_id": r03_id,
+            "r02_raw_state": "terminal" if position < 279 else "never_started",
+        }
+        for position, item in enumerate(full_plan)
+    ]
+    r03_report = {
+        "component_r03": True,
+        "identity": {
+            "attempt_id": r03_id,
+            "attempt_replacement": {
+                "classification": analyzer.attempts_contract._COMPONENT_CLASSIFICATION,
+                "predecessor_raw_attempt_id": r02_id,
+                "successor_raw_attempt_id": r03_id,
+                "whole_attempt_protocol_correction": {
+                    "primary_source_attempt_id": r03_id
+                },
+                "r02_partial_terminal_forensics": {
+                    "receipt_type": "r02_partial_terminal_forensics",
+                    "payload_sha256": "c" * 64,
+                    "receipt": {"sha256": "d" * 64},
+                    "counts": {"terminal": 279, "never_started": 150},
+                    "digests": {"ordered_units_sha256": "e" * 64},
+                    "ordered_units": ordered_partial,
+                },
+            },
+        },
+        "result": {"status": "completed"},
+        "result_sha256": "3" * 64,
+        "input_receipts": {},
+        "plan": full_plan,
+        "units": r03_units,
+        "source_unchanged": True,
+        "eligible": True,
+    }
+
+    monkeypatch.setattr(
+        analyzer,
+        "validate_attempt",
+        lambda path: r03_report if path.name == r03_id else None,
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_reduce_endpoints",
+        lambda plan, units: {"planned": len(plan), "observed": len(units)},
+    )
+    monkeypatch.setattr(
+        analyzer,
+        "_component_static_analysis_binding",
+        lambda analysis_id: {
+            "analysis_id": analysis_id,
+            "reducer_config": analyzer.COMPONENT_REDUCER_CONFIG,
+        },
+    )
+    report = analyzer.analyze_whole_attempt(
+        tmp_path, analyzer.COMPONENT_ANALYSIS_ID
+    )
+
+    assert report["primary_r03"] == {
+        "promoted": True,
+        "unit_count": 430,
+        "source_attempt_id": r03_id,
+        "reason": "all exact whole-attempt promotion gates passed",
+    }
+    assert len(report["primary_unit_ledger"]) == 430
+    assert {row["source_attempt_id"] for row in report["primary_unit_ledger"]} == {
+        r03_id
+    }
+    sensitivity = report["r02_partial_sensitivity"]
+    assert sensitivity["primary_selection_effect"] == "none"
+    assert len(sensitivity["ordered_units"]) == 430
+
+    ordered_partial[350]["primary_source_attempt_id"] = r02_id
+    with pytest.raises(
+        analyzer.AnalysisValidationError,
+        match="role ledger differs",
+    ):
+        analyzer.analyze_whole_attempt(
+            tmp_path, analyzer.COMPONENT_ANALYSIS_ID
+        )

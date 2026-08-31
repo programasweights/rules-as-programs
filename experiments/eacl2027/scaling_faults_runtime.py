@@ -137,6 +137,23 @@ def _symlink_chain(path: Path) -> list[str]:
     return list(dict.fromkeys(chain))
 
 
+def _reject_symlink_components(path: Path, *, label: str) -> None:
+    lexical = path.expanduser()
+    if not lexical.is_absolute():
+        lexical = Path.cwd() / lexical
+    parts = lexical.parts
+    current = Path(parts[0])
+    for part in parts[1:]:
+        current /= part
+        try:
+            if current.is_symlink():
+                raise RuntimeContractError(
+                    f"{label} contains a symlink component: {current}"
+                )
+        except OSError as exc:
+            raise RuntimeContractError(f"could not inspect {label}: {current}") from exc
+
+
 def _parse_memory_mib(value: str) -> int:
     match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([KMGT]?)\s*", value, re.I)
     if not match:
@@ -384,6 +401,20 @@ def package_receipts(packages: Mapping[str, str]) -> dict[str, Any]:
                 metadata_files[Path(name).name] = _file_receipt(path)
         spec = importlib.util.find_spec(module_name)
         origin = Path(spec.origin) if spec and spec.origin else None
+        semantic_modules: dict[str, Any] = {}
+        if module_name == "programasweights":
+            for qualified in ("programasweights.config", "programasweights.cache"):
+                semantic_spec = importlib.util.find_spec(qualified)
+                semantic_origin = (
+                    Path(semantic_spec.origin)
+                    if semantic_spec and semantic_spec.origin
+                    else None
+                )
+                if semantic_origin is None or not semantic_origin.is_file():
+                    raise RuntimeContractError(
+                        f"formal runtime cannot bind installed module {qualified}"
+                    )
+                semantic_modules[qualified] = _file_receipt(semantic_origin)
         receipts[distribution_name] = {
             "version": distribution.version,
             "distribution_root": str(Path(distribution.locate_file(".")).resolve()),
@@ -391,6 +422,7 @@ def package_receipts(packages: Mapping[str, str]) -> dict[str, Any]:
             "module_origin": (
                 _file_receipt(origin) if origin and origin.is_file() else None
             ),
+            "semantic_modules": semantic_modules,
         }
     return receipts
 
@@ -401,17 +433,40 @@ def cache_receipt(
     *,
     required_n_ctx: int,
 ) -> dict[str, Any]:
-    if cache_root.is_symlink():
-        raise RuntimeContractError("formal PAW_CACHE_DIR itself may not be a symlink")
-    root = cache_root.resolve(strict=True)
-    content_path = root / "programasweights"
-    if content_path.is_symlink():
+    """Inventory the direct ProgramAsWeights content root.
+
+    ``programasweights.config`` interprets ``PAW_CACHE_DIR`` as the directory
+    that directly contains ``base_models``, ``programs``, and ``runtimes``.
+    Do not append a package-named child here: doing so would validate a
+    different tree from the one used by direct ``programasweights`` calls.
+    """
+
+    _reject_symlink_components(cache_root, label="formal PAW_CACHE_DIR")
+    content_root = cache_root.resolve(strict=True)
+    root_stat = content_root.stat(follow_symlinks=False)
+    if not stat_module.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.geteuid():
         raise RuntimeContractError(
-            "formal ProgramAsWeights cache subtree may not be a symlink"
+            "formal PAW direct root must be a directory owned by the effective user"
         )
-    content_root = content_path.resolve(strict=True)
-    if root not in content_root.parents:
-        raise RuntimeContractError("ProgramAsWeights cache subtree escapes PAW_CACHE_DIR")
+    required_children = ("base_models", "programs", "runtimes")
+    observed_children = sorted(path.name for path in content_root.iterdir())
+    if observed_children != sorted(required_children):
+        raise RuntimeContractError(
+            "formal PAW direct children differ from the exact contract: "
+            + json.dumps(
+                {
+                    "expected": sorted(required_children),
+                    "observed": observed_children,
+                },
+                sort_keys=True,
+            )
+        )
+    for name in required_children:
+        child = content_root / name
+        if child.is_symlink() or not child.is_dir():
+            raise RuntimeContractError(
+                f"formal PAW direct child is not a regular directory: {child}"
+            )
     symlinks = [path for path in content_root.rglob("*") if path.is_symlink()]
     if symlinks:
         raise RuntimeContractError(
@@ -423,10 +478,10 @@ def cache_receipt(
     runtime_manifests: dict[str, Any] = {}
     for program_id in program_ids:
         directory = (content_root / "programs" / program_id).resolve(strict=True)
-        if root not in directory.parents:
+        if content_root not in directory.parents:
             raise RuntimeContractError(f"program cache escapes PAW_CACHE_DIR: {directory}")
         inventory = [
-            _file_receipt(path, relative_to=root)
+            _file_receipt(path, relative_to=content_root)
             for path in sorted(directory.rglob("*"))
             if path.is_file() and not path.is_symlink()
         ]
@@ -468,14 +523,14 @@ def cache_receipt(
             "embedded_canonical_sha256": embedded_sha,
             "cached_canonical_sha256": cached_canonical_sha,
             "canonical_json_equal": True,
-            "cached": _file_receipt(cached_runtime, relative_to=root),
+            "cached": _file_receipt(cached_runtime, relative_to=content_root),
         }
         model = dict(((runtime.get("local_sdk") or {}).get("base_model") or {}))
         model_name = str(model.get("file", ""))
         model_path = content_root / "base_models" / model_name
         if not model_name or not model_path.is_file():
             raise RuntimeContractError(f"missing base model for {program_id}")
-        model_receipt = _file_receipt(model_path, relative_to=root)
+        model_receipt = _file_receipt(model_path, relative_to=content_root)
         if model.get("size_bytes") is not None and int(model["size_bytes"]) != model_receipt["bytes"]:
             raise RuntimeContractError(f"base-model size mismatch for {model_name}")
         if model.get("sha256") and str(model["sha256"]) != model_receipt["sha256"]:
@@ -484,9 +539,10 @@ def cache_receipt(
         programs[program_id] = {"files": inventory, "runtime_id": runtime_id}
     return {
         "declared_root": str(cache_root),
-        "root": str(root),
+        "root": str(content_root),
         "root_symlink_chain": _symlink_chain(cache_root),
-        "programasweights_subtree": str(content_root),
+        "direct_children": observed_children,
+        "required_direct_children": list(required_children),
         "raw_tree": raw_tree_receipt(content_root),
         "complete_tree": tree_receipt(content_root),
         "programs": programs,
@@ -570,14 +626,46 @@ def _raw_lstat_entry(
         "path": relative,
         "type": entry_type,
         "mode": int(stat_module.S_IMODE(observed.st_mode)),
+        "uid": int(observed.st_uid),
+        "gid": int(observed.st_gid),
+        "device": int(observed.st_dev),
+        "inode": int(observed.st_ino),
+        "link_count": int(observed.st_nlink),
+        "mtime_ns": int(observed.st_mtime_ns),
+        "ctime_ns": int(observed.st_ctime_ns),
     }
     if entry_type == "regular":
         entry["bytes"] = int(observed.st_size)
         try:
             entry["sha256"] = sha256_file(path)
+            closed_over = path.lstat()
+            if any(
+                getattr(closed_over, name) != getattr(observed, name)
+                for name in (
+                    "st_dev",
+                    "st_ino",
+                    "st_mode",
+                    "st_uid",
+                    "st_gid",
+                    "st_nlink",
+                    "st_size",
+                    "st_mtime_ns",
+                    "st_ctime_ns",
+                )
+            ):
+                raise RuntimeContractError("file changed while hashing")
         except OSError as exc:
             # The lstat evidence remains useful even when the bytes race away or
             # cannot be read.  Never silently drop the entry on a hash failure.
+            entry["sha256"] = None
+            errors.append(
+                {
+                    "path": relative,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+        except RuntimeContractError as exc:
             entry["sha256"] = None
             errors.append(
                 {
@@ -669,15 +757,38 @@ def validate_runtime_lock(
     """Bind mutable external runtime bytes through a clean tracked lock file."""
     if lock_path.is_symlink():
         raise RuntimeContractError("formal runtime lock may not be a symlink")
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON number {value}")
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, child in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON object key {key!r}")
+            value[key] = child
+        return value
+
     try:
-        lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        lock = json.loads(
+            lock_path.read_text(encoding="utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise RuntimeContractError(f"invalid formal runtime lock: {exc}") from exc
     mismatches: dict[str, Any] = {}
-    if lock.get("schema_version") != 1:
-        mismatches["schema_version"] = lock.get("schema_version")
+    lock_value = lock if isinstance(lock, dict) else {}
+    if not isinstance(lock, dict) or set(lock) != {
+        "schema_version",
+        "wheelhouse",
+        "paw_cache",
+    }:
+        mismatches["fields"] = sorted(lock) if isinstance(lock, dict) else type(lock).__name__
+    if lock_value.get("schema_version") != 1:
+        mismatches["schema_version"] = lock_value.get("schema_version")
     for name, observed in (("wheelhouse", wheelhouse), ("paw_cache", paw_cache)):
-        locked = lock.get(name)
+        locked = lock_value.get(name)
         if locked != observed:
             mismatches[name] = {
                 "locked_sha256": _canonical_sha256(locked),
@@ -689,7 +800,7 @@ def validate_runtime_lock(
         )
     return {
         "file": _file_receipt(lock_path),
-        "content": lock,
+        "content": lock_value,
         "wheelhouse_receipt_sha256": _canonical_sha256(wheelhouse),
         "paw_cache_receipt_sha256": _canonical_sha256(paw_cache),
     }
@@ -705,7 +816,7 @@ def retain_cache_end_receipt(
     """Inventory post-run cache state and losslessly retain changed/new bytes."""
     dependency = dict(profile["cache_and_dependency_receipt"])
     cache_root = Path(dependency["formal_cache_dir"])
-    content_path = cache_root / "programasweights"
+    content_path = cache_root
     raw_after = raw_tree_receipt(content_path)
     validation_error: dict[str, str] | None = None
     try:
@@ -758,6 +869,10 @@ def retain_cache_end_receipt(
     before_entries = indexed_raw_entries(raw_before)
     all_after_entries = indexed_raw_entries(raw_after)
     entry_changes: list[dict[str, Any]] = []
+    permitted_runtime_manifest_temporal_changes: list[dict[str, Any]] = []
+    allow_runtime_manifest_temporal_change = dependency.get("runtime_lock_path") == (
+        "experiments/eacl2027/formal-runtime-lock-v4.json"
+    )
     for path in sorted(all_after_entries):
         current = all_after_entries[path]
         previous = before_entries.get(path)
@@ -771,6 +886,29 @@ def retain_cache_end_receipt(
                 }
             )
         elif previous != current:
+            changed_fields = sorted(
+                key
+                for key in set(previous) | set(current)
+                if previous.get(key) != current.get(key)
+            )
+            if (
+                allow_runtime_manifest_temporal_change
+                and path == "runtimes/qwen3-0.6b-q6_k.json"
+                and changed_fields
+                and set(changed_fields).issubset({"mtime_ns", "ctime_ns"})
+                and previous.get("type") == "regular"
+                and current.get("type") == "regular"
+            ):
+                permitted_runtime_manifest_temporal_changes.append(
+                    {
+                        "path": path,
+                        "changed_fields": changed_fields,
+                        "before": previous,
+                        "after": current,
+                        "bytes_sha256_and_identity_unchanged": True,
+                    }
+                )
+                continue
             entry_changes.append(
                 {
                     "path": path,
@@ -886,6 +1024,9 @@ def retain_cache_end_receipt(
         "deleted": deleted,
         "non_regular_or_symlink": non_regular_or_symlink,
         "entry_changes": entry_changes,
+        "permitted_runtime_manifest_temporal_changes": (
+            permitted_runtime_manifest_temporal_changes
+        ),
         "deleted_entries": deleted_entries,
         "special_entries": special_entries,
         "prelaunch_raw_tree_missing": prelaunch_raw_tree_missing,
@@ -924,6 +1065,11 @@ def formal_runtime_receipt(
         mismatches["PAW_CACHE_DIR"] = {
             "expected": cache_path,
             "observed": env.get("PAW_CACHE_DIR"),
+        }
+    if "PROGRAMASWEIGHTS_CACHE_DIR" in env:
+        mismatches["PROGRAMASWEIGHTS_CACHE_DIR"] = {
+            "expected": "UNSET",
+            "observed": env.get("PROGRAMASWEIGHTS_CACHE_DIR"),
         }
     if env.get("PAW_GPU_LAYERS") != str(
         profile["cpu_and_inference"]["paw_gpu_layers_environment"]
@@ -1040,6 +1186,7 @@ def formal_runtime_receipt(
         "schema_version": 1,
         "slurm_job_id": job_id,
         "raw_attempt_id": raw_attempt_id,
+        "study_mode": "formal_protocol_v3_amendment_008",
         "wheelhouse_path": str(Path(dependency["formal_wheelhouse"]).resolve()),
         "wheelhouse_inventory_sha256": wheelhouse["inventory_sha256"],
         "venv_executable": expected_invocation,
@@ -1106,6 +1253,7 @@ def formal_runtime_receipt(
             name: env.get(name)
             for name in (
                 "PAW_CACHE_DIR",
+                "PROGRAMASWEIGHTS_CACHE_DIR",
                 "PAW_GPU_LAYERS",
                 "HOME",
                 "RAP_EACL_SOCKET_ROOT",
