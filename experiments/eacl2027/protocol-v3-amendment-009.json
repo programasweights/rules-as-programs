@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-009",
+  "created_utc": "2026-08-31T22:54:39Z",
+  "frozen_utc": "2026-08-31T22:54:39Z",
+  "status": "frozen prelaunch serialization-validator correction; no r03 attempt existed and no measured outcome was observed",
+  "parent_amendment": "protocol-v3-amendment-008",
+  "parent_runtime_lock_commit": "aa7d4c89533dfc8da211ee40eb91199760df1375",
+  "reason": "The first H4-bound r02-to-r03 replacement validation failed before r03 setup because I4 required the canary task-summary JSON bytes to use whitespace-free canonical serialization. Amendment 008 requires the retained line to parse as the exact semantic summary but does not constrain insignificant JSON whitespace. The sealed passing canary emitted one strict LF-terminated JSON object with the exact required fields and values using json.dumps default separators. A development-only rerun after removing only the extra canonical-byte equality passed the complete 70,738-entry r02 tree, nine-evidence, 28-file canary-archive, and source-topology validation gates. This amendment corrects only that validator overconstraint.",
+  "observed_prelaunch_boundary": {
+    "r03_attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r03",
+    "r03_attempt_root_present": false,
+    "failed_replacement_receipt": {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-008-whole-attempt-20260831T225029Z/replacement.json",
+      "bytes": 20039273,
+      "sha256": "35dab48165a438c4ffd2874cba9c79b4df80dbf7d842d24a597782df88eb571e",
+      "mode": 292
+    },
+    "original_failure": "canary task stdout semantic summary differs",
+    "development_revalidation": {
+      "status": "passed",
+      "predecessor_tree_entry_count": 70738,
+      "validated_canary_archive_file_count": 28,
+      "rule": "This diagnostic pass is implementation evidence only. The failed receipt binds H4 and cannot authorize r03 after P5/I5/H5; a new exact receipt must be generated and validated after H5 is pushed."
+    }
+  },
+  "explicit_override": {
+    "scope": "Only the canary task-summary parser in the exact r02-to-r03 Amendment 008 replacement gate.",
+    "old_overconstraint": "Require the retained task-summary bytes to equal whitespace-free canonical JSON plus LF.",
+    "new_rule": "Require exactly one LF-terminated UTF-8 row; parse it as strict JSON with duplicate keys and non-finite values rejected; require the parsed object to equal exactly {status:'passed', receipt:<bound canary receipt path>, receipt_sha256:<bound canary receipt SHA-256>, sha256_sidecar:<bound canary sidecar path>}. Insignificant JSON whitespace is not evidence and is neither required nor normalized. The original bytes remain manifest-bound and immutable.",
+    "unchanged": [
+      "all Amendment 008 r02 terminal, cache-provenance, canary, evidence, full-430, sole-primary-source, fatal-result, retention, and non-censoring rules",
+      "the sealed canary and every failed canary/replacement archive",
+      "the complete unchanged 430-row r03 plan and exact raw attempt ID",
+      "partition ALL, watgpu808, CPU-only execution, and the corrected direct PAW cache root",
+      "the unclassified r02 process-exit-5 cause"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "aa7d4c89533dfc8da211ee40eb91199760df1375",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-009.json"
+        ],
+        "semantic_role": "P5 prelaunch erratum"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I5 exact parser and amendment-chain interpretation"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v5.json"
+        ],
+        "semantic_role": "H5 live runtime reaffirmation generated from I5"
+      },
+      "head_must_equal_h4_before_r03_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v5.json",
+    "chronology_rule": "Commit this file alone as P5 directly on H4. Commit exactly the declared I5 paths as its child. Generate formal-runtime-lock-v5.json from the live I5 wheelhouse and corrected cache and commit only it as H5. Push H5, create a new replacement receipt that binds P5/I5/H5, independently validate it, and only then permit r03 setup."
+  },
+  "claim_limits": [
+    "This prelaunch correction supplies no experimental result and changes no measurement design.",
+    "The passing canary remains evidence only for its eight exact local inference calls and named Python network guards.",
+    "The development revalidation does not itself authorize r03 because its receipt binds the superseded H4 source topology.",
+    "Any further protocol, implementation, runtime, evidence-schema, plan, or measurement change requires a new amendment and raw attempt ID."
+  ]
+}
