@@ -17,11 +17,13 @@ be measured reproducibly.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import math
 import os
 import platform
+import re
 import signal
 import sqlite3
 import subprocess
@@ -29,13 +31,14 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 try:
     import psutil
@@ -53,10 +56,29 @@ if str(REPO_ROOT) not in sys.path:
 from rules_as_programs import config as rap_config  # noqa: E402
 from rules_as_programs import ipc, rules_api  # noqa: E402
 from rules_as_programs.adapters.codex.adapter import CodexAdapter, normalize  # noqa: E402
-from rules_as_programs.core import revisions  # noqa: E402
+from rules_as_programs.core import evaluation_log, revisions  # noqa: E402
 from rules_as_programs.core.triggers import extract_input  # noqa: E402
 
 from experiments.eacl2027 import run_integrated as integrated  # noqa: E402
+from experiments.eacl2027.scaling_faults_attempts import (  # noqa: E402
+    AttemptRecorder,
+    SystemsHarnessError,
+    UNIT_STATUSES,
+    replacement_launch_binding,
+)
+from experiments.eacl2027.scaling_faults_runtime import (  # noqa: E402
+    RuntimeContractError,
+    formal_runtime_receipt,
+    retain_cache_end_receipt,
+)
+
+
+class SystemViolationError(RuntimeError):
+    """A measured production-path failure, never a rerun-eligible harness error."""
+
+
+class ExternalInfrastructureError(RuntimeError):
+    """A positively observed host/storage failure outside the measured system."""
 
 
 EXTERNAL_MANIFEST = (
@@ -64,9 +86,11 @@ EXTERNAL_MANIFEST = (
 )
 EXTERNAL_OUTPUT = ROOT / "outputs" / "frozen" / "external-paw-finetuned.jsonl"
 EXTERNAL_DATASET = ROOT / "data" / "public" / "external.jsonl"
-FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-004.json"
+PROTOCOL_V3 = ROOT / "protocol-v3.json"
+FORMAL_PARENT_AMENDMENT = ROOT / "protocol-v3-amendment-004.json"
+FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-005.json"
 FORMAL_AMENDMENT_SHA256 = (
-    "94020b51609ded8be42158111a2bd1670bb292db004aca5875ddf78059c48d6b"
+    "11ee9f268076b2fc56a3cedad8a8b1919ec4407db826b1d998dec84a68743bb3"
 )
 FROZEN_OUTPUT_DIR = (ROOT / "outputs" / "frozen").resolve()
 EXTERNAL_RULE_ORDER = (
@@ -82,19 +106,40 @@ EXTERNAL_RULE_ORDER = (
 DEFAULT_RULE_COUNTS = (1, 2, 4, 8)
 DEFAULT_PROJECT_COUNTS = (1, 4, 8)
 DEFAULT_BURST_SIZES = (24, 64)
-DEFAULT_REPEATS = 5
-DEFAULT_SEQUENTIAL_EVENTS = 250
+DEFAULT_REPEATS = 4
+DEFAULT_SEQUENTIAL_EVENTS = 20
 DEFAULT_WARMUPS_PER_PROJECT = 1
 DEFAULT_TIMEOUT_SECONDS = 30.0
+DEFAULT_DRAIN_TIMEOUT_SECONDS = 1200.0
 DEFAULT_MAX_HOOK_WORKERS = 24
 DEFAULT_SOAK_BATCH_SIZE = 64
 DEFAULT_SOAK_EVENTS = 10_000
 DEFAULT_FAULT_REPETITIONS = 20
+FINAL_DRAIN_SETTLE_SECONDS = 1.0
 TRAFFIC_PATTERNS = ("round_robin_across_projects", "one_project_hotspot")
-QUERY_POLL_INTERVAL_SECONDS = 0.01
-RESOURCE_SAMPLE_INTERVAL_SECONDS = 0.05
+QUERY_POLL_INTERVAL_SECONDS = 0.25
+MATRIX_HISTORY_DUPLICATE_HEADROOM = 64
+SOAK_JOURNAL_POLL_INTERVAL_SECONDS = 1.0
+SOAK_HISTORY_CHECKPOINT_RETRY_SECONDS = 1.0
+SOAK_BATCH_SETTLE_SECONDS = 1.0
+RESOURCE_SAMPLE_INTERVAL_SECONDS = 1.0
 EVALUATION_HISTORY_LIMIT = 5000
+EVALUATION_JOURNAL_ROTATION_BYTES = evaluation_log.MAX_LOG_BYTES
+EVALUATION_JOURNAL_ROTATION_BACKUPS = evaluation_log.MAX_BACKUPS
 SQLITE_BUSY_TIMEOUT_SECONDS = 5.0
+FORMAL_RAW_ATTEMPT_ROOT = Path(
+    "/u4/yuntian/rap-eacl-systems-formal-v3/attempts"
+)
+PYTHON_SOCKET_BOUNDARY_ID = "cpython_socket_api_inet_v1"
+ACCOUNTING_FAILURE_KEYS = (
+    "loss_count",
+    "duplicate_count",
+    "unexpected_count",
+    "cross_project_contamination_count",
+    "failed_count",
+    "running_count",
+    "provenance_mismatch_count",
+)
 _SENSITIVE_ENV_MARKERS = (
     "API_KEY",
     "TOKEN",
@@ -104,10 +149,6 @@ _SENSITIVE_ENV_MARKERS = (
     "AUTHORIZATION",
     "PRIVATE_KEY",
 )
-
-
-class SystemsHarnessError(RuntimeError):
-    """Raised when a systems-study invariant is violated."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +180,7 @@ class MatrixConfig:
     sequential_events: int = DEFAULT_SEQUENTIAL_EVENTS
     warmups_per_project: int = DEFAULT_WARMUPS_PER_PROJECT
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT_SECONDS
     max_hook_workers: int = DEFAULT_MAX_HOOK_WORKERS
     soak_events: int = 0
     soak_rule_count: int = 8
@@ -164,7 +206,11 @@ class MatrixConfig:
             raise ValueError("repeats and sequential events must be positive")
         if self.warmups_per_project < 0:
             raise ValueError("warmups per project must be non-negative")
-        if self.timeout_seconds <= 0 or self.max_hook_workers < 1:
+        if (
+            self.timeout_seconds <= 0
+            or self.drain_timeout_seconds <= 0
+            or self.max_hook_workers < 1
+        ):
             raise ValueError("timeout and max hook workers must be positive")
         if self.soak_events < 0 or self.soak_batch_size < 1:
             raise ValueError("soak events must be non-negative and batch size positive")
@@ -212,6 +258,23 @@ class RunningFixture:
     diagnostics: Path
     daemon: subprocess.Popen[Any]
     identity: dict[str, Any]
+    retained: bool = False
+
+
+@contextmanager
+def _fixture_directory(retained_root: Path | None) -> Iterator[Path]:
+    if retained_root is not None:
+        root = retained_root.expanduser().resolve()
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise SystemsHarnessError(
+                f"retained runtime directory already exists: {root}"
+            ) from exc
+        yield root
+        return
+    with tempfile.TemporaryDirectory(prefix="rap-systems-", dir="/tmp") as temporary:
+        yield Path(temporary)
 
 
 FAULT_CAPABILITIES: dict[str, dict[str, Any]] = {
@@ -509,6 +572,49 @@ def build_matrix_plan(config: MatrixConfig) -> list[dict[str, Any]]:
     return plan
 
 
+def build_study_plan(
+    config: MatrixConfig,
+    *,
+    fault_names: Sequence[str],
+    run_offline_probe: bool,
+) -> list[dict[str, Any]]:
+    """Return every independently terminal top-level unit in execution order."""
+    units = [
+        {"component": "matrix", "unit_id": item["condition_id"], **item}
+        for item in build_matrix_plan(config)
+    ]
+    if config.soak_events:
+        soak_id = f"soak-r{config.soak_rule_count}-p{config.soak_project_count}"
+        units.append(
+            {
+                "component": "soak",
+                "unit_id": soak_id,
+                "events": config.soak_events,
+                "rule_count": config.soak_rule_count,
+                "project_count": config.soak_project_count,
+            }
+        )
+    if run_offline_probe:
+        units.append(
+            {
+                "component": "offline",
+                "unit_id": "online-offline-exact-replay",
+                "rules": max(config.rule_counts),
+            }
+        )
+    for name in fault_names:
+        for repetition in range(config.fault_repetitions):
+            units.append(
+                {
+                    "component": "faults",
+                    "unit_id": f"{name}-rep{repetition}",
+                    "fault": name,
+                    "repetition": repetition,
+                }
+            )
+    return units
+
+
 def _raw_event(
     project: Path,
     *,
@@ -546,6 +652,21 @@ def _expected_input(raw: dict[str, Any]) -> str:
     return text
 
 
+def _envelope_projection(raw: dict[str, Any]) -> dict[str, Any]:
+    """Retain replay identity without conflating it with the declared input bytes."""
+    return {
+        key: raw.get(key)
+        for key in (
+            "session_id",
+            "turn_id",
+            "tool_use_id",
+            "hook_event_name",
+            "tool_name",
+            "cwd",
+        )
+    }
+
+
 def _install_projects(
     isolated_root: Path,
     artifacts: Sequence[RuleArtifact],
@@ -556,37 +677,57 @@ def _install_projects(
         project = (isolated_root / f"project-{project_index}").resolve()
         project.mkdir(parents=True)
         for artifact in artifacts:
-            saved = rules_api.save_rule(
-                artifact.rule_id, artifact.source, "project", str(project)
-            )
+            try:
+                saved = rules_api.save_rule(
+                    artifact.rule_id, artifact.source, "project", str(project)
+                )
+            except Exception as exc:
+                raise SystemViolationError(
+                    f"production rule save failed for {artifact.rule_id} in "
+                    f"{project}: {type(exc).__name__}: {exc}"
+                ) from None
             if not saved.get("ok"):
-                raise SystemsHarnessError(
+                raise SystemViolationError(
                     f"could not install {artifact.rule_id} in {project}: "
                     f"{saved.get('error', 'unknown error')}"
                 )
             saved_source = str(saved["source"])
             if revisions.hash_source(saved_source) != artifact.source_sha256:
-                raise SystemsHarnessError(
+                raise SystemViolationError(
                     f"installed source hash changed for {artifact.rule_id}"
                 )
-            revisions.activate(
-                artifact.rule_id,
-                str(saved["path"]),
-                saved_source,
-                compiler=artifact.compiler or None,
-                program_id=artifact.program_id or None,
-                compiler_snapshot=artifact.compiler_snapshot or None,
-                compiler_mode=(
-                    revisions.EXPLICIT_COMPILER_MODE if artifact.compiler else None
-                ),
-            )
-        CodexAdapter().install("project", str(project))
+            try:
+                revisions.activate(
+                    artifact.rule_id,
+                    str(saved["path"]),
+                    saved_source,
+                    compiler=artifact.compiler or None,
+                    program_id=artifact.program_id or None,
+                    compiler_snapshot=artifact.compiler_snapshot or None,
+                    compiler_mode=(
+                        revisions.EXPLICIT_COMPILER_MODE if artifact.compiler else None
+                    ),
+                )
+            except Exception as exc:
+                raise SystemViolationError(
+                    f"production rule activation failed for {artifact.rule_id} in "
+                    f"{project}: {type(exc).__name__}: {exc}"
+                ) from None
+        try:
+            CodexAdapter().install("project", str(project))
+        except Exception as exc:
+            raise SystemViolationError(
+                f"production Codex adapter install failed for {project}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from None
         wrapper = project / ".codex" / "hooks" / "rap-hook.sh"
         hooks_json = project / ".codex" / "hooks.json"
         if not wrapper.is_file() or not os.access(wrapper, os.X_OK):
-            raise SystemsHarnessError(f"installed wrapper missing for {project}")
+            raise SystemViolationError(f"installed wrapper missing for {project}")
         if "rap-hook.sh" not in hooks_json.read_text(encoding="utf-8"):
-            raise SystemsHarnessError(f"hooks.json does not register RAP for {project}")
+            raise SystemViolationError(
+                f"hooks.json does not register RAP for {project}"
+            )
         projects.append(InstalledProject(project_index, project, wrapper, hooks_json))
     return projects
 
@@ -597,9 +738,9 @@ def _running_fixture(
     project_count: int,
     *,
     environment_overrides: dict[str, str] | None = None,
+    retained_root: Path | None = None,
 ) -> Iterator[RunningFixture]:
-    with tempfile.TemporaryDirectory(prefix="rap-systems-", dir="/tmp") as temporary:
-        isolated_root = Path(temporary)
+    with _fixture_directory(retained_root) as isolated_root:
         with integrated._isolated_environment(isolated_root) as base_environment:
             environment = _subprocess_environment(
                 base_environment, environment_overrides
@@ -611,7 +752,7 @@ def _running_fixture(
                     environment, diagnostics, DEFAULT_TIMEOUT_SECONDS
                 )
             except Exception as exc:
-                raise SystemsHarnessError(str(exc)) from None
+                raise SystemViolationError(str(exc)) from None
             fixture = RunningFixture(
                 isolated_root=isolated_root,
                 environment=environment,
@@ -620,6 +761,7 @@ def _running_fixture(
                 diagnostics=diagnostics,
                 daemon=daemon,
                 identity=identity,
+                retained=retained_root is not None,
             )
             try:
                 yield fixture
@@ -652,7 +794,23 @@ def _invoke_payload(
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        raise SystemsHarnessError("installed hook process timed out") from exc
+        exited_ns = time.perf_counter_ns()
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return {
+            "started_ns": started_ns,
+            "exited_ns": exited_ns,
+            "returncode": None,
+            "stdout": stdout,
+            "stderr": stderr,
+            "timed_out": True,
+            "contract_preserved": False,
+            "contract_error": "installed hook process timed out",
+        }
     exited_ns = time.perf_counter_ns()
     result = {
         "started_ns": started_ns,
@@ -660,11 +818,16 @@ def _invoke_payload(
         "returncode": completed.returncode,
         "stdout": completed.stdout,
         "stderr": completed.stderr,
+        "timed_out": False,
     }
     try:
         integrated._assert_hook_contract(result, "systems harness hook")
     except integrated.IntegratedExperimentError as exc:
-        raise SystemsHarnessError(str(exc)) from exc
+        result["contract_preserved"] = False
+        result["contract_error"] = str(exc)
+    else:
+        result["contract_preserved"] = True
+        result["contract_error"] = ""
     return result
 
 
@@ -690,6 +853,399 @@ def _evaluation_history(
     if not response or not response.get("ok"):
         return []
     return list(response.get("evaluations") or [])
+
+
+def _timed_evaluation_history(
+    project: Path, *, limit: int = EVALUATION_HISTORY_LIMIT
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    started_ns = time.perf_counter_ns()
+    rows = _evaluation_history(project, limit=limit)
+    finished_ns = time.perf_counter_ns()
+    return rows, {
+        "project_root": str(project),
+        "started_monotonic_ns": started_ns,
+        "finished_monotonic_ns": finished_ns,
+        "latency_ns": finished_ns - started_ns,
+        "latency_ms": round((finished_ns - started_ns) / 1_000_000, 3),
+        "rows": len(rows),
+    }
+
+
+def _full_evaluation_history(project: Path) -> list[dict[str, Any]]:
+    """Read every retained evaluation outcome, bypassing the 5,000-row UI cap."""
+    base = rap_config.project_evaluation_log_file(str(project))
+    paths = [
+        base.with_name(f"{base.name}.{index}")
+        for index in range(5, 0, -1)
+        if base.with_name(f"{base.name}.{index}").exists()
+    ]
+    if base.exists():
+        paths.append(base)
+    records: list[dict[str, Any]] = []
+    try:
+        for path in paths:
+            records.extend(_jsonl(path))
+    except SystemsHarnessError as exc:
+        raise SystemViolationError(
+            f"production evaluation journal could not be read: {exc}"
+        ) from None
+    outcomes: dict[str, dict[str, Any]] = {}
+    started: list[dict[str, Any]] = []
+    for record in records:
+        evaluation_id = str(record.get("evaluation_id", ""))
+        if not evaluation_id:
+            continue
+        if record.get("type") in ("evaluation_completed", "evaluation_failed"):
+            outcomes[evaluation_id] = record
+        elif record.get("type") == "evaluation_started":
+            started.append(record)
+    rows = []
+    for record in started:
+        evaluation_id = str(record["evaluation_id"])
+        outcome = outcomes.get(evaluation_id)
+        status = (
+            "failed"
+            if outcome and outcome.get("type") == "evaluation_failed"
+            else "completed"
+            if outcome
+            else "running"
+        )
+        rows.append(
+            {
+                **record,
+                "status": status,
+                "outcome": outcome or {},
+                "result": str((outcome or {}).get("result", "")),
+                "duration_ms": (outcome or {}).get("duration_ms"),
+                "finding_id": (outcome or {}).get("finding_id"),
+            }
+        )
+    return rows
+
+
+def _full_findings(project: Path) -> list[dict[str, Any]]:
+    path = rap_config.project_log_file(str(project))
+    try:
+        return _jsonl(path) if path.exists() else []
+    except SystemsHarnessError as exc:
+        raise SystemViolationError(
+            f"production finding journal could not be read: {exc}"
+        ) from None
+
+
+def _evaluation_journal_paths(project: Path) -> list[Path]:
+    base = rap_config.project_evaluation_log_file(str(project))
+    return [
+        *[
+            base.with_name(f"{base.name}.{index}")
+            for index in range(EVALUATION_JOURNAL_ROTATION_BACKUPS, 0, -1)
+            if base.with_name(f"{base.name}.{index}").exists()
+        ],
+        *([base] if base.exists() else []),
+    ]
+
+
+class _IncrementalJsonlWriter:
+    def __init__(self, path: Path, *, fsync_every: int = 60):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self.handle = path.open("x", encoding="utf-8")
+        self.fsync_every = max(1, fsync_every)
+        self.count = 0
+
+    def append(self, value: dict[str, Any]) -> None:
+        self.handle.write(
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+        self.handle.flush()
+        self.count += 1
+        if self.count % self.fsync_every == 0:
+            os.fsync(self.handle.fileno())
+
+    def close(self) -> None:
+        if self.handle.closed:
+            return
+        self.handle.flush()
+        os.fsync(self.handle.fileno())
+        self.handle.close()
+
+    def receipt(self) -> dict[str, Any]:
+        if not self.handle.closed:
+            raise SystemsHarnessError("incremental JSONL receipt requested before close")
+        receipt = {
+            "path": str(self.path),
+            "records": self.count,
+            "bytes": self.path.stat().st_size,
+            "sha256": _sha256_file(self.path),
+        }
+        # Formal artifacts must remain analyzable after the raw-attempt directory
+        # is copied, renamed, or extracted elsewhere.  Preserve the original path
+        # as provenance, but make the attempt-relative path authoritative.
+        for parent in self.path.parents:
+            if (parent / "launch.json").is_file():
+                receipt["attempt_relative_path"] = str(
+                    self.path.relative_to(parent)
+                )
+                break
+        return receipt
+
+    def __enter__(self) -> "_IncrementalJsonlWriter":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+
+def _write_immutable_evidence(path: Path, value: bytes) -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as handle:
+        handle.write(value)
+        handle.flush()
+        os.fsync(handle.fileno())
+    receipt: dict[str, Any] = {
+        "path": str(path),
+        "bytes": len(value),
+        "sha256": _sha256_bytes(value),
+    }
+    for parent in path.parents:
+        if (parent / "launch.json").is_file():
+            receipt["attempt_relative_path"] = str(path.relative_to(parent))
+            break
+    return receipt
+
+
+class _EvaluationJournalTailer:
+    """Rotation-safe incremental terminal-key reader for long soak progress."""
+
+    def __init__(self, projects: Sequence[InstalledProject], journal_path: Path):
+        self.projects = tuple(projects)
+        self.handles: dict[tuple[int, int], Any] = {}
+        self.project_by_inode: dict[tuple[int, int], str] = {}
+        self.positions: dict[tuple[int, int], int] = {}
+        self.buffers: dict[tuple[int, int], bytes] = {}
+        self.started: dict[str, tuple[str, str, str]] = {}
+        self.outcomes_before_start: set[str] = set()
+        self.terminal_keys: set[tuple[str, str, str]] = set()
+        self.writer = _IncrementalJsonlWriter(journal_path)
+        for project in self.projects:
+            for path in _evaluation_journal_paths(project.root):
+                self._discover(path, str(project.root), start_at_end=True)
+
+    def _discover(
+        self, path: Path, project_root: str, *, start_at_end: bool = False
+    ) -> None:
+        """Open first, then identify the inode from that exact descriptor.
+
+        Keeping descriptors open also lets a later poll finish reading a rotated
+        inode after its directory entry has been renamed or unlinked.
+        """
+        try:
+            handle = path.open("rb")
+        except FileNotFoundError:
+            return
+        try:
+            stat = os.fstat(handle.fileno())
+            inode = (int(stat.st_dev), int(stat.st_ino))
+            if inode in self.handles:
+                handle.close()
+                return
+            self.handles[inode] = handle
+            self.project_by_inode[inode] = project_root
+            self.positions[inode] = int(stat.st_size) if start_at_end else 0
+        except BaseException:
+            handle.close()
+            raise
+
+    def _consume(self, project_root: str, record: dict[str, Any]) -> int:
+        evaluation_id = str(record.get("evaluation_id", ""))
+        if not evaluation_id:
+            return 0
+        record_type = str(record.get("type", ""))
+        if record_type == "evaluation_started":
+            key = (
+                project_root,
+                _input_hash_from_row(record),
+                str((record.get("rule") or {}).get("id", "")),
+            )
+            self.started[evaluation_id] = key
+            if evaluation_id in self.outcomes_before_start:
+                self.outcomes_before_start.remove(evaluation_id)
+                self.started.pop(evaluation_id, None)
+                before = len(self.terminal_keys)
+                self.terminal_keys.add(key)
+                return len(self.terminal_keys) - before
+            return 0
+        if record_type not in ("evaluation_completed", "evaluation_failed"):
+            return 0
+        key = self.started.pop(evaluation_id, None)
+        if key is None:
+            self.outcomes_before_start.add(evaluation_id)
+            return 0
+        before = len(self.terminal_keys)
+        self.terminal_keys.add(key)
+        return len(self.terminal_keys) - before
+
+    def poll(self) -> dict[str, Any]:
+        new_terminal = 0
+        bytes_read = 0
+        records_read = 0
+        for project in self.projects:
+            for path in _evaluation_journal_paths(project.root):
+                self._discover(path, str(project.root))
+        for inode, handle in list(self.handles.items()):
+            project_root = self.project_by_inode[inode]
+            try:
+                stat = os.fstat(handle.fileno())
+                offset = self.positions.get(inode, 0)
+                if int(stat.st_size) < offset:
+                    raise SystemViolationError(
+                        "evaluation journal inode truncated during soak: "
+                        f"device={inode[0]} inode={inode[1]}"
+                    )
+                handle.seek(offset)
+                data = handle.read()
+                self.positions[inode] = offset + len(data)
+                bytes_read += len(data)
+                if not data:
+                    continue
+                pieces = (self.buffers.get(inode, b"") + data).split(b"\n")
+                self.buffers[inode] = pieces.pop()
+                for raw in pieces:
+                    if not raw:
+                        continue
+                    try:
+                        record = json.loads(raw)
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise SystemViolationError(
+                            "malformed incremental evaluation journal "
+                            f"inode={inode[1]}: {exc}"
+                        ) from None
+                    if not isinstance(record, dict):
+                        raise SystemViolationError(
+                            "non-object incremental evaluation record in "
+                            f"inode={inode[1]}"
+                        )
+                    records_read += 1
+                    new_terminal += self._consume(project_root, record)
+            except OSError as exc:
+                raise SystemViolationError(
+                    f"could not tail evaluation journal inode={inode[1]}: {exc}"
+                ) from None
+        observed_ns = time.perf_counter_ns()
+        progress = {
+            "observed_monotonic_ns": observed_ns,
+            "bytes_read": bytes_read,
+            "records_read": records_read,
+            "new_terminal_keys": new_terminal,
+            "terminal_keys_total": len(self.terminal_keys),
+            "inflight_evaluations": len(self.started),
+            "outcomes_without_observed_start": len(self.outcomes_before_start),
+        }
+        self.writer.append(progress)
+        return progress
+
+    def close(self) -> None:
+        try:
+            self.writer.close()
+        finally:
+            for handle in self.handles.values():
+                handle.close()
+            self.handles.clear()
+
+    def receipt(self) -> dict[str, Any]:
+        return self.writer.receipt()
+
+    def named_inode_reachability(self) -> dict[str, Any]:
+        named: set[tuple[int, int]] = set()
+        paths: list[str] = []
+        for project in self.projects:
+            for path in _evaluation_journal_paths(project.root):
+                try:
+                    with path.open("rb") as handle:
+                        stat = os.fstat(handle.fileno())
+                except FileNotFoundError:
+                    continue
+                named.add((int(stat.st_dev), int(stat.st_ino)))
+                paths.append(str(path))
+        held = set(self.handles)
+        unreachable = sorted(held - named)
+        return {
+            "all_discovered_inodes_still_named": not unreachable,
+            "held_inode_count": len(held),
+            "named_inode_count": len(named),
+            "unreachable_inodes": [
+                {"device": device, "inode": inode}
+                for device, inode in unreachable
+            ],
+            "named_paths": sorted(paths),
+            "rotation_backups": EVALUATION_JOURNAL_ROTATION_BACKUPS,
+        }
+
+    def __enter__(self) -> "_EvaluationJournalTailer":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+
+def _evaluation_projection(row: dict[str, Any]) -> dict[str, Any]:
+    rule = dict(row.get("rule") or {})
+    outcome = dict(row.get("outcome") or {})
+    return {
+        "evaluation_id": str(row.get("evaluation_id", "")),
+        "timestamp": row.get("timestamp"),
+        "project_root": str(row.get("project_root", "")),
+        "status": str(row.get("status", "")),
+        "input_sha256": _input_hash_from_row(row),
+        "rule": {
+            key: str(rule.get(key, ""))
+            for key in (
+                "id",
+                "source_hash",
+                "behavior_hash",
+                "compiler",
+                "compiler_snapshot",
+                "program_id",
+            )
+        },
+        "result": str(row.get("result", "")),
+        "outcome": {
+            key: outcome.get(key)
+            for key in (
+                "type",
+                "timestamp",
+                "duration_ms",
+                "result",
+                "finding_id",
+                "suppressed",
+                "deduplicated",
+                "error_code",
+                "error",
+            )
+            if key in outcome
+        },
+    }
+
+
+def _finding_projection(project: Path, finding: dict[str, Any]) -> dict[str, Any]:
+    evaluation = dict(finding.get("evaluation") or {})
+    return {
+        "finding_id": finding.get("finding_id", finding.get("id")),
+        "timestamp": finding.get("ts"),
+        "project_root": str(project),
+        "rule_id": str(finding.get("rule_id", "")),
+        "severity": str(finding.get("severity", "")),
+        "evaluation_id": str(evaluation.get("evaluation_id", "")),
+        "input_sha256": str((evaluation.get("input") or {}).get("sha256", "")),
+    }
+
+
+def _canonical_projection_order(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Make persistence bytes invariant to database/query row ordering."""
+    return sorted(
+        (dict(row) for row in rows),
+        key=lambda row: _canonical_json_bytes(row),
+    )
 
 
 def _input_hash_from_row(row: dict[str, Any]) -> str:
@@ -718,6 +1274,7 @@ def account_evaluations(
     artifacts: Sequence[RuleArtifact],
     *,
     started_wall_time: float,
+    baseline_evaluation_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Account exact evaluations and project isolation for one workload."""
     expected_keys = [item.key for item in expected]
@@ -784,7 +1341,11 @@ def account_evaluations(
                         provenance_mismatches.append(
                             {"key": _key_json(key), "differences": differences}
                         )
-            elif float(row.get("timestamp", 0) or 0) >= started_wall_time:
+            elif (
+                str(row.get("evaluation_id", "")) not in baseline_evaluation_ids
+                if baseline_evaluation_ids is not None
+                else float(row.get("timestamp", 0) or 0) >= started_wall_time
+            ):
                 unexpected.append(
                     {
                         "project_root": project_root,
@@ -838,6 +1399,116 @@ def account_evaluations(
     }
 
 
+def account_findings(
+    findings_by_project: dict[str, list[dict[str, Any]]],
+    evaluation_rows_by_project: dict[str, list[dict[str, Any]]],
+    expected: Sequence[ExpectedEvaluation],
+    *,
+    baseline_finding_ids: set[int] | None = None,
+) -> dict[str, Any]:
+    """Reconcile violations-only findings with exact terminal evaluations."""
+    expected_keys = [item.key for item in expected]
+    expected_set = set(expected_keys)
+    input_owner = {item.input_sha256: item.project_root for item in expected}
+    expected_findings: dict[tuple[str, str, str], tuple[int, str]] = {}
+    for project_root, rows in evaluation_rows_by_project.items():
+        project = Path(project_root)
+        for row in rows:
+            key = _row_key(row, project)
+            if key not in expected_set or str(row.get("status", "")) != "completed":
+                continue
+            finding_id = (row.get("outcome") or {}).get("finding_id")
+            if finding_id is None:
+                continue
+            expected_findings.setdefault(
+                key,
+                (int(finding_id), str(row.get("evaluation_id", ""))),
+            )
+
+    observed: Counter[tuple[str, str, str]] = Counter()
+    matched_ids: set[int] = set()
+    unexpected = []
+    wrong_project = []
+    id_mismatches = []
+    evaluation_id_mismatches = []
+    for project_root, findings in findings_by_project.items():
+        project = Path(project_root)
+        for finding in findings:
+            projected = _finding_projection(project, finding)
+            finding_id_value = projected.get("finding_id")
+            try:
+                finding_id = int(finding_id_value)
+            except (TypeError, ValueError):
+                finding_id = -1
+            if baseline_finding_ids is not None and finding_id in baseline_finding_ids:
+                continue
+            key = (
+                str(project),
+                str(projected.get("input_sha256", "")),
+                str(projected.get("rule_id", "")),
+            )
+            owner = input_owner.get(key[1])
+            if owner and Path(owner).resolve() != project.resolve():
+                wrong_project.append(
+                    {
+                        "finding_id": finding_id_value,
+                        "observed_project": str(project),
+                        "expected_project": owner,
+                        "input_sha256": key[1],
+                    }
+                )
+            expectation = expected_findings.get(key)
+            if expectation is None:
+                unexpected.append(projected)
+                continue
+            observed[key] += 1
+            expected_id, expected_evaluation_id = expectation
+            if finding_id != expected_id:
+                id_mismatches.append(
+                    {
+                        "key": _key_json(key),
+                        "expected": expected_id,
+                        "observed": finding_id_value,
+                    }
+                )
+            else:
+                matched_ids.add(expected_id)
+            if projected["evaluation_id"] != expected_evaluation_id:
+                evaluation_id_mismatches.append(
+                    {
+                        "key": _key_json(key),
+                        "expected": expected_evaluation_id,
+                        "observed": projected["evaluation_id"],
+                    }
+                )
+    missing = [
+        {"key": _key_json(key), "finding_id": finding_id}
+        for key, (finding_id, _evaluation_id) in expected_findings.items()
+        if finding_id not in matched_ids
+    ]
+    duplicates = [
+        {"key": _key_json(key), "count": count}
+        for key, count in observed.items()
+        if count > 1
+    ]
+    return {
+        "findings_expected": len(expected_findings),
+        "findings_observed_for_expected_keys": sum(observed.values()),
+        "loss_count": len(missing),
+        "duplicate_count": sum(item["count"] - 1 for item in duplicates),
+        "unexpected_count": len(unexpected),
+        "wrong_project_count": len(wrong_project),
+        "finding_id_mismatch_count": len(id_mismatches),
+        "evaluation_id_mismatch_count": len(evaluation_id_mismatches),
+        "missing": missing,
+        "duplicates": duplicates,
+        "unexpected": unexpected,
+        "wrong_project": wrong_project,
+        "finding_id_mismatches": id_mismatches,
+        "evaluation_id_mismatches": evaluation_id_mismatches,
+    }
+
+
 def _terminal_keys(
     rows_by_project: dict[str, list[dict[str, Any]]],
     expected: Sequence[ExpectedEvaluation],
@@ -861,40 +1532,247 @@ def _wait_for_expected(
     expected: Sequence[ExpectedEvaluation],
     event_started_ns: dict[str, int],
     timeout: float,
-) -> tuple[dict[str, list[dict[str, Any]]], dict[str, int], dict[str, int]]:
+    *,
+    deadline_ns: int | None = None,
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    dict[str, int],
+    dict[str, int],
+    dict[str, Any],
+]:
     expected_by_input: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
     for item in expected:
         expected_by_input[item.input_sha256].add(item.key)
     first_visible: dict[str, int] = {}
     all_visible: dict[str, int] = {}
-    deadline_ns = max(event_started_ns.values()) + int(timeout * 1_000_000_000)
+    deadline_ns = (
+        int(deadline_ns)
+        if deadline_ns is not None
+        else min(event_started_ns.values()) + int(timeout * 1_000_000_000)
+    )
     last_rows: dict[str, list[dict[str, Any]]] = {}
+    query_samples: list[dict[str, Any]] = []
+    last_observed_ns: int | None = None
+    after_deadline_visible: set[str] = set()
     while time.perf_counter_ns() < deadline_ns:
-        last_rows = {
-            str(project.root): _evaluation_history(project.root) for project in projects
-        }
+        last_rows = {}
+        for project in projects:
+            rows, query_sample = _timed_evaluation_history(project.root)
+            last_rows[str(project.root)] = rows
+            query_samples.append(query_sample)
         observed_ns = time.perf_counter_ns()
+        last_observed_ns = observed_ns
         terminal = _terminal_keys(last_rows, expected)
         for input_hash, keys in expected_by_input.items():
             present = terminal.intersection(keys)
-            if present and input_hash not in first_visible:
+            if observed_ns <= deadline_ns and present and input_hash not in first_visible:
                 first_visible[input_hash] = observed_ns
-            if keys.issubset(terminal) and input_hash not in all_visible:
-                all_visible[input_hash] = observed_ns
+            if keys.issubset(terminal):
+                if observed_ns <= deadline_ns and input_hash not in all_visible:
+                    all_visible[input_hash] = observed_ns
+                elif observed_ns > deadline_ns:
+                    after_deadline_visible.add(input_hash)
+        if observed_ns > deadline_ns:
+            break
         if len(all_visible) == len(expected_by_input):
             # One settle interval catches duplicate evaluations admitted just
             # behind the first complete observation.
-            time.sleep(QUERY_POLL_INTERVAL_SECONDS)
-            last_rows = {
-                str(project.root): _evaluation_history(project.root)
-                for project in projects
-            }
-            return last_rows, first_visible, all_visible
+            remaining = max(0.0, (deadline_ns - time.perf_counter_ns()) / 1e9)
+            time.sleep(min(QUERY_POLL_INTERVAL_SECONDS, remaining))
+            last_rows = {}
+            for project in projects:
+                rows, query_sample = _timed_evaluation_history(project.root)
+                last_rows[str(project.root)] = rows
+                query_samples.append(query_sample)
+            settle_observed_ns = time.perf_counter_ns()
+            last_observed_ns = settle_observed_ns
+            settle_terminal = _terminal_keys(last_rows, expected)
+            settle_complete = all(
+                keys.issubset(settle_terminal)
+                for keys in expected_by_input.values()
+            )
+            if settle_complete and settle_observed_ns <= deadline_ns:
+                return last_rows, first_visible, all_visible, {
+                    "timed_out": False,
+                    "missing_input_sha256": [],
+                    "deadline_monotonic_ns": deadline_ns,
+                    "last_observed_monotonic_ns": settle_observed_ns,
+                    "settle_seconds": QUERY_POLL_INTERVAL_SECONDS,
+                    "query_samples": query_samples,
+                }
+            if settle_complete:
+                after_deadline_visible.update(expected_by_input)
+            break
         time.sleep(QUERY_POLL_INTERVAL_SECONDS)
     missing = sorted(set(expected_by_input) - set(all_visible))
-    raise SystemsHarnessError(
-        f"{len(missing)} events did not reach all expected evaluations in {timeout:.1f}s"
+    # A missing/slow system outcome is measured data, not a harness exception.
+    # Return the last complete observation so callers can retain exact loss and
+    # right-censoring rather than discarding the condition.
+    return last_rows, first_visible, all_visible, {
+        "timed_out": True,
+        "missing_input_sha256": missing,
+        "deadline_monotonic_ns": deadline_ns,
+        "last_observed_monotonic_ns": last_observed_ns,
+        "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
+        "query_samples": query_samples,
+    }
+
+
+def _wait_for_expected_incremental(
+    projects: Sequence[InstalledProject],
+    expected: Sequence[ExpectedEvaluation],
+    event_started_ns: dict[str, int],
+    timeout: float,
+    *,
+    tailer: _EvaluationJournalTailer,
+    checkpoint_writer: _IncrementalJsonlWriter,
+    history_limits: Mapping[str, int],
+    deadline_ns: int | None = None,
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    dict[str, int],
+    dict[str, int],
+    dict[str, Any],
+]:
+    """Confirm journal-signalled per-event transitions with bounded History calls."""
+    expected_by_input: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    owner_by_input: dict[str, str] = {}
+    project_by_root = {str(project.root): project for project in projects}
+    for item in expected:
+        expected_by_input[item.input_sha256].add(item.key)
+        owner_by_input[item.input_sha256] = item.project_root
+    deadline_ns = (
+        int(deadline_ns)
+        if deadline_ns is not None
+        else min(event_started_ns.values()) + int(timeout * 1_000_000_000)
     )
+    first_visible: dict[str, int] = {}
+    all_visible: dict[str, int] = {}
+    after_deadline_visible: set[str] = set()
+    query_samples: list[dict[str, Any]] = []
+    last_rows: dict[str, list[dict[str, Any]]] = {}
+    journal_polls = 0
+    history_limit_saturated = False
+    last_observed_ns: int | None = None
+    while time.perf_counter_ns() < deadline_ns:
+        progress = tailer.poll()
+        journal_polls += 1
+        journal_observed_ns = int(progress["observed_monotonic_ns"])
+        last_observed_ns = journal_observed_ns
+        if journal_observed_ns > deadline_ns:
+            for input_hash, keys in expected_by_input.items():
+                if keys.issubset(tailer.terminal_keys):
+                    after_deadline_visible.add(input_hash)
+            break
+        pending_by_project: dict[str, set[str]] = defaultdict(set)
+        for input_hash, keys in expected_by_input.items():
+            terminal = tailer.terminal_keys.intersection(keys)
+            if terminal and input_hash not in first_visible:
+                pending_by_project[owner_by_input[input_hash]].add(input_hash)
+            if keys.issubset(tailer.terminal_keys) and input_hash not in all_visible:
+                pending_by_project[owner_by_input[input_hash]].add(input_hash)
+        for project_root, pending_inputs in sorted(pending_by_project.items()):
+            limit = int(history_limits[project_root])
+            if limit > EVALUATION_HISTORY_LIMIT:
+                history_limit_saturated = True
+                limit = EVALUATION_HISTORY_LIMIT
+            rows, query_sample = _timed_evaluation_history(
+                project_by_root[project_root].root, limit=limit
+            )
+            query_sample.update(
+                {
+                    "limit": limit,
+                    "trigger_input_sha256": sorted(pending_inputs),
+                    "kind": "journal_transition_confirmation",
+                }
+            )
+            query_samples.append(query_sample)
+            last_rows[project_root] = rows
+            query_finished_ns = int(query_sample["finished_monotonic_ns"])
+            last_observed_ns = query_finished_ns
+            terminal = _terminal_keys({project_root: rows}, expected)
+            if len(rows) >= limit:
+                history_limit_saturated = True
+            for input_hash in pending_inputs:
+                keys = expected_by_input[input_hash]
+                if query_finished_ns > deadline_ns:
+                    if keys.issubset(terminal):
+                        after_deadline_visible.add(input_hash)
+                    continue
+                if terminal.intersection(keys) and input_hash not in first_visible:
+                    first_visible[input_hash] = query_finished_ns
+                if keys.issubset(terminal) and input_hash not in all_visible:
+                    all_visible[input_hash] = query_finished_ns
+            checkpoint_writer.append(
+                {
+                    "kind": "journal_transition_confirmation",
+                    "project_root": project_root,
+                    "observed_monotonic_ns": query_finished_ns,
+                    "within_deadline": query_finished_ns <= deadline_ns,
+                    "limit": limit,
+                    "rows": len(rows),
+                    "trigger_input_sha256": sorted(pending_inputs),
+                    "first_visible_confirmed": sorted(
+                        pending_inputs.intersection(first_visible)
+                    ),
+                    "all_visible_confirmed": sorted(
+                        pending_inputs.intersection(all_visible)
+                    ),
+                    "query_latency_ns": int(query_sample["latency_ns"]),
+                }
+            )
+        if len(all_visible) == len(expected_by_input):
+            break
+        remaining = max(0.0, (deadline_ns - time.perf_counter_ns()) / 1e9)
+        time.sleep(min(QUERY_POLL_INTERVAL_SECONDS, remaining))
+
+    # Endpoint timestamps above remain valid.  This separate quiescence gate
+    # catches late duplicate/in-flight work without retroactively censoring them.
+    settle_started_ns = time.perf_counter_ns()
+    remaining = max(0.0, (deadline_ns - settle_started_ns) / 1e9)
+    time.sleep(min(QUERY_POLL_INTERVAL_SECONDS, remaining))
+    settle_progress = tailer.poll()
+    journal_polls += 1
+    settle_finished_ns = int(settle_progress["observed_monotonic_ns"])
+    expected_keys = {item.key for item in expected}
+    settle_complete = bool(
+        settle_finished_ns <= deadline_ns
+        and expected_keys.issubset(tailer.terminal_keys)
+        and not tailer.started
+        and not tailer.outcomes_before_start
+    )
+    checkpoint_writer.append(
+        {
+            "kind": "condition_quiescence",
+            "started_monotonic_ns": settle_started_ns,
+            "observed_monotonic_ns": settle_finished_ns,
+            "within_deadline": settle_finished_ns <= deadline_ns,
+            "complete": settle_complete,
+            "inflight_evaluations": len(tailer.started),
+            "outcomes_without_observed_start": len(tailer.outcomes_before_start),
+        }
+    )
+    missing = sorted(set(expected_by_input) - set(all_visible))
+    return last_rows, first_visible, all_visible, {
+        "timed_out": bool(missing),
+        "integrity_violation": bool(not settle_complete or history_limit_saturated),
+        "history_limit_saturated": history_limit_saturated,
+        "missing_input_sha256": missing,
+        "deadline_monotonic_ns": deadline_ns,
+        "last_observed_monotonic_ns": max(
+            settle_finished_ns, last_observed_ns or settle_finished_ns
+        ),
+        "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
+        "journal_polls": journal_polls,
+        "settle": {
+            "seconds": QUERY_POLL_INTERVAL_SECONDS,
+            "started_monotonic_ns": settle_started_ns,
+            "finished_monotonic_ns": settle_finished_ns,
+            "complete": settle_complete,
+        },
+        "query_samples": query_samples,
+        "history_limits": dict(sorted(history_limits.items())),
+    }
 
 
 def _process_tree_snapshot(pid: int) -> dict[str, Any]:
@@ -938,22 +1816,64 @@ def _process_tree_snapshot(pid: int) -> dict[str, Any]:
 
 
 class _ResourceSampler:
-    def __init__(self, pid: int, interval: float = RESOURCE_SAMPLE_INTERVAL_SECONDS):
+    def __init__(
+        self,
+        pid: int,
+        interval: float = RESOURCE_SAMPLE_INTERVAL_SECONDS,
+        *,
+        journal_path: Path | None = None,
+        keep_full_samples: bool = True,
+    ):
         self.pid = pid
         self.interval = interval
         self.samples: list[dict[str, Any]] = []
+        self.rss_points: list[dict[str, int]] = []
+        self.sample_count = 0
+        self.peak_rss_bytes = 0
+        self.peak_file_descriptors: int | None = None
+        self.writer = (
+            _IncrementalJsonlWriter(journal_path) if journal_path is not None else None
+        )
+        self.keep_full_samples = keep_full_samples
+        self.thread_error: BaseException | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._sample, name="rap-systems-resources", daemon=True
         )
 
     def _sample(self) -> None:
-        while not self._stop.is_set():
-            sample = _process_tree_snapshot(self.pid)
-            if sample["processes"] == 0:
-                return
-            self.samples.append(sample)
-            self._stop.wait(self.interval)
+        try:
+            while not self._stop.is_set():
+                sample = _process_tree_snapshot(self.pid)
+                if sample["processes"] == 0:
+                    return
+                sample["observed_monotonic_ns"] = time.perf_counter_ns()
+                sample["observed_utc"] = datetime.now(timezone.utc).isoformat()
+                self.sample_count += 1
+                self.peak_rss_bytes = max(
+                    self.peak_rss_bytes, int(sample["rss_bytes"])
+                )
+                descriptors = sample.get("file_descriptors")
+                if descriptors is not None:
+                    self.peak_file_descriptors = max(
+                        self.peak_file_descriptors or 0, int(descriptors)
+                    )
+                self.rss_points.append(
+                    {
+                        "observed_monotonic_ns": int(
+                            sample["observed_monotonic_ns"]
+                        ),
+                        "rss_bytes": int(sample["rss_bytes"]),
+                    }
+                )
+                if self.keep_full_samples:
+                    self.samples.append(sample)
+                if self.writer is not None:
+                    self.writer.append(sample)
+                self._stop.wait(self.interval)
+        except BaseException as exc:
+            self.thread_error = exc
+            self._stop.set()
 
     def __enter__(self) -> "_ResourceSampler":
         self._thread.start()
@@ -962,6 +1882,23 @@ class _ResourceSampler:
     def __exit__(self, exc_type, exc, traceback) -> None:
         self._stop.set()
         self._thread.join(timeout=2.0)
+        alive = self._thread.is_alive()
+        try:
+            if self.writer is not None:
+                self.writer.close()
+        finally:
+            if exc_type is None:
+                if alive:
+                    raise SystemViolationError(
+                        "resource sampler thread did not terminate"
+                    )
+                if self.thread_error is not None:
+                    raise SystemViolationError(
+                        f"resource sampler failed: {self.thread_error}"
+                    ) from self.thread_error
+
+    def journal_receipt(self) -> dict[str, Any] | None:
+        return self.writer.receipt() if self.writer is not None else None
 
 
 def _tree_size(path: Path) -> dict[str, int]:
@@ -979,6 +1916,24 @@ def _tree_size(path: Path) -> dict[str, int]:
     return {"files": files, "bytes": size}
 
 
+def _path_bytes(path: Path) -> int:
+    try:
+        return int(path.stat().st_size) if path.is_file() else 0
+    except OSError:
+        return 0
+
+
+def _evaluation_journal_bytes(project: Path) -> int:
+    base = rap_config.project_evaluation_log_file(str(project))
+    return sum(
+        _path_bytes(path)
+        for path in [
+            base,
+            *(base.with_name(f"{base.name}.{index}") for index in range(1, 6)),
+        ]
+    )
+
+
 def _storage_snapshot(fixture: RunningFixture) -> dict[str, Any]:
     state = _tree_size(fixture.isolated_root / "state")
     project_logs = {
@@ -991,10 +1946,34 @@ def _storage_snapshot(fixture: RunningFixture) -> dict[str, Any]:
         str(project.root): _tree_size(project.root / ".codex" / "rules-as-programs")
         for project in fixture.projects
     }
+    database = rap_config.db_path()
+    named_bytes = {
+        "ledger_tree": _tree_size(fixture.isolated_root / "state" / "ledgers")[
+            "bytes"
+        ],
+        "finding_database": _path_bytes(database),
+        "finding_database_wal": _path_bytes(
+            database.with_name(f"{database.name}-wal")
+        ),
+        "finding_database_shm": _path_bytes(
+            database.with_name(f"{database.name}-shm")
+        ),
+        "audit_logs": {
+            str(project.root): _path_bytes(
+                rap_config.project_log_file(str(project.root))
+            )
+            for project in fixture.projects
+        },
+        "evaluation_journals_including_rotations": {
+            str(project.root): _evaluation_journal_bytes(project.root)
+            for project in fixture.projects
+        },
+    }
     return {
         "state": state,
         "project_logs": project_logs,
         "project_rap_trees": project_rap,
+        "named_bytes": named_bytes,
         "total_runtime_bytes": state["bytes"]
         + sum(item["bytes"] for item in project_logs.values()),
     }
@@ -1002,7 +1981,7 @@ def _storage_snapshot(fixture: RunningFixture) -> dict[str, Any]:
 
 def _storage_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     roots = sorted(set(before["project_logs"]) | set(after["project_logs"]))
-    return {
+    value = {
         "state_bytes": after["state"]["bytes"] - before["state"]["bytes"],
         "project_log_bytes": {
             root: after["project_logs"].get(root, {}).get("bytes", 0)
@@ -1012,6 +1991,28 @@ def _storage_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, A
         "total_runtime_bytes": after["total_runtime_bytes"]
         - before["total_runtime_bytes"],
     }
+    if "named_bytes" in before or "named_bytes" in after:
+        before_named = dict(before.get("named_bytes") or {})
+        after_named = dict(after.get("named_bytes") or {})
+        scalar_names = (
+            "ledger_tree",
+            "finding_database",
+            "finding_database_wal",
+            "finding_database_shm",
+        )
+        named_delta: dict[str, Any] = {
+            name: int(after_named.get(name, 0)) - int(before_named.get(name, 0))
+            for name in scalar_names
+        }
+        for name in ("audit_logs", "evaluation_journals_including_rotations"):
+            before_map = dict(before_named.get(name) or {})
+            after_map = dict(after_named.get(name) or {})
+            named_delta[name] = {
+                root: int(after_map.get(root, 0)) - int(before_map.get(root, 0))
+                for root in sorted(set(before_map) | set(after_map))
+            }
+        value["named_bytes"] = named_delta
+    return value
 
 
 def _nearest_rank(values: list[float], percentile: float) -> float:
@@ -1034,6 +2035,179 @@ def _summary(values: list[float]) -> dict[str, Any]:
         "p95_nearest_rank": round(_nearest_rank(values, 95), 3),
         "p99_nearest_rank": round(_nearest_rank(values, 99), 3),
         "maximum": round(max(values), 3),
+    }
+
+
+def _summary_ns(values: list[int]) -> dict[str, Any]:
+    """Reduce exact integer nanoseconds; rounded milliseconds are display-only."""
+    if not values:
+        raise ValueError("cannot summarize an empty sample")
+    ordered = sorted(int(value) for value in values)
+
+    def select(percentile: float) -> int:
+        rank = max(1, math.ceil(percentile / 100.0 * len(ordered)))
+        return ordered[rank - 1]
+
+    exact = {
+        "minimum_ns": ordered[0],
+        "mean_ns": sum(ordered) / len(ordered),
+        "p50_nearest_rank_ns": select(50),
+        "p95_nearest_rank_ns": select(95),
+        "p99_nearest_rank_ns": select(99),
+        "maximum_ns": ordered[-1],
+    }
+    return {
+        "unit": "ns",
+        "count": len(ordered),
+        **exact,
+        "display_ms": {
+            name.removesuffix("_ns"): round(float(value) / 1_000_000, 3)
+            for name, value in exact.items()
+        },
+        # Compatibility display fields; selection never uses these rounded values.
+        "minimum": round(ordered[0] / 1_000_000, 3),
+        "mean": round((sum(ordered) / len(ordered)) / 1_000_000, 3),
+        "p50_nearest_rank": round(select(50) / 1_000_000, 3),
+        "p95_nearest_rank": round(select(95) / 1_000_000, 3),
+        "p99_nearest_rank": round(select(99) / 1_000_000, 3),
+        "maximum": round(ordered[-1] / 1_000_000, 3),
+    }
+
+
+def _latency_summary(samples: Sequence[dict[str, Any]], key: str) -> dict[str, Any]:
+    ns_key = key.removesuffix("_ms") + "_ns" if key.endswith("_ms") else key
+    observed: list[int] = []
+    lower_bounds: list[int] = []
+    censored = 0
+    for sample in samples:
+        value = sample.get(ns_key)
+        if value is None and sample.get(key) is not None:
+            value = round(float(sample[key]) * 1_000_000)
+        if value is None:
+            censored += 1
+            censor_ns = sample.get("latency_censored_at_ns")
+            if censor_ns is None:
+                censor_ns = round(
+                    float(sample.get("latency_censored_at_ms") or 0.0) * 1_000_000
+                )
+            lower_bounds.append(int(censor_ns))
+        else:
+            observed.append(int(value))
+            lower_bounds.append(int(value))
+    summary = _summary_ns(lower_bounds)
+    summary.update(
+        {
+            "observed_count": len(observed),
+            "right_censored_count": censored,
+            "percentiles_are_lower_bounds": bool(censored),
+        }
+    )
+    return summary
+
+
+def _linear_slope(
+    samples: Sequence[dict[str, Any]],
+    *,
+    x_key: str,
+    y_key: str,
+) -> dict[str, Any]:
+    points = [
+        (float(item[x_key]), float(item[y_key]))
+        for item in samples
+        if item.get(x_key) is not None and item.get(y_key) is not None
+    ]
+    distinct_x = {point[0] for point in points}
+    if len(points) < 2 or len(distinct_x) < 2:
+        return {
+            "available": False,
+            "reason": "at least two distinct timestamped samples are required",
+            "sample_count": len(points),
+        }
+    mean_x = sum(point[0] for point in points) / len(points)
+    mean_y = sum(point[1] for point in points) / len(points)
+    denominator = sum((x - mean_x) ** 2 for x, _y in points)
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in points) / denominator
+    intercept = mean_y - slope * mean_x
+    residual_sum_squares = sum(
+        (y - (intercept + slope * x)) ** 2 for x, y in points
+    )
+    total_sum_squares = sum((y - mean_y) ** 2 for _x, y in points)
+    r_squared = (
+        1.0
+        if total_sum_squares == 0.0 and residual_sum_squares == 0.0
+        else 0.0
+        if total_sum_squares == 0.0
+        else 1.0 - residual_sum_squares / total_sum_squares
+    )
+    return {
+        "available": True,
+        "method": "ordinary_least_squares_with_intercept",
+        "sample_count": len(points),
+        "slope": round(slope, 6),
+        "intercept": round(intercept, 6),
+        "r_squared": round(r_squared, 12),
+        "x_min": min(distinct_x),
+        "x_max": max(distinct_x),
+    }
+
+
+def _rss_slope(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    if not samples:
+        return _linear_slope(samples, x_key="elapsed_seconds", y_key="rss_bytes")
+    origin = min(int(item["observed_monotonic_ns"]) for item in samples)
+    normalized = [
+        {
+            **item,
+            "elapsed_seconds": (
+                int(item["observed_monotonic_ns"]) - origin
+            )
+            / 1_000_000_000,
+        }
+        for item in samples
+    ]
+    value = _linear_slope(normalized, x_key="elapsed_seconds", y_key="rss_bytes")
+    if value.get("available"):
+        value["unit"] = "bytes_per_second"
+    return value
+
+
+def _fairness_summary(
+    schedule: str,
+    project_count: int,
+    complete_by_project: dict[str, list[int]],
+) -> dict[str, Any]:
+    active = {key: values for key, values in complete_by_project.items() if values}
+    if schedule != "round_robin_across_projects":
+        return {
+            "applicable": False,
+            "range_ms": None,
+            "range_ns": None,
+            "reason": "hotspot traffic intentionally exercises only one project",
+            "active_projects": len(active),
+            "idle_projects": max(0, project_count - len(active)),
+        }
+    if project_count < 2 or len(active) < 2:
+        return {
+            "applicable": False,
+            "range_ms": None,
+            "range_ns": None,
+            "reason": "fairness requires at least two exercised projects",
+            "active_projects": len(active),
+            "idle_projects": max(0, project_count - len(active)),
+        }
+    project_p95_ns = {
+        project: int(_nearest_rank(values, 95))
+        for project, values in sorted(active.items())
+    }
+    range_ns = max(project_p95_ns.values()) - min(project_p95_ns.values())
+    return {
+        "applicable": True,
+        "range_ns": range_ns,
+        "range_ms": round(range_ns / 1_000_000, 3),
+        "project_p95_ns": project_p95_ns,
+        "reason": "",
+        "active_projects": len(active),
+        "idle_projects": max(0, project_count - len(active)),
     }
 
 
@@ -1092,88 +2266,259 @@ def _invoke_event_group(
     mode: str,
     timeout: float,
     max_workers: int,
+    tailer: _EvaluationJournalTailer | None = None,
+    checkpoint_writer: _IncrementalJsonlWriter | None = None,
+    baseline_rows_by_project: Mapping[str, int] | None = None,
 ) -> tuple[
-    list[dict[str, Any]], list[ExpectedEvaluation], dict[str, list[dict[str, Any]]]
+    list[dict[str, Any]],
+    list[ExpectedEvaluation],
+    dict[str, list[dict[str, Any]]],
+    dict[str, Any],
 ]:
     expected = _expected_for_events(events, fixture.artifacts)
+    expected_rows_by_project = Counter(item.project_root for item in expected)
+    history_limits = {
+        str(project.root): int((baseline_rows_by_project or {}).get(str(project.root), 0))
+        + int(expected_rows_by_project[str(project.root)])
+        + MATRIX_HISTORY_DUPLICATE_HEADROOM
+        for project in fixture.projects
+    }
+
+    def wait_for(
+        wait_expected: Sequence[ExpectedEvaluation],
+        started: dict[str, int],
+    ) -> tuple[
+        dict[str, list[dict[str, Any]]],
+        dict[str, int],
+        dict[str, int],
+        dict[str, Any],
+    ]:
+        if tailer is not None and checkpoint_writer is not None:
+            return _wait_for_expected_incremental(
+                fixture.projects,
+                wait_expected,
+                started,
+                timeout,
+                tailer=tailer,
+                checkpoint_writer=checkpoint_writer,
+                history_limits=history_limits,
+            )
+        return _wait_for_expected(
+            fixture.projects, wait_expected, started, timeout
+        )
     samples: list[dict[str, Any]] = []
+
+    def sample_for(
+        project: InstalledProject,
+        raw: dict[str, Any],
+        input_hash: str,
+        hook: dict[str, Any],
+        submitted_ns: int,
+        first: dict[str, int],
+        complete: dict[str, int],
+        deadline_ns: int,
+    ) -> dict[str, Any]:
+        first_ns = first.get(input_hash)
+        complete_ns = complete.get(input_hash)
+        executor_queue_ns = int(hook["started_ns"]) - submitted_ns
+        hook_exit_ns = int(hook["exited_ns"]) - int(hook["started_ns"])
+        submission_to_hook_exit_ns = int(hook["exited_ns"]) - submitted_ns
+        first_latency_ns = (
+            int(first_ns) - submitted_ns if first_ns is not None else None
+        )
+        complete_latency_ns = (
+            int(complete_ns) - submitted_ns if complete_ns is not None else None
+        )
+        censor_ns = max(0, int(deadline_ns) - submitted_ns)
+        return {
+            "case_id": raw["tool_input"]["_rap_systems_probe"]["case_id"],
+            "project_root": str(project.root),
+            "input_sha256": input_hash,
+            "submitted_monotonic_ns": submitted_ns,
+            "hook_started_monotonic_ns": hook["started_ns"],
+            "hook_exited_monotonic_ns": hook["exited_ns"],
+            "first_visible_monotonic_ns": first_ns,
+            "all_visible_monotonic_ns": complete_ns,
+            "censor_deadline_monotonic_ns": int(deadline_ns),
+            "executor_queue_ns": executor_queue_ns,
+            "hook_exit_ns": hook_exit_ns,
+            "submission_to_hook_exit_ns": submission_to_hook_exit_ns,
+            "event_to_first_query_visible_evaluation_ns": first_latency_ns,
+            "event_to_all_query_visible_evaluations_ns": complete_latency_ns,
+            "latency_censored_at_ns": None if complete_ns is not None else censor_ns,
+            "executor_queue_ms": round(executor_queue_ns / 1_000_000, 3),
+            "hook_exit_ms": round(hook_exit_ns / 1_000_000, 3),
+            "submission_to_hook_exit_ms": round(
+                submission_to_hook_exit_ns / 1_000_000, 3
+            ),
+            "event_to_first_query_visible_evaluation_ms": (
+                round(first_latency_ns / 1_000_000, 3)
+                if first_latency_ns is not None
+                else None
+            ),
+            "event_to_all_query_visible_evaluations_ms": (
+                round(complete_latency_ns / 1_000_000, 3)
+                if complete_latency_ns is not None
+                else None
+            ),
+            "latency_censored_at_ms": (
+                None
+                if complete_ns is not None
+                else round(censor_ns / 1_000_000, 3)
+            ),
+            "hook": {
+                "returncode": hook.get("returncode"),
+                "stdout": hook.get("stdout", ""),
+                "stderr": hook.get("stderr", ""),
+                "timed_out": bool(hook.get("timed_out")),
+                "contract_preserved": bool(hook.get("contract_preserved")),
+                "contract_error": str(hook.get("contract_error", "")),
+            },
+        }
+
     if mode == "sequential":
+        query_samples: list[dict[str, Any]] = []
+        timed_out_inputs: list[str] = []
+        per_event_wait: list[dict[str, Any]] = []
+        integrity_violation = False
+        history_limit_saturated = False
+        after_deadline_visible: set[str] = set()
+        journal_polls = 0
         for project, raw, _text, input_hash in events:
+            submitted_ns = time.perf_counter_ns()
             hook = _invoke_raw(project.wrapper, raw, fixture.environment)
             one_expected = [
                 item for item in expected if item.input_sha256 == input_hash
             ]
-            rows, first, complete = _wait_for_expected(
-                fixture.projects,
-                one_expected,
-                {input_hash: hook["started_ns"]},
-                timeout,
+            rows, first, complete, wait = wait_for(
+                one_expected, {input_hash: submitted_ns}
+            )
+            query_samples.extend(wait["query_samples"])
+            timed_out_inputs.extend(wait["missing_input_sha256"])
+            integrity_violation = bool(
+                integrity_violation or wait.get("integrity_violation")
+            )
+            history_limit_saturated = bool(
+                history_limit_saturated or wait.get("history_limit_saturated")
+            )
+            after_deadline_visible.update(
+                wait.get("after_deadline_visible_input_sha256") or []
+            )
+            journal_polls += int(wait.get("journal_polls", 0))
+            per_event_wait.append(
+                {
+                    "input_sha256": input_hash,
+                    **{
+                        key: value
+                        for key, value in wait.items()
+                        if key != "query_samples"
+                    },
+                }
             )
             samples.append(
-                {
-                    "case_id": raw["tool_input"]["_rap_systems_probe"]["case_id"],
-                    "project_root": str(project.root),
-                    "input_sha256": input_hash,
-                    "hook_exit_ms": round(
-                        (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
-                    ),
-                    "event_to_first_query_visible_evaluation_ms": round(
-                        (first[input_hash] - hook["started_ns"]) / 1_000_000, 3
-                    ),
-                    "event_to_all_query_visible_evaluations_ms": round(
-                        (complete[input_hash] - hook["started_ns"]) / 1_000_000, 3
-                    ),
-                }
+                sample_for(
+                    project,
+                    raw,
+                    input_hash,
+                    hook,
+                    submitted_ns,
+                    first,
+                    complete,
+                    int(wait["deadline_monotonic_ns"]),
+                )
             )
         final_rows = {
             str(project.root): _evaluation_history(project.root)
             for project in fixture.projects
         }
-        return samples, expected, final_rows
+        workload_start_ns = min(
+            int(item["submitted_monotonic_ns"]) for item in samples
+        )
+        workload_end_ns = max(
+            int(
+                item.get("all_visible_monotonic_ns")
+                or item["censor_deadline_monotonic_ns"]
+            )
+            for item in samples
+        )
+        return samples, expected, final_rows, {
+            "timed_out": bool(timed_out_inputs),
+            "integrity_violation": integrity_violation,
+            "history_limit_saturated": history_limit_saturated,
+            "missing_input_sha256": sorted(set(timed_out_inputs)),
+            "after_deadline_visible_input_sha256": sorted(after_deadline_visible),
+            "journal_polls": journal_polls,
+            "per_event_wait": per_event_wait,
+            "query_samples": query_samples,
+            "burst_queue_drain_ns": None,
+            "burst_queue_drain_ms": None,
+            "workload_wall_ns": workload_end_ns - workload_start_ns,
+        }
     if mode != "burst":
         raise ValueError(f"unsupported event-group mode {mode!r}")
     hooks: dict[str, dict[str, Any]] = {}
+    submissions: dict[str, int] = {}
     with ThreadPoolExecutor(
         max_workers=min(max_workers, len(events)),
         thread_name_prefix="rap-systems-hooks",
     ) as executor:
-        futures = {
-            executor.submit(_invoke_raw, project.wrapper, raw, fixture.environment): (
-                project,
-                raw,
-                input_hash,
+        futures = {}
+        for project, raw, _text, input_hash in events:
+            submissions[input_hash] = time.perf_counter_ns()
+            future = executor.submit(
+                _invoke_raw, project.wrapper, raw, fixture.environment
             )
-            for project, raw, _text, input_hash in events
-        }
+            futures[future] = (project, raw, input_hash)
         for future in as_completed(futures):
             _project, _raw, input_hash = futures[future]
             hooks[input_hash] = future.result()
-    rows, first, complete = _wait_for_expected(
-        fixture.projects,
-        expected,
-        {input_hash: hook["started_ns"] for input_hash, hook in hooks.items()},
-        timeout,
-    )
+    rows, first, complete, wait = wait_for(expected, submissions)
     for project, raw, _text, input_hash in events:
         hook = hooks[input_hash]
         samples.append(
-            {
-                "case_id": raw["tool_input"]["_rap_systems_probe"]["case_id"],
-                "project_root": str(project.root),
-                "input_sha256": input_hash,
-                "hook_exit_ms": round(
-                    (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
-                ),
-                "event_to_first_query_visible_evaluation_ms": round(
-                    (first[input_hash] - hook["started_ns"]) / 1_000_000, 3
-                ),
-                "event_to_all_query_visible_evaluations_ms": round(
-                    (complete[input_hash] - hook["started_ns"]) / 1_000_000, 3
-                ),
-            }
+            sample_for(
+                project,
+                raw,
+                input_hash,
+                hook,
+                submissions[input_hash],
+                first,
+                complete,
+                int(wait["deadline_monotonic_ns"]),
+            )
         )
     samples.sort(key=lambda item: item["case_id"])
-    return samples, expected, rows
+    latest_hook_exit_ns = max(int(hook["exited_ns"]) for hook in hooks.values())
+    all_complete_ns = max(complete.values()) if len(complete) == len(events) else None
+    queue_drain_ns = (
+        max(0, int(all_complete_ns) - latest_hook_exit_ns)
+        if all_complete_ns is not None
+        else None
+    )
+    earliest_submission_ns = min(submissions.values())
+    workload_end_ns = (
+        int(all_complete_ns)
+        if all_complete_ns is not None
+        else int(wait["deadline_monotonic_ns"])
+    )
+    wait.update(
+        {
+            "burst_queue_drain_ns": queue_drain_ns,
+            "burst_queue_drain_ms": (
+                round(queue_drain_ns / 1_000_000, 3)
+                if queue_drain_ns is not None
+                else None
+            ),
+            "burst_queue_drain_censored_at_ns": (
+                None
+                if queue_drain_ns is not None
+                else max(0, int(wait["deadline_monotonic_ns"]) - latest_hook_exit_ns)
+            ),
+            "workload_wall_ns": max(0, workload_end_ns - earliest_submission_ns),
+            "workload_completed_monotonic_ns": all_complete_ns,
+        }
+    )
+    return samples, expected, rows, wait
 
 
 def _warm_fixture(
@@ -1202,7 +2547,7 @@ def _warm_fixture(
                 )
                 for artifact in fixture.artifacts
             ]
-            rows, _first, _complete = _wait_for_expected(
+            rows, _first, _complete, _wait = _wait_for_expected(
                 fixture.projects,
                 expected,
                 {input_hash: hook["started_ns"]},
@@ -1218,20 +2563,108 @@ def _warm_fixture(
 
 
 def _assert_clean_accounting(accounting: dict[str, Any], label: str) -> None:
-    keys = (
+    failures = {
+        key: accounting.get(key)
+        for key in ACCOUNTING_FAILURE_KEYS
+        if accounting.get(key)
+    }
+    finding_accounting = dict(accounting.get("findings") or {})
+    for key in (
         "loss_count",
         "duplicate_count",
         "unexpected_count",
-        "cross_project_contamination_count",
-        "failed_count",
-        "running_count",
-        "provenance_mismatch_count",
-    )
-    failures = {key: accounting.get(key) for key in keys if accounting.get(key)}
+        "wrong_project_count",
+        "finding_id_mismatch_count",
+        "evaluation_id_mismatch_count",
+    ):
+        if finding_accounting.get(key):
+            failures[f"findings.{key}"] = finding_accounting[key]
     if failures:
-        raise SystemsHarnessError(
+        raise SystemViolationError(
             f"{label} exact evaluation accounting failed: {failures}"
         )
+
+
+def _runtime_inventory(root: Path) -> list[dict[str, Any]]:
+    inventory = []
+    for path in sorted(root.rglob("*")):
+        try:
+            if not path.is_file() or path.is_symlink():
+                continue
+            inventory.append(
+                {
+                    "path": str(path.relative_to(root)),
+                    "bytes": int(path.stat().st_size),
+                    "sha256": _sha256_file(path),
+                }
+            )
+        except OSError:
+            continue
+    return inventory
+
+
+def _fixture_evidence(
+    fixture: RunningFixture,
+    rows_by_project: dict[str, list[dict[str, Any]]] | None = None,
+    findings_by_project: dict[str, list[dict[str, Any]]] | None = None,
+    *,
+    include_records: bool = True,
+) -> dict[str, Any]:
+    rows_by_project = rows_by_project or {
+        str(project.root): _full_evaluation_history(project.root)
+        for project in fixture.projects
+    }
+    findings_by_project = findings_by_project or {
+        str(project.root): _full_findings(project.root) for project in fixture.projects
+    }
+    try:
+        diagnostic_text = fixture.diagnostics.read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        diagnostic_text = ""
+    snapshot = ipc.send_request({"type": "snapshot"}, timeout=2.0) or {}
+    evaluation_projections = {
+        root: [_evaluation_projection(row) for row in rows]
+        for root, rows in rows_by_project.items()
+    }
+    finding_projections = {
+        root: [_finding_projection(Path(root), finding) for finding in findings]
+        for root, findings in findings_by_project.items()
+    }
+
+    def retained_projection(
+        values: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        if include_records:
+            return values
+        return {
+            root: {
+                "count": len(records),
+                "canonical_projection_sha256": _sha256_bytes(
+                    _canonical_json_bytes(_canonical_projection_order(records))
+                ),
+                "records": "retained in the immutable project journal",
+            }
+            for root, records in values.items()
+        }
+
+    return {
+        "retained_runtime_root": str(fixture.isolated_root)
+        if fixture.retained
+        else None,
+        "daemon_identity": fixture.identity,
+        "runtime_inventory": _runtime_inventory(fixture.isolated_root),
+        "daemon_diagnostics": {
+            "path": str(fixture.diagnostics),
+            "bytes": len(diagnostic_text.encode("utf-8")),
+            "sha256": _sha256_bytes(diagnostic_text.encode("utf-8")),
+            **({"text": diagnostic_text} if include_records else {}),
+        },
+        "daemon_snapshot": snapshot,
+        "evaluations": retained_projection(evaluation_projections),
+        "findings": retained_projection(finding_projections),
+    }
 
 
 def run_condition(
@@ -1244,18 +2677,38 @@ def run_condition(
     repeat: int,
     warmups_per_project: int,
     timeout: float,
+    drain_timeout: float | None = None,
     max_hook_workers: int,
     schedule: str = "round_robin_across_projects",
     strict: bool = True,
+    retained_root: Path | None = None,
 ) -> dict[str, Any]:
     selected = tuple(artifacts[:rule_count])
+    drain_timeout = drain_timeout or timeout
     if len(selected) != rule_count:
         raise ValueError("not enough rule artifacts for requested condition")
     condition_id = (
         f"r{rule_count}-p{project_count}-{schedule}-{mode}{event_count}-rep{repeat}"
     )
-    with _running_fixture(selected, project_count) as fixture:
+    with _running_fixture(
+        selected, project_count, retained_root=retained_root
+    ) as fixture:
         _warm_fixture(fixture, warmups_per_project, timeout)
+        baseline_rows = {
+            str(project.root): _full_evaluation_history(project.root)
+            for project in fixture.projects
+        }
+        baseline_evaluation_ids = {
+            str(row.get("evaluation_id", ""))
+            for rows in baseline_rows.values()
+            for row in rows
+        }
+        baseline_finding_ids = {
+            int(finding.get("finding_id", finding.get("id")))
+            for project in fixture.projects
+            for finding in _full_findings(project.root)
+            if finding.get("finding_id", finding.get("id")) is not None
+        }
         resources_before = _process_tree_snapshot(fixture.daemon.pid)
         storage_before = _storage_snapshot(fixture)
         started_wall_time = time.time()
@@ -1263,23 +2716,55 @@ def run_condition(
             fixture, condition_id, event_count, schedule=schedule
         )
         workload_started_ns = time.perf_counter_ns()
-        with _ResourceSampler(fixture.daemon.pid) as sampler:
-            samples, expected, rows = _invoke_event_group(
+        with (
+            _ResourceSampler(fixture.daemon.pid) as sampler,
+            _EvaluationJournalTailer(
+                fixture.projects,
+                fixture.isolated_root / "matrix-journal-progress.jsonl",
+            ) as matrix_tailer,
+            _IncrementalJsonlWriter(
+                fixture.isolated_root / "matrix-history-checkpoints.jsonl",
+                fsync_every=1,
+            ) as matrix_checkpoint_writer,
+        ):
+            samples, expected, rows, wait = _invoke_event_group(
                 fixture,
                 events,
                 mode=mode,
-                timeout=timeout,
+                timeout=(drain_timeout or timeout) if mode == "burst" else timeout,
                 max_workers=max_hook_workers,
+                tailer=matrix_tailer,
+                checkpoint_writer=matrix_checkpoint_writer,
+                baseline_rows_by_project={
+                    root: len(values) for root, values in baseline_rows.items()
+                },
             )
+        incremental_evidence = {
+            "journal_progress": matrix_tailer.receipt(),
+            "history_checkpoints": matrix_checkpoint_writer.receipt(),
+        }
         workload_finished_ns = time.perf_counter_ns()
+        rows = {
+            str(project.root): _full_evaluation_history(project.root)
+            for project in fixture.projects
+        }
+        findings = {
+            str(project.root): _full_findings(project.root)
+            for project in fixture.projects
+        }
         accounting = account_evaluations(
             rows,
             expected,
             selected,
             started_wall_time=started_wall_time,
+            baseline_evaluation_ids=baseline_evaluation_ids,
         )
-        if strict:
-            _assert_clean_accounting(accounting, condition_id)
+        accounting["findings"] = account_findings(
+            findings,
+            rows,
+            expected,
+            baseline_finding_ids=baseline_finding_ids,
+        )
         resources_after = _process_tree_snapshot(fixture.daemon.pid)
         storage_after = _storage_snapshot(fixture)
         all_resource_samples = [resources_before, *sampler.samples, resources_after]
@@ -1288,25 +2773,58 @@ def run_condition(
             for item in all_resource_samples
             if item.get("file_descriptors") is not None
         ]
-        hook_latencies = [float(item["hook_exit_ms"]) for item in samples]
-        first_latencies = [
-            float(item["event_to_first_query_visible_evaluation_ms"])
-            for item in samples
-        ]
-        complete_latencies = [
-            float(item["event_to_all_query_visible_evaluations_ms"]) for item in samples
-        ]
-        complete_by_project: dict[str, list[float]] = defaultdict(list)
+        hook_latencies_ns = [int(item["hook_exit_ns"]) for item in samples]
+        complete_by_project: dict[str, list[int]] = defaultdict(list)
         for item in samples:
-            complete_by_project[str(item["project_root"])].append(
-                float(item["event_to_all_query_visible_evaluations_ms"])
-            )
+            value = item.get("event_to_all_query_visible_evaluations_ns")
+            if value is not None:
+                complete_by_project[str(item["project_root"])].append(int(value))
         project_p95 = {
-            project: round(_nearest_rank(values, 95), 3)
+            project: {
+                "p95_nearest_rank_ns": int(_nearest_rank(values, 95)),
+                "p95_nearest_rank_ms": round(
+                    int(_nearest_rank(values, 95)) / 1_000_000, 3
+                ),
+            }
             for project, values in sorted(complete_by_project.items())
         }
-        wall_seconds = (workload_finished_ns - workload_started_ns) / 1_000_000_000
+        fairness = _fairness_summary(schedule, project_count, complete_by_project)
+        workload_wall_ns = int(
+            wait.get("workload_wall_ns")
+            or (workload_finished_ns - workload_started_ns)
+        )
+        wall_seconds = workload_wall_ns / 1_000_000_000
+        accounting_failure = any(accounting.get(key) for key in ACCOUNTING_FAILURE_KEYS)
+        finding_failure = any(
+            accounting["findings"].get(key)
+            for key in (
+                "loss_count",
+                "duplicate_count",
+                "unexpected_count",
+                "wrong_project_count",
+                "finding_id_mismatch_count",
+                "evaluation_id_mismatch_count",
+            )
+        )
+        hook_failure = any(
+            not bool((item.get("hook") or {}).get("contract_preserved"))
+            for item in samples
+        )
+        system_failure = bool(
+            wait.get("timed_out")
+            or wait.get("integrity_violation")
+            or accounting_failure
+            or finding_failure
+            or hook_failure
+        )
+        query_latencies_ns = [
+            int(item["latency_ns"]) for item in wait.get("query_samples", [])
+        ]
         return {
+            "status": (
+                "system_violation" if system_failure else "completed"
+            ),
+            "performance_failures_are_retained": True,
             "condition_id": condition_id,
             "rule_count": rule_count,
             "project_count": project_count,
@@ -1319,19 +2837,42 @@ def run_condition(
             "rule_ids": [artifact.rule_id for artifact in selected],
             "daemon_identity": fixture.identity,
             "wall_seconds": round(wall_seconds, 3),
+            "workload_wall_ns": workload_wall_ns,
             "event_throughput_per_second": round(event_count / wall_seconds, 3),
             "evaluation_throughput_per_second": round(
                 (event_count * rule_count) / wall_seconds, 3
             ),
-            "hook_process_exit": _summary(hook_latencies),
-            "event_to_first_query_visible_evaluation": _summary(first_latencies),
-            "event_to_all_query_visible_evaluations": _summary(complete_latencies),
-            "per_project_event_to_all_p95_ms": project_p95,
-            "per_project_p95_fairness_range_ms": (
-                round(max(project_p95.values()) - min(project_p95.values()), 3)
-                if project_p95
-                else 0.0
+            "hook_process_exit": _summary_ns(hook_latencies_ns),
+            "submission_to_hook_exit": _summary_ns(
+                [int(item["submission_to_hook_exit_ns"]) for item in samples]
             ),
+            "executor_queue": _summary_ns(
+                [int(item["executor_queue_ns"]) for item in samples]
+            ),
+            "event_to_first_query_visible_evaluation": _latency_summary(
+                samples, "event_to_first_query_visible_evaluation_ms"
+            ),
+            "event_to_all_query_visible_evaluations": _latency_summary(
+                samples, "event_to_all_query_visible_evaluations_ms"
+            ),
+            "evaluation_history_query": _summary_ns(query_latencies_ns)
+            if query_latencies_ns
+            else {"unit": "ms", "count": 0, "available": False},
+            "wait": {
+                key: value for key, value in wait.items() if key != "query_samples"
+            },
+            "incremental_evidence": incremental_evidence,
+            "burst_queue_drain": {
+                "applicable": mode == "burst",
+                "value_ns": wait.get("burst_queue_drain_ns"),
+                "display_ms": wait.get("burst_queue_drain_ms"),
+                "right_censored_at_ns": wait.get(
+                    "burst_queue_drain_censored_at_ns"
+                ),
+            },
+            "per_project_event_to_all_p95_ms": project_p95,
+            "per_project_p95_fairness_range_ms": fairness["range_ms"],
+            "fairness": fairness,
             "accounting": accounting,
             "resources": {
                 "scope": "daemon plus recursive child processes",
@@ -1362,7 +2903,323 @@ def run_condition(
                 "delta": _storage_delta(storage_before, storage_after),
             },
             "samples": samples,
+            "evidence": _fixture_evidence(fixture, rows, findings),
         }
+
+
+def _soak_history_checkpoint(
+    projects: Sequence[InstalledProject],
+    expected: Sequence[ExpectedEvaluation],
+    *,
+    batch_id: str,
+    deadline_ns: int,
+    writer: _IncrementalJsonlWriter,
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    expected_keys = {item.key for item in expected}
+    expected_key_set_sha256 = _sha256_bytes(
+        _canonical_json_bytes([_key_json(key) for key in sorted(expected_keys)])
+    )
+    query_samples: list[dict[str, Any]] = []
+    attempts = 0
+    last_rows: dict[str, list[dict[str, Any]]] = {}
+    last_missing = expected_keys
+    last_observed_ns: int | None = None
+    complete_after_deadline = False
+    while True:
+        attempts += 1
+        last_rows = {}
+        attempt_samples = []
+        for project in projects:
+            rows, sample = _timed_evaluation_history(project.root)
+            last_rows[str(project.root)] = rows
+            attempt_samples.append(sample)
+            query_samples.append(sample)
+        observed_ns = time.perf_counter_ns()
+        last_observed_ns = observed_ns
+        visible = _terminal_keys(last_rows, expected)
+        last_missing = expected_keys - visible
+        within_deadline = observed_ns <= deadline_ns
+        writer.append(
+            {
+                "batch_id": batch_id,
+                "expected_key_set_sha256": expected_key_set_sha256,
+                "attempt": attempts,
+                "observed_monotonic_ns": observed_ns,
+                "expected_terminal_tuples": len(expected_keys),
+                "visible_terminal_tuples": len(expected_keys) - len(last_missing),
+                "missing_count": len(last_missing),
+                "within_deadline": within_deadline,
+                "per_project_queries": attempt_samples,
+            }
+        )
+        if not last_missing and within_deadline:
+            return last_rows, {
+                "batch_id": batch_id,
+                "expected_key_set_sha256": expected_key_set_sha256,
+                "complete": True,
+                "timed_out": False,
+                "attempts": attempts,
+                "visible_monotonic_ns": observed_ns,
+                "missing": [],
+                "query_samples": query_samples,
+            }
+        if not last_missing:
+            complete_after_deadline = True
+            break
+        now_ns = time.perf_counter_ns()
+        if now_ns >= deadline_ns:
+            break
+        time.sleep(
+            min(
+                SOAK_HISTORY_CHECKPOINT_RETRY_SECONDS,
+                max(0.0, (deadline_ns - now_ns) / 1_000_000_000),
+            )
+        )
+    return last_rows, {
+        "batch_id": batch_id,
+        "expected_key_set_sha256": expected_key_set_sha256,
+        "complete": False,
+        "timed_out": True,
+        "attempts": attempts,
+        "visible_monotonic_ns": last_observed_ns if complete_after_deadline else None,
+        "complete_after_deadline": complete_after_deadline,
+        "missing": [_key_json(key) for key in sorted(last_missing)],
+        "query_samples": query_samples,
+    }
+
+
+def _invoke_soak_batch(
+    fixture: RunningFixture,
+    events: Sequence[tuple[InstalledProject, dict[str, Any], str, str]],
+    *,
+    batch_id: str,
+    tailer: _EvaluationJournalTailer,
+    checkpoint_writer: _IncrementalJsonlWriter,
+    timeout: float,
+    max_workers: int,
+) -> tuple[
+    list[dict[str, Any]],
+    list[ExpectedEvaluation],
+    dict[str, list[dict[str, Any]]],
+    dict[str, Any],
+]:
+    expected = _expected_for_events(events, fixture.artifacts)
+    expected_key_set_sha256 = _sha256_bytes(
+        _canonical_json_bytes(
+            [_key_json(key) for key in sorted({item.key for item in expected})]
+        )
+    )
+    expected_by_input: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    for item in expected:
+        expected_by_input[item.input_sha256].add(item.key)
+    hooks: dict[str, dict[str, Any]] = {}
+    submissions: dict[str, int] = {}
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, len(events)),
+        thread_name_prefix="rap-systems-soak-hooks",
+    ) as executor:
+        futures = {}
+        for project, raw, _text, input_hash in events:
+            submissions[input_hash] = time.perf_counter_ns()
+            future = executor.submit(
+                _invoke_raw, project.wrapper, raw, fixture.environment
+            )
+            futures[future] = input_hash
+        for future in as_completed(futures):
+            hooks[futures[future]] = future.result()
+    deadline_ns = min(submissions.values()) + int(timeout * 1_000_000_000)
+    first_terminal_ns: dict[str, int] = {}
+    all_terminal_ns: dict[str, int] = {}
+    late_all_terminal_ns: dict[str, int] = {}
+    journal_polls = 0
+    journal_bytes_read = 0
+    journal_records_read = 0
+    settle: dict[str, Any] = {
+        "attempted": False,
+        "complete": False,
+        "inflight_evaluations": None,
+        "observed_monotonic_ns": None,
+    }
+    checkpoint_rows: dict[str, list[dict[str, Any]]] = {}
+    checkpoint: dict[str, Any] = {
+        "batch_id": batch_id,
+        "expected_key_set_sha256": expected_key_set_sha256,
+        "complete": False,
+        "timed_out": True,
+        "attempts": 0,
+        "visible_monotonic_ns": None,
+        "missing": [_key_json(key) for key in sorted({item.key for item in expected})],
+        "query_samples": [],
+    }
+    while True:
+        progress = tailer.poll()
+        journal_polls += 1
+        journal_bytes_read += int(progress["bytes_read"])
+        journal_records_read += int(progress["records_read"])
+        observed_ns = int(progress["observed_monotonic_ns"])
+        within_deadline = observed_ns <= deadline_ns
+        for input_hash, keys in expected_by_input.items():
+            visible = tailer.terminal_keys.intersection(keys)
+            if within_deadline and visible and input_hash not in first_terminal_ns:
+                first_terminal_ns[input_hash] = observed_ns
+            if keys.issubset(tailer.terminal_keys):
+                if within_deadline and input_hash not in all_terminal_ns:
+                    all_terminal_ns[input_hash] = observed_ns
+                elif not within_deadline:
+                    late_all_terminal_ns.setdefault(input_hash, observed_ns)
+        if not within_deadline:
+            break
+        if len(all_terminal_ns) == len(expected_by_input):
+            settle["attempted"] = True
+            settle["started_monotonic_ns"] = time.perf_counter_ns()
+            remaining = max(0.0, (deadline_ns - time.perf_counter_ns()) / 1e9)
+            time.sleep(min(SOAK_BATCH_SETTLE_SECONDS, remaining))
+            settle_progress = tailer.poll()
+            journal_polls += 1
+            journal_bytes_read += int(settle_progress["bytes_read"])
+            journal_records_read += int(settle_progress["records_read"])
+            settle_ns = int(settle_progress["observed_monotonic_ns"])
+            settle_complete = bool(
+                settle_ns <= deadline_ns
+                and {item.key for item in expected}.issubset(tailer.terminal_keys)
+                and not tailer.started
+                and not tailer.outcomes_before_start
+            )
+            settle.update(
+                {
+                    "complete": settle_complete,
+                    "observed_monotonic_ns": settle_ns,
+                    "inflight_evaluations": int(
+                        settle_progress["inflight_evaluations"]
+                    ),
+                    "within_deadline": settle_ns <= deadline_ns,
+                    "settle_seconds": SOAK_BATCH_SETTLE_SECONDS,
+                }
+            )
+            if not settle_complete:
+                break
+            checkpoint_rows, checkpoint = _soak_history_checkpoint(
+                fixture.projects,
+                expected,
+                batch_id=batch_id,
+                deadline_ns=deadline_ns,
+                writer=checkpoint_writer,
+            )
+            break
+        now_ns = time.perf_counter_ns()
+        if now_ns >= deadline_ns:
+            break
+        time.sleep(
+            min(
+                SOAK_JOURNAL_POLL_INTERVAL_SECONDS,
+                max(0.0, (deadline_ns - now_ns) / 1_000_000_000),
+            )
+        )
+    checkpoint_ns = checkpoint.get("visible_monotonic_ns")
+    checkpoint_within_deadline = bool(
+        checkpoint.get("complete")
+        and checkpoint_ns is not None
+        and int(checkpoint_ns) <= deadline_ns
+    )
+    single_rotation_volume_exceeded = (
+        journal_bytes_read >= EVALUATION_JOURNAL_ROTATION_BYTES
+    )
+    samples = []
+    for project, raw, _text, input_hash in events:
+        submitted_ns = submissions[input_hash]
+        hook = hooks[input_hash]
+        journal_ns = all_terminal_ns.get(input_hash)
+        checkpoint_latency_ns = (
+            int(checkpoint_ns) - submitted_ns
+            if checkpoint_within_deadline
+            else None
+        )
+        censor_ns = max(0, deadline_ns - submitted_ns)
+        hook_latency_ns = int(hook["exited_ns"]) - int(hook["started_ns"])
+        samples.append(
+            {
+                "batch_id": batch_id,
+                "expected_key_set_sha256": expected_key_set_sha256,
+                "case_id": raw["tool_input"]["_rap_systems_probe"]["case_id"],
+                "project_root": str(project.root),
+                "input_sha256": input_hash,
+                "submitted_monotonic_ns": submitted_ns,
+                "hook_started_monotonic_ns": int(hook["started_ns"]),
+                "hook_exited_monotonic_ns": int(hook["exited_ns"]),
+                "censor_deadline_monotonic_ns": deadline_ns,
+                "hook_exit_ns": hook_latency_ns,
+                "soak_journal_terminal_observed_monotonic_ns": journal_ns,
+                "soak_journal_terminal_latency_ns": (
+                    int(journal_ns) - submitted_ns if journal_ns is not None else None
+                ),
+                "soak_batch_history_checkpoint_monotonic_ns": (
+                    checkpoint_ns if checkpoint_within_deadline else None
+                ),
+                "soak_batch_history_checkpoint_after_deadline_monotonic_ns": (
+                    checkpoint_ns
+                    if checkpoint_ns is not None and not checkpoint_within_deadline
+                    else None
+                ),
+                "event_to_all_query_visible_evaluations_ns": checkpoint_latency_ns,
+                "latency_censored_at_ns": (
+                    None if checkpoint_latency_ns is not None else censor_ns
+                ),
+                "hook_exit_ms": round(hook_latency_ns / 1_000_000, 3),
+                "event_to_all_query_visible_evaluations_ms": (
+                    round(checkpoint_latency_ns / 1_000_000, 3)
+                    if checkpoint_latency_ns is not None
+                    else None
+                ),
+                "latency_censored_at_ms": (
+                    None
+                    if checkpoint_latency_ns is not None
+                    else round(censor_ns / 1_000_000, 3)
+                ),
+                "hook": _hook_projection(hook),
+            }
+        )
+    latest_hook_exit_ns = max(int(item["exited_ns"]) for item in hooks.values())
+    queue_drain_ns = (
+        max(0, int(checkpoint_ns) - latest_hook_exit_ns)
+        if checkpoint_within_deadline
+        else None
+    )
+    return samples, expected, checkpoint_rows, {
+        "batch_id": batch_id,
+        "expected_key_set_sha256": expected_key_set_sha256,
+        "timed_out": not checkpoint_within_deadline,
+        "deadline_monotonic_ns": deadline_ns,
+        "missing_input_sha256": sorted(
+            set(expected_by_input) - set(all_terminal_ns)
+        ),
+        "journal_polls": journal_polls,
+        "journal_bytes_read": journal_bytes_read,
+        "journal_records_read": journal_records_read,
+        "journal_rotation_bytes": EVALUATION_JOURNAL_ROTATION_BYTES,
+        "single_rotation_volume_exceeded_diagnostic": (
+            single_rotation_volume_exceeded
+        ),
+        "journal_terminal_inputs": len(all_terminal_ns),
+        "journal_terminal_after_deadline_input_sha256": sorted(
+            late_all_terminal_ns
+        ),
+        "settle": settle,
+        "history_checkpoint": {
+            key: value for key, value in checkpoint.items() if key != "query_samples"
+        },
+        "query_samples": list(checkpoint.get("query_samples") or []),
+        "burst_queue_drain_ns": queue_drain_ns,
+        "burst_queue_drain_ms": (
+            round(queue_drain_ns / 1_000_000, 3)
+            if queue_drain_ns is not None
+            else None
+        ),
+        "workload_wall_ns": (
+            int(checkpoint_ns) - min(submissions.values())
+            if checkpoint_within_deadline
+            else max(0, deadline_ns - min(submissions.values()))
+        ),
+    }
 
 
 def run_soak(
@@ -1374,40 +3231,105 @@ def run_soak(
     batch_size: int,
     warmups_per_project: int,
     timeout: float,
+    drain_timeout: float | None = None,
     max_hook_workers: int,
     strict: bool = True,
+    retained_root: Path | None = None,
 ) -> dict[str, Any]:
     selected = tuple(artifacts[:rule_count])
+    drain_timeout = drain_timeout or timeout
     if batch_size * rule_count >= EVALUATION_HISTORY_LIMIT:
         raise ValueError("soak batch is too large for exact online accounting")
-    with _running_fixture(selected, project_count) as fixture:
+    with _running_fixture(
+        selected, project_count, retained_root=retained_root
+    ) as fixture:
         _warm_fixture(fixture, warmups_per_project, timeout)
+        baseline_rows = {
+            str(project.root): _full_evaluation_history(project.root)
+            for project in fixture.projects
+        }
+        baseline_evaluation_ids = {
+            str(row.get("evaluation_id", ""))
+            for rows in baseline_rows.values()
+            for row in rows
+        }
+        baseline_finding_ids = {
+            int(finding.get("finding_id", finding.get("id")))
+            for project in fixture.projects
+            for finding in _full_findings(project.root)
+            if finding.get("finding_id", finding.get("id")) is not None
+        }
         resources_before = _process_tree_snapshot(fixture.daemon.pid)
         storage_before = _storage_snapshot(fixture)
         batches = []
-        total_accounting: Counter[str] = Counter()
-        all_hook: list[float] = []
-        all_complete: list[float] = []
+        batch_accounting_sums: Counter[str] = Counter()
+        batch_finding_accounting_sums: Counter[str] = Counter()
+        all_hook_ns: list[int] = []
+        all_samples: list[dict[str, Any]] = []
+        all_expected: list[ExpectedEvaluation] = []
+        query_samples: list[dict[str, Any]] = []
+        resource_checkpoints: list[dict[str, Any]] = []
+        unresolved_batch_expected: list[ExpectedEvaluation] = []
+        unresolved_batch_id: str | None = None
+        batch_drain_failed = False
         started_ns = time.perf_counter_ns()
-        with _ResourceSampler(fixture.daemon.pid) as sampler:
+        started_wall = time.time()
+        seen_finding_ids = set(baseline_finding_ids)
+        with (
+            _ResourceSampler(
+                fixture.daemon.pid,
+                journal_path=fixture.isolated_root / "soak-resource-samples.jsonl",
+                keep_full_samples=not fixture.retained,
+            ) as sampler,
+            _EvaluationJournalTailer(
+                fixture.projects,
+                fixture.isolated_root / "soak-journal-progress.jsonl",
+            ) as tailer,
+            _IncrementalJsonlWriter(
+                fixture.isolated_root / "soak-history-checkpoints.jsonl",
+                fsync_every=1,
+            ) as checkpoint_writer,
+            _IncrementalJsonlWriter(
+                fixture.isolated_root / "soak-event-samples.jsonl",
+            ) as event_writer,
+        ):
             offset = 0
             while offset < event_count:
                 size = min(batch_size, event_count - offset)
                 condition_id = f"soak-r{rule_count}-p{project_count}-offset{offset}"
                 events = _build_events(fixture, condition_id, size)
                 batch_wall = time.time()
-                samples, expected, rows = _invoke_event_group(
+                samples, expected, rows, wait = _invoke_soak_batch(
                     fixture,
                     events,
-                    mode="burst",
-                    timeout=timeout,
+                    batch_id=condition_id,
+                    tailer=tailer,
+                    checkpoint_writer=checkpoint_writer,
+                    timeout=drain_timeout,
                     max_workers=max_hook_workers,
                 )
+                findings = {
+                    str(project.root): _full_findings(project.root)
+                    for project in fixture.projects
+                }
                 accounting = account_evaluations(
-                    rows, expected, selected, started_wall_time=batch_wall
+                    rows,
+                    expected,
+                    selected,
+                    started_wall_time=batch_wall,
                 )
-                if strict:
-                    _assert_clean_accounting(accounting, condition_id)
+                accounting["findings"] = account_findings(
+                    findings,
+                    rows,
+                    expected,
+                    baseline_finding_ids=seen_finding_ids,
+                )
+                seen_finding_ids.update(
+                    int(finding.get("finding_id", finding.get("id")))
+                    for project_findings in findings.values()
+                    for finding in project_findings
+                    if finding.get("finding_id", finding.get("id")) is not None
+                )
                 for name in (
                     "evaluations_expected",
                     "evaluations_observed_for_expected_keys",
@@ -1419,104 +3341,844 @@ def run_soak(
                     "running_count",
                     "provenance_mismatch_count",
                 ):
-                    total_accounting[name] += int(accounting.get(name, 0))
-                all_hook.extend(float(item["hook_exit_ms"]) for item in samples)
-                all_complete.extend(
-                    float(item["event_to_all_query_visible_evaluations_ms"])
-                    for item in samples
+                    batch_accounting_sums[name] += int(accounting.get(name, 0))
+                for name in (
+                    "findings_expected",
+                    "findings_observed_for_expected_keys",
+                    "loss_count",
+                    "duplicate_count",
+                    "unexpected_count",
+                    "wrong_project_count",
+                    "finding_id_mismatch_count",
+                    "evaluation_id_mismatch_count",
+                ):
+                    batch_finding_accounting_sums[name] += int(
+                        accounting["findings"].get(name, 0)
+                    )
+                all_hook_ns.extend(int(item["hook_exit_ns"]) for item in samples)
+                all_samples.extend(samples)
+                all_expected.extend(expected)
+                for sample in samples:
+                    event_writer.append(sample)
+                query_samples.extend(wait.get("query_samples", []))
+                checkpoint = _process_tree_snapshot(fixture.daemon.pid)
+                checkpoint.update(
+                    {
+                        "cumulative_events": offset + size,
+                        "observed_monotonic_ns": time.perf_counter_ns(),
+                        "observed_utc": datetime.now(timezone.utc).isoformat(),
+                    }
                 )
+                resource_checkpoints.append(checkpoint)
                 batches.append(
                     {
+                        "batch_id": condition_id,
+                        "expected_key_set_sha256": wait[
+                            "expected_key_set_sha256"
+                        ],
                         "offset": offset,
                         "events": size,
                         "accounting": accounting,
+                        "wait": {
+                            key: value
+                            for key, value in wait.items()
+                            if key != "query_samples"
+                        },
+                        "evaluation_history_query": _summary_ns(
+                            [
+                                int(item["latency_ns"])
+                                for item in wait.get("query_samples", [])
+                            ]
+                        )
+                        if wait.get("query_samples")
+                        else {"unit": "ns", "count": 0, "available": False},
                     }
                 )
                 offset += size
+                if wait.get("timed_out"):
+                    # Never submit a later batch while this serialized worker still
+                    # has a backlog.  The batch deadline is a retained system result.
+                    batch_drain_failed = True
+                    unresolved_batch_expected = list(expected)
+                    unresolved_batch_id = condition_id
+                    break
+            final_drain_started_ns = time.perf_counter_ns()
+            final_drain_deadline_ns = final_drain_started_ns + int(
+                drain_timeout * 1_000_000_000
+            )
+            if unresolved_batch_expected:
+                unresolved_keys = {
+                    item.key for item in unresolved_batch_expected
+                }
+                final_checkpoint: dict[str, Any] | None = None
+                final_checkpoint_rows: dict[str, list[dict[str, Any]]] = {}
+                final_journal_polls = 0
+                while time.perf_counter_ns() < final_drain_deadline_ns:
+                    tailer.poll()
+                    final_journal_polls += 1
+                    if unresolved_keys.issubset(tailer.terminal_keys):
+                        (
+                            final_checkpoint_rows,
+                            final_checkpoint,
+                        ) = _soak_history_checkpoint(
+                            fixture.projects,
+                            unresolved_batch_expected,
+                            batch_id=str(unresolved_batch_id),
+                            deadline_ns=final_drain_deadline_ns,
+                            writer=checkpoint_writer,
+                        )
+                        break
+                    time.sleep(
+                        min(
+                            SOAK_JOURNAL_POLL_INTERVAL_SECONDS,
+                            max(
+                                0.0,
+                                (
+                                    final_drain_deadline_ns
+                                    - time.perf_counter_ns()
+                                )
+                                / 1_000_000_000,
+                            ),
+                        )
+                    )
+                if final_checkpoint is None:
+                    final_checkpoint = {
+                        "batch_id": str(unresolved_batch_id),
+                        "expected_key_set_sha256": _sha256_bytes(
+                            _canonical_json_bytes(
+                                [
+                                    _key_json(key)
+                                    for key in sorted(unresolved_keys)
+                                ]
+                            )
+                        ),
+                        "complete": False,
+                        "timed_out": True,
+                        "attempts": 0,
+                        "visible_monotonic_ns": None,
+                        "missing": [
+                            _key_json(key)
+                            for key in sorted(
+                                unresolved_keys - tailer.terminal_keys
+                            )
+                        ],
+                        "query_samples": [],
+                    }
+                query_samples.extend(final_checkpoint.get("query_samples", []))
+                final_drain_wait = {
+                    "timed_out": not bool(final_checkpoint.get("complete")),
+                    "missing_input_sha256": sorted(
+                        {
+                            key[1]
+                            for key in unresolved_keys - tailer.terminal_keys
+                        }
+                    ),
+                    "deadline_monotonic_ns": final_drain_deadline_ns,
+                    "last_observed_monotonic_ns": (
+                        final_checkpoint.get("visible_monotonic_ns")
+                        or time.perf_counter_ns()
+                    ),
+                    "journal_polls": final_journal_polls,
+                    "history_checkpoint": {
+                        key: value
+                        for key, value in final_checkpoint.items()
+                        if key != "query_samples"
+                    },
+                    "checkpoint_rows": sum(
+                        len(rows) for rows in final_checkpoint_rows.values()
+                    ),
+                    "query_samples": list(
+                        final_checkpoint.get("query_samples") or []
+                    ),
+                }
+            else:
+                final_drain_wait = {
+                    "timed_out": False,
+                    "missing_input_sha256": [],
+                    "deadline_monotonic_ns": final_drain_deadline_ns,
+                    "last_observed_monotonic_ns": final_drain_started_ns,
+                    "query_samples": [],
+                    "proof": (
+                        "every bounded batch already reached complete query-visible "
+                        "terminal status before the next batch was submitted"
+                    ),
+                }
+            settle_started_ns = time.perf_counter_ns()
+            settle_quiescent = False
+            settle_progress: dict[str, Any] | None = None
+            if not final_drain_wait.get("timed_out"):
+                time.sleep(FINAL_DRAIN_SETTLE_SECONDS)
+                settle_progress = tailer.poll()
+                settle_quiescent = bool(
+                    not tailer.started and not tailer.outcomes_before_start
+                )
+            settle_finished_ns = time.perf_counter_ns()
+            drain_observation_finished_ns = int(
+                (settle_progress or {}).get("observed_monotonic_ns")
+                or settle_finished_ns
+            )
+            post_drain_snapshot_started_ns = time.perf_counter_ns()
+            post_drain_resources = _process_tree_snapshot(fixture.daemon.pid)
+            post_drain_snapshot_finished_ns = time.perf_counter_ns()
+            final_drain_wait["final_settle"] = {
+                "seconds": (
+                    FINAL_DRAIN_SETTLE_SECONDS
+                    if not final_drain_wait.get("timed_out")
+                    else None
+                ),
+                "started_monotonic_ns": settle_started_ns,
+                "finished_monotonic_ns": settle_finished_ns,
+                "quiescent": settle_quiescent,
+                "progress": settle_progress,
+                "post_drain_snapshot_started_monotonic_ns": (
+                    post_drain_snapshot_started_ns
+                ),
+                "post_drain_snapshot_finished_monotonic_ns": (
+                    post_drain_snapshot_finished_ns
+                ),
+            }
+            journal_reachability = tailer.named_inode_reachability()
+            # The tailer's persistent descriptors preserve expected terminal keys
+            # even when an old rotated inode is no longer named.  Detailed global
+            # counts come from the already retained bounded-batch checkpoints.
+            final_journal_rows = {
+                str(project.root): _full_evaluation_history(project.root)
+                for project in fixture.projects
+            }
+            expected_union = {item.key for item in all_expected}
+            final_journal_terminal = tailer.terminal_keys.intersection(expected_union)
+            final_journal_findings = {
+                str(project.root): _full_findings(project.root)
+                for project in fixture.projects
+            }
+            if journal_reachability["all_discovered_inodes_still_named"]:
+                final_journal_accounting = account_evaluations(
+                    final_journal_rows,
+                    all_expected,
+                    selected,
+                    started_wall_time=started_wall,
+                    baseline_evaluation_ids=baseline_evaluation_ids,
+                )
+                final_journal_accounting["findings"] = account_findings(
+                    final_journal_findings,
+                    final_journal_rows,
+                    all_expected,
+                    baseline_finding_ids=baseline_finding_ids,
+                )
+                final_accounting_source = "all_discovered_inodes_still_named"
+            else:
+                final_journal_accounting = {
+                    **dict(batch_accounting_sums),
+                    "expected_keys_observed": (
+                        len(expected_union)
+                        - int(batch_accounting_sums.get("loss_count", 0))
+                    ),
+                    "result_counts": {},
+                    "details": (
+                        "exact per-batch detail is retained in batches; an older "
+                        "held inode is no longer name-addressable for reprojection"
+                    ),
+                    "findings": dict(batch_finding_accounting_sums),
+                }
+                final_accounting_source = (
+                    "cumulative_bounded_batch_checkpoints_plus_persistent_terminal_keys"
+                )
+            final_journal_missing = sorted(
+                _key_json(key) for key in expected_union - final_journal_terminal
+            )
+            journal_union_complete = not final_journal_missing
+            final_drain_wait["full_journal_accounting"] = {
+                "expected_terminal_tuples": len(expected_union),
+                "observed_terminal_tuples": len(
+                    final_journal_terminal.intersection(expected_union)
+                ),
+                "missing": final_journal_missing,
+                "complete": journal_union_complete,
+                "accounting": final_journal_accounting,
+                "accounting_source": final_accounting_source,
+                "journal_inode_reachability": journal_reachability,
+            }
+            true_drain_complete = bool(
+                not final_drain_wait.get("timed_out")
+                and journal_union_complete
+                and settle_quiescent
+            )
+            journal_scan_finished_ns = time.perf_counter_ns()
+            true_drain_finished_ns = drain_observation_finished_ns
+            final_drain_wait["full_journal_scan_finished_monotonic_ns"] = (
+                journal_scan_finished_ns
+            )
+            final_drain_wait["journal_scan_excluded_from_rss_window"] = bool(
+                journal_scan_finished_ns >= post_drain_snapshot_finished_ns
+            )
+            restart_eligible = bool(
+                true_drain_complete
+                and settle_quiescent
+                and not batch_drain_failed
+                and offset == event_count
+                and _accounting_is_clean(final_journal_accounting)
+                and journal_reachability["all_discovered_inodes_still_named"]
+            )
+        incremental_evidence = {
+            "event_samples": event_writer.receipt(),
+            "journal_progress": tailer.receipt(),
+            "history_checkpoints": checkpoint_writer.receipt(),
+            "resource_samples": sampler.journal_receipt(),
+            "journal_inode_reachability": journal_reachability,
+        }
         finished_ns = time.perf_counter_ns()
-        resources_after = _process_tree_snapshot(fixture.daemon.pid)
+        post_scan_resources = _process_tree_snapshot(fixture.daemon.pid)
         storage_after = _storage_snapshot(fixture)
-        samples = [resources_before, *sampler.samples, resources_after]
+        global_rows = final_journal_rows
+        global_findings = final_journal_findings
+        global_accounting = final_journal_accounting
+        projection_available = bool(
+            journal_reachability["all_discovered_inodes_still_named"]
+        )
+        before_restart_bytes: bytes | None = None
+        before_restart_receipt: dict[str, Any] | None = None
+        if projection_available:
+            before_restart_evaluations = {
+                root: _canonical_projection_order(
+                    [
+                        _evaluation_projection(row)
+                        for row in rows
+                        if str(row.get("evaluation_id", ""))
+                        not in baseline_evaluation_ids
+                    ]
+                )
+                for root, rows in global_rows.items()
+            }
+            before_restart_findings = {
+                root: _canonical_projection_order(
+                    [
+                        _finding_projection(Path(root), finding)
+                        for finding in findings
+                        if int(finding.get("finding_id", finding.get("id", -1)))
+                        not in baseline_finding_ids
+                    ]
+                )
+                for root, findings in global_findings.items()
+            }
+            before_restart_bytes = json.dumps(
+                {
+                    "evaluations": before_restart_evaluations,
+                    "findings": before_restart_findings,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            before_restart_receipt = _write_immutable_evidence(
+                fixture.isolated_root
+                / "soak-persisted-projection-before-restart.json",
+                before_restart_bytes,
+            )
+        old_identity = fixture.identity
+        post_restart_query_receipt: dict[str, Any] | None = None
+        if restart_eligible:
+            if before_restart_bytes is None:
+                raise SystemsHarnessError(
+                    "restart was marked eligible without a complete projection"
+                )
+            integrated._stop_daemon(fixture.daemon)
+            try:
+                restarted, restarted_identity = integrated._start_daemon(
+                    fixture.environment, fixture.diagnostics, timeout
+                )
+            except Exception as exc:
+                raise SystemViolationError(
+                    f"post-soak production daemon restart failed: {exc}"
+                ) from None
+            fixture.daemon = restarted
+            fixture.identity = restarted_identity
+            after_restart_rows = {
+                str(project.root): _full_evaluation_history(project.root)
+                for project in fixture.projects
+            }
+            after_restart_findings = {
+                str(project.root): _full_findings(project.root)
+                for project in fixture.projects
+            }
+            after_restart_bytes = json.dumps(
+                {
+                    "evaluations": {
+                        root: _canonical_projection_order(
+                            [
+                                _evaluation_projection(row)
+                                for row in rows
+                                if str(row.get("evaluation_id", ""))
+                                not in baseline_evaluation_ids
+                            ]
+                        )
+                        for root, rows in after_restart_rows.items()
+                    },
+                    "findings": {
+                        root: _canonical_projection_order(
+                            [
+                                _finding_projection(Path(root), finding)
+                                for finding in findings
+                                if int(
+                                    finding.get("finding_id", finding.get("id", -1))
+                                )
+                                not in baseline_finding_ids
+                            ]
+                        )
+                        for root, findings in after_restart_findings.items()
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            after_restart_receipt = _write_immutable_evidence(
+                fixture.isolated_root
+                / "soak-persisted-projection-after-restart.json",
+                after_restart_bytes,
+            )
+            with _IncrementalJsonlWriter(
+                fixture.isolated_root / "soak-post-restart-history-query.jsonl",
+                fsync_every=1,
+            ) as post_restart_query_writer:
+                history_rows, restart_query = _timed_evaluation_history(
+                    fixture.projects[0].root
+                )
+                post_restart_query_writer.append(restart_query)
+            post_restart_query_receipt = post_restart_query_writer.receipt()
+            query_samples.append(restart_query)
+            restart_sample, restart_accounting = _single_event(
+                fixture, "soak-post-restart-recovery", timeout=timeout
+            )
+            restart_persistence = {
+                "status": "completed",
+                "old_daemon_identity": old_identity,
+                "new_daemon_identity": restarted_identity,
+                "persisted_projection_sha256_before": _sha256_bytes(
+                    before_restart_bytes
+                ),
+                "persisted_projection_sha256_after": _sha256_bytes(
+                    after_restart_bytes
+                ),
+                "persisted_projection_before_receipt": before_restart_receipt,
+                "persisted_projection_after_receipt": after_restart_receipt,
+                "exact_projection_bytes_preserved": (
+                    before_restart_bytes == after_restart_bytes
+                ),
+                "first_project_history_rows_query_visible": len(history_rows),
+                "history_query": restart_query,
+                "post_restart_event": restart_sample,
+                "post_restart_accounting": restart_accounting,
+            }
+        else:
+            after_restart_rows = global_rows
+            after_restart_findings = global_findings
+            restart_persistence = {
+                "status": "not_applicable",
+                "reason": (
+                    "restart persistence is not measured until every planned soak "
+                    "event has been submitted and the complete expected tuple set has "
+                    "reached a true terminal drain with all journal inodes still named"
+                ),
+                "old_daemon_identity": old_identity,
+                "new_daemon_identity": None,
+                "persisted_projection_sha256_before": (
+                    _sha256_bytes(before_restart_bytes)
+                    if before_restart_bytes is not None
+                    else None
+                ),
+                "persisted_projection_sha256_after": None,
+                "persisted_projection_before_receipt": before_restart_receipt,
+                "persisted_projection_after_receipt": None,
+                "exact_projection_bytes_preserved": None,
+                "post_restart_event": None,
+                "post_restart_accounting": None,
+            }
+        if post_restart_query_receipt is not None:
+            incremental_evidence["post_restart_history_query"] = (
+                post_restart_query_receipt
+            )
+        failure = any(global_accounting.get(key) for key in ACCOUNTING_FAILURE_KEYS)
+        finding_failure = any(
+            global_accounting["findings"].get(key)
+            for key in (
+                "loss_count",
+                "duplicate_count",
+                "unexpected_count",
+                "wrong_project_count",
+                "finding_id_mismatch_count",
+                "evaluation_id_mismatch_count",
+            )
+        )
+        restart_failure = (
+            restart_persistence.get("status") != "completed"
+            or not restart_persistence.get("exact_projection_bytes_preserved")
+            or not bool(
+                (
+                    (restart_persistence.get("post_restart_event") or {}).get(
+                        "hook"
+                    )
+                    or {}
+                ).get("contract_preserved")
+            )
+            or not _accounting_is_clean(
+                restart_persistence.get("post_restart_accounting")
+            )
+        )
+        system_violation = bool(
+            failure
+            or finding_failure
+            or batch_drain_failed
+            or not true_drain_complete
+            or offset != event_count
+            or restart_failure
+        )
+        first_submission_ns = min(
+            (
+                int(item["submitted_monotonic_ns"])
+                for item in all_samples
+            ),
+            default=started_ns,
+        )
+        rss_window = [
+            item
+            for item in sampler.rss_points
+            if first_submission_ns
+            <= int(item["observed_monotonic_ns"])
+            <= true_drain_finished_ns
+        ]
         return {
+            "status": "system_violation" if system_violation else "completed",
             "rule_count": rule_count,
             "project_count": project_count,
             "events": event_count,
+            "events_submitted": offset,
+            "events_not_submitted_after_drain_timeout": event_count - offset,
             "batch_size": batch_size,
             "fresh_daemon": True,
             "wall_seconds": round((finished_ns - started_ns) / 1_000_000_000, 3),
-            "hook_process_exit": _summary(all_hook),
-            "event_to_all_query_visible_evaluations": _summary(all_complete),
-            "accounting_totals": dict(total_accounting),
+            "hook_process_exit": _summary_ns(all_hook_ns),
+            "event_to_all_query_visible_evaluations": _latency_summary(
+                all_samples, "event_to_all_query_visible_evaluations_ms"
+            ),
+            "evaluation_history_query": _summary_ns(
+                [int(item["latency_ns"]) for item in query_samples]
+            ),
+            "query_samples": query_samples if not fixture.retained else [],
+            "incremental_evidence": incremental_evidence,
+            "global_accounting": global_accounting,
+            "batch_accounting_diagnostic_sums_not_global": dict(
+                batch_accounting_sums
+            ),
+            "post_drain": {
+                "status": "completed" if true_drain_complete else "not_applicable",
+                "final_drain_timeout_seconds": drain_timeout,
+                "final_drain_started_monotonic_ns": final_drain_started_ns,
+                "true_drain_finished_monotonic_ns": true_drain_finished_ns,
+                "final_drain_wait": {
+                    key: value
+                    for key, value in final_drain_wait.items()
+                    if key != "query_samples"
+                },
+                "settle_seconds": (
+                    FINAL_DRAIN_SETTLE_SECONDS
+                    if not final_drain_wait.get("timed_out")
+                    else None
+                ),
+                "settle_actual_ns": settle_finished_ns - settle_started_ns,
+                "settle_started_monotonic_ns": settle_started_ns,
+                "settle_finished_monotonic_ns": settle_finished_ns,
+                "snapshot_started_monotonic_ns": post_drain_snapshot_started_ns,
+                "snapshot_finished_monotonic_ns": post_drain_snapshot_finished_ns,
+                "rss_bytes": int(post_drain_resources["rss_bytes"]),
+                "process_tree": post_drain_resources,
+            },
             "resources": {
                 "before": resources_before,
-                "after": resources_after,
+                "after": post_drain_resources,
+                "post_scan_diagnostic_not_used_for_claims": post_scan_resources,
                 "peak_sampled_rss_bytes": max(
-                    int(item["rss_bytes"]) for item in samples
+                    (int(item["rss_bytes"]) for item in rss_window),
+                    default=max(
+                        int(resources_before["rss_bytes"]),
+                        int(sampler.peak_rss_bytes),
+                    ),
                 ),
-                "rss_change_bytes": int(resources_after["rss_bytes"])
+                "sample_count": sampler.sample_count,
+                "rss_change_bytes": int(post_drain_resources["rss_bytes"])
                 - int(resources_before["rss_bytes"]),
+                "rss_change_bytes_per_event": (
+                    round(
+                        (
+                            int(post_drain_resources["rss_bytes"])
+                            - int(resources_before["rss_bytes"])
+                        )
+                        / offset,
+                        6,
+                    )
+                    if offset
+                    else None
+                ),
+                "rss_change_bytes_per_event_denominator": {
+                    "field": "events_submitted",
+                    "value": offset,
+                },
+                "rss_slope": _rss_slope(rss_window),
+                "rss_slope_window": {
+                    "start_first_submission_monotonic_ns": first_submission_ns,
+                    "end_true_drain_monotonic_ns": true_drain_finished_ns,
+                },
+                "timestamped_samples": (
+                    rss_window if not fixture.retained else []
+                ),
+                "timestamped_samples_receipt": sampler.journal_receipt(),
+                "batch_checkpoints": resource_checkpoints,
                 "cpu_seconds_delta": round(
                     max(
                         0.0,
-                        float(resources_after["cpu_seconds"])
+                        float(post_drain_resources["cpu_seconds"])
                         - float(resources_before["cpu_seconds"]),
                     ),
                     6,
                 ),
             },
+            "restart_persistence": restart_persistence,
             "storage": {
                 "before": storage_before,
                 "after": storage_after,
                 "delta": _storage_delta(storage_before, storage_after),
             },
             "batches": batches,
+            "evidence": _fixture_evidence(
+                fixture,
+                after_restart_rows,
+                after_restart_findings,
+                include_records=not fixture.retained,
+            ),
         }
 
 
-def _network_blocker(root: Path) -> tuple[Path, Path]:
-    blocker = root / "offline-python"
-    blocker.mkdir()
-    log_path = root / "blocked-network.jsonl"
-    source = """import json
+def _network_blocker_source() -> str:
+    return """import json
 import os
 import socket
 import time
 
 _real_connect = socket.socket.connect
 _real_connect_ex = socket.socket.connect_ex
+_real_send = socket.socket.send
+_real_sendall = socket.socket.sendall
+_real_sendto = socket.socket.sendto
+_real_sendmsg = getattr(socket.socket, "sendmsg", None)
 _real_create_connection = socket.create_connection
 
-def _blocked(sock, address):
+def _append(path, value):
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(value) + "\\n")
+        except OSError:
+            pass
+
+_append(os.environ.get("RAP_OFFLINE_ACTIVATION_LOG", ""), {
+    "kind": "sitecustomize_loaded", "pid": os.getpid(), "time": time.time(),
+})
+
+def _record(api, family, address):
+    path = os.environ.get("RAP_OFFLINE_BLOCK_LOG", "")
+    _append(path, {
+        "pid": os.getpid(), "time": time.time(), "api": api,
+        "family": int(family), "address": repr(address),
+    })
+
+def _blocked(sock, address, api):
     if sock.family in (socket.AF_INET, socket.AF_INET6):
-        path = os.environ.get("RAP_OFFLINE_BLOCK_LOG", "")
-        if path:
-            try:
-                with open(path, "a", encoding="utf-8") as handle:
-                    handle.write(json.dumps({
-                        "pid": os.getpid(), "time": time.time(),
-                        "family": int(sock.family), "address": repr(address),
-                    }) + "\\n")
-            except OSError:
-                pass
+        _record(api, sock.family, address)
         raise OSError("RAP systems offline probe blocked an Internet socket")
 
 def _connect(sock, address):
-    _blocked(sock, address)
+    _blocked(sock, address, "socket.socket.connect")
     return _real_connect(sock, address)
 
 def _connect_ex(sock, address):
-    _blocked(sock, address)
+    _blocked(sock, address, "socket.socket.connect_ex")
     return _real_connect_ex(sock, address)
 
+def _send(sock, data, *args, **kwargs):
+    _blocked(sock, None, "socket.socket.send")
+    return _real_send(sock, data, *args, **kwargs)
+
+def _sendall(sock, data, *args, **kwargs):
+    _blocked(sock, None, "socket.socket.sendall")
+    return _real_sendall(sock, data, *args, **kwargs)
+
+def _sendto(sock, data, *args, **kwargs):
+    address = args[-1] if args else kwargs.get("address")
+    _blocked(sock, address, "socket.socket.sendto")
+    return _real_sendto(sock, data, *args, **kwargs)
+
+def _sendmsg(sock, buffers, *args, **kwargs):
+    address = args[-1] if args else kwargs.get("address")
+    _blocked(sock, address, "socket.socket.sendmsg")
+    return _real_sendmsg(sock, buffers, *args, **kwargs)
+
 def _create_connection(address, *args, **kwargs):
+    _record("socket.create_connection", socket.AF_UNSPEC, address)
     raise OSError("RAP systems offline probe blocked socket.create_connection")
 
 socket.socket.connect = _connect
 socket.socket.connect_ex = _connect_ex
+socket.socket.send = _send
+socket.socket.sendall = _sendall
+socket.socket.sendto = _sendto
+if _real_sendmsg is not None:
+    socket.socket.sendmsg = _sendmsg
 socket.create_connection = _create_connection
 """
-    (blocker / "sitecustomize.py").write_text(source, encoding="utf-8")
-    return blocker, log_path
+
+
+def _network_blocker(root: Path) -> tuple[Path, Path, Path, dict[str, Any]]:
+    blocker = root / "offline-python"
+    blocker.mkdir()
+    log_path = root / "blocked-network.jsonl"
+    activation_path = root / "offline-boundary-activation.jsonl"
+    source_receipt = _write_immutable_evidence(
+        blocker / "sitecustomize.py", _network_blocker_source().encode("utf-8")
+    )
+    return blocker, log_path, activation_path, source_receipt
+
+
+def _python_socket_boundary() -> dict[str, Any]:
+    return {
+        "id": PYTHON_SOCKET_BOUNDARY_ID,
+        "mechanism": "CPython sitecustomize monkeypatch inherited by Python children",
+        "blocked_families": ["AF_INET", "AF_INET6"],
+        "blocked_apis": [
+            "socket.socket.connect",
+            "socket.socket.connect_ex",
+            "socket.socket.send",
+            "socket.socket.sendall",
+            "socket.socket.sendto",
+            "socket.socket.sendmsg when available",
+            "socket.create_connection",
+        ],
+        "allowed": ["AF_UNIX local sockets"],
+        "outside_boundary": [
+            "native libraries or subprocesses that make socket syscalls without CPython socket APIs",
+            "non-Python processes",
+        ],
+        "advisory_environment_flags": ["HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"],
+    }
+
+
+def _persisted_predictions(
+    rows_by_project: dict[str, list[dict[str, Any]]],
+    *,
+    project: Path,
+    input_sha256: str,
+    rule_ids: Sequence[str],
+) -> dict[str, Any]:
+    rows = [
+        row
+        for row in rows_by_project.get(str(project), [])
+        if _input_hash_from_row(row) == input_sha256
+        and str((row.get("rule") or {}).get("id", "")) in set(rule_ids)
+        and str(row.get("status", "")) in ("completed", "failed")
+    ]
+    by_rule: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        by_rule[str((row.get("rule") or {}).get("id", ""))].append(row)
+    values = {}
+    for rule_id in rule_ids:
+        matching = by_rule.get(rule_id, [])
+        if len(matching) != 1:
+            values[rule_id] = {
+                "status": "missing" if not matching else "duplicate",
+                "terminal_rows": len(matching),
+                "error_code": None,
+                "persisted_prediction_utf8_present": False,
+                "persisted_prediction_utf8_hex": None,
+                "persisted_prediction_utf8_sha256": None,
+            }
+            continue
+        row = matching[0]
+        outcome = dict(row.get("outcome") or {})
+        prediction_present = "result" in outcome and outcome.get("result") is not None
+        persisted = (
+            str(outcome["result"]).encode("utf-8")
+            if prediction_present
+            else None
+        )
+        values[rule_id] = {
+            "status": str(row.get("status", "")),
+            "terminal_rows": 1,
+            "error_code": outcome.get("error_code"),
+            "persisted_prediction_utf8_present": prediction_present,
+            "persisted_prediction_utf8_hex": (
+                persisted.hex() if persisted is not None else None
+            ),
+            "persisted_prediction_utf8_sha256": (
+                _sha256_bytes(persisted) if persisted is not None else None
+            ),
+        }
+    return values
+
+
+def compare_persisted_predictions(
+    online: dict[str, Any], offline: dict[str, Any]
+) -> dict[str, Any]:
+    rule_ids = sorted(set(online) | set(offline))
+    mismatches = []
+    for rule_id in rule_ids:
+        left = online.get(rule_id)
+        right = offline.get(rule_id)
+        invalid_fields = []
+        for arm, record in (("online", left), ("offline", right)):
+            if not isinstance(record, dict):
+                invalid_fields.append(f"{arm}.record_missing")
+                continue
+            if record.get("status") != "completed":
+                invalid_fields.append(f"{arm}.status")
+            if record.get("terminal_rows") != 1:
+                invalid_fields.append(f"{arm}.terminal_rows")
+            if record.get("persisted_prediction_utf8_present") is not True:
+                invalid_fields.append(
+                    f"{arm}.persisted_prediction_utf8_present"
+                )
+        if left != right or invalid_fields:
+            fields = sorted(
+                key
+                for key in set((left or {}).keys()) | set((right or {}).keys())
+                if (left or {}).get(key) != (right or {}).get(key)
+            )
+            mismatches.append(
+                {
+                    "rule_id": rule_id,
+                    "differing_fields": sorted([*fields, *invalid_fields]),
+                    "online": left,
+                    "offline": right,
+                }
+            )
+    return {
+        "comparison_unit": "persisted_prediction_utf8_and_terminal_status",
+        "rule_count": len(rule_ids),
+        "exactly_equal": not mismatches,
+        "mismatches": mismatches,
+        "first_difference": mismatches[0] if mismatches else None,
+    }
+
+
+def _offline_arm_system_violation(
+    wait: Mapping[str, Any],
+    accounting: Mapping[str, Any],
+    sample: Mapping[str, Any] | None,
+) -> bool:
+    hook_ok = bool(
+        sample and (sample.get("hook") or {}).get("contract_preserved")
+    )
+    return bool(
+        wait.get("timed_out")
+        or wait.get("integrity_violation")
+        or not _accounting_is_clean(accounting)
+        or not hook_ok
+    )
 
 
 def run_offline_after_prepare(
@@ -1524,31 +4186,96 @@ def run_offline_after_prepare(
     *,
     rule_count: int,
     timeout: float,
+    retained_root: Path | None = None,
 ) -> dict[str, Any]:
     selected = tuple(artifacts[:rule_count])
-    with tempfile.TemporaryDirectory(prefix="rap-offline-", dir="/tmp") as temporary:
-        isolated_root = Path(temporary)
+    with _fixture_directory(retained_root) as isolated_root:
         with integrated._isolated_environment(isolated_root) as base_environment:
             base_environment = _subprocess_environment(base_environment)
-            projects = _install_projects(isolated_root, selected, 1)
-            diagnostics = isolated_root / "daemon-output.log"
-            online, online_identity = integrated._start_daemon(
-                base_environment, diagnostics, timeout
-            )
-            fixture = RunningFixture(
+            projects = _install_projects(isolated_root, selected, 2)
+            online_diagnostics = isolated_root / "online-daemon-output.log"
+            try:
+                online, online_identity = integrated._start_daemon(
+                    base_environment, online_diagnostics, timeout
+                )
+            except Exception as exc:
+                raise SystemViolationError(
+                    f"online prepared daemon did not become ready: {exc}"
+                ) from None
+            online_fixture = RunningFixture(
                 isolated_root,
                 dict(base_environment),
-                projects,
+                [projects[0]],
                 selected,
-                diagnostics,
+                online_diagnostics,
                 online,
                 online_identity,
+                retained_root is not None,
             )
             try:
-                _warm_fixture(fixture, 1, timeout)
+                _warm_fixture(online_fixture, 1, timeout)
+                online_baseline_evaluation_ids = {
+                    str(row.get("evaluation_id", ""))
+                    for row in _full_evaluation_history(projects[0].root)
+                }
+                online_baseline_finding_ids = {
+                    int(finding.get("finding_id", finding.get("id")))
+                    for finding in _full_findings(projects[0].root)
+                    if finding.get("finding_id", finding.get("id")) is not None
+                }
+                raw_online = _raw_event(
+                    projects[0].root,
+                    project_index=0,
+                    sequence=0,
+                    condition_id="offline-exact-replay",
+                    tool_input=selected[0].probe_tool_input,
+                )
+                exact_input = _expected_input(raw_online)
+                input_sha256 = _sha256_bytes(exact_input.encode("utf-8"))
+                online_event = [(projects[0], raw_online, exact_input, input_sha256)]
+                online_wall = time.time()
+                online_samples, online_expected, _online_rows, online_wait = (
+                    _invoke_event_group(
+                        online_fixture,
+                        online_event,
+                        mode="sequential",
+                        timeout=timeout,
+                        max_workers=1,
+                    )
+                )
+                online_rows = {
+                    str(projects[0].root): _full_evaluation_history(projects[0].root)
+                }
+                online_findings = {
+                    str(projects[0].root): _full_findings(projects[0].root)
+                }
+                online_accounting = account_evaluations(
+                    online_rows,
+                    online_expected,
+                    selected,
+                    started_wall_time=online_wall,
+                    baseline_evaluation_ids=online_baseline_evaluation_ids,
+                )
+                online_accounting["findings"] = account_findings(
+                    online_findings,
+                    online_rows,
+                    online_expected,
+                    baseline_finding_ids=online_baseline_finding_ids,
+                )
+                online_predictions = _persisted_predictions(
+                    online_rows,
+                    project=projects[0].root,
+                    input_sha256=input_sha256,
+                    rule_ids=[item.rule_id for item in selected],
+                )
+                online_evidence = _fixture_evidence(
+                    online_fixture, online_rows, online_findings
+                )
             finally:
                 integrated._stop_daemon(online)
-            blocker, block_log = _network_blocker(isolated_root)
+            blocker, block_log, activation_log, boundary_source_receipt = (
+                _network_blocker(isolated_root)
+            )
             offline_environment = dict(base_environment)
             offline_environment.update(
                 {
@@ -1556,55 +4283,345 @@ def run_offline_after_prepare(
                     + os.pathsep
                     + offline_environment.get("PYTHONPATH", ""),
                     "RAP_OFFLINE_BLOCK_LOG": str(block_log),
+                    "RAP_OFFLINE_ACTIVATION_LOG": str(activation_log),
                     "HF_HUB_OFFLINE": "1",
                     "TRANSFORMERS_OFFLINE": "1",
                 }
             )
-            offline, offline_identity = integrated._start_daemon(
-                offline_environment, diagnostics, timeout
-            )
+            offline_diagnostics = isolated_root / "offline-daemon-output.log"
+            raw_offline = json.loads(json.dumps(raw_online))
+            raw_offline["cwd"] = str(projects[1].root)
+            # Envelope IDs differ deterministically to avoid duplicate admission;
+            # the extracted declared input remains byte-identical.
+            raw_offline["session_id"] = f"{raw_online['session_id']}-offline"
+            raw_offline["turn_id"] = f"{raw_online['turn_id']}-offline"
+            raw_offline["tool_use_id"] = f"{raw_online['tool_use_id']}-offline"
+            offline_input = _expected_input(raw_offline)
+            offline_hash = _sha256_bytes(offline_input.encode("utf-8"))
+            try:
+                offline, offline_identity = integrated._start_daemon(
+                    offline_environment, offline_diagnostics, timeout
+                )
+            except Exception as exc:
+                blocked_attempts = _jsonl(block_log) if block_log.exists() else []
+                activation_records = (
+                    _jsonl(activation_log) if activation_log.exists() else []
+                )
+                try:
+                    diagnostic_bytes = offline_diagnostics.read_bytes()
+                except OSError:
+                    diagnostic_bytes = b""
+                offline_predictions = _persisted_predictions(
+                    {str(projects[1].root): []},
+                    project=projects[1].root,
+                    input_sha256=offline_hash,
+                    rule_ids=[item.rule_id for item in selected],
+                )
+                comparison = compare_persisted_predictions(
+                    online_predictions, offline_predictions
+                )
+                input_identity_equal = bool(
+                    exact_input.encode("utf-8") == offline_input.encode("utf-8")
+                    and input_sha256 == offline_hash
+                )
+                comparison.update(
+                    {
+                        "prediction_records_exactly_equal": False,
+                        "input_identity_equal": input_identity_equal,
+                        "exactly_equal": False,
+                    }
+                )
+                online_hook_ok = bool(
+                    online_samples
+                    and (online_samples[0].get("hook") or {}).get(
+                        "contract_preserved"
+                    )
+                )
+                return {
+                    "status": "system_violation",
+                    "prepared_online": True,
+                    "fresh_offline_daemon": False,
+                    "rule_count": rule_count,
+                    "online_daemon_identity": online_identity,
+                    "offline_daemon_identity": None,
+                    "network_boundary": _python_socket_boundary(),
+                    "boundary_source_receipt": boundary_source_receipt,
+                    "boundary_activation_records": activation_records,
+                    "offline_daemon_boundary_activated": False,
+                    "blocked_internet_attempts": len(blocked_attempts),
+                    "blocked_attempt_records": blocked_attempts,
+                    "exact_declared_input": {
+                        "encoding": "UTF-8 rendered as lowercase hexadecimal",
+                        "online_utf8_hex": exact_input.encode("utf-8").hex(),
+                        "offline_utf8_hex": offline_input.encode("utf-8").hex(),
+                        "online_sha256": input_sha256,
+                        "offline_sha256": offline_hash,
+                        "identical": input_identity_equal,
+                    },
+                    "online": {
+                        "status": (
+                            "system_violation"
+                            if _offline_arm_system_violation(
+                                online_wait,
+                                online_accounting,
+                                online_samples[0] if online_samples else None,
+                            )
+                            else "completed"
+                        ),
+                        "hook_contract_preserved": online_hook_ok,
+                        "envelope": _envelope_projection(raw_online),
+                        "accounting": online_accounting,
+                        "sample": online_samples[0],
+                        "wait": {
+                            key: value
+                            for key, value in online_wait.items()
+                            if key != "query_samples"
+                        },
+                        "persisted_predictions": online_predictions,
+                        "evidence": online_evidence,
+                    },
+                    "offline": {
+                        "status": "system_violation",
+                        "stage": "daemon_start_under_socket_boundary",
+                        "envelope": _envelope_projection(raw_offline),
+                        "error": {
+                            "type": type(exc).__name__,
+                            "message": str(exc),
+                            "traceback": traceback.format_exc(),
+                        },
+                        "accounting": None,
+                        "sample": None,
+                        "wait": {"status": "not_applicable"},
+                        "persisted_predictions": offline_predictions,
+                        "evidence": {
+                            "daemon_diagnostics": {
+                                "path": str(offline_diagnostics),
+                                "bytes": len(diagnostic_bytes),
+                                "sha256": _sha256_bytes(diagnostic_bytes),
+                                "text": diagnostic_bytes.decode(
+                                    "utf-8", errors="replace"
+                                ),
+                            },
+                            "blocked_attempt_records": blocked_attempts,
+                            "boundary_activation_records": activation_records,
+                        },
+                    },
+                    "comparison": comparison,
+                    "paired_event_to_all_latency": {
+                        "online_ns": online_samples[0].get(
+                            "event_to_all_query_visible_evaluations_ns"
+                        ),
+                        "offline_ns": None,
+                        "offline_minus_online_ns": None,
+                        "descriptive_only": True,
+                    },
+                    "limitation": (
+                        "The offline arm failed at the named CPython socket-boundary "
+                        "daemon start; the completed online arm and all available "
+                        "offline diagnostics remain part of this measured outcome."
+                    ),
+                }
             offline_fixture = RunningFixture(
                 isolated_root,
                 offline_environment,
-                projects,
+                [projects[1]],
                 selected,
-                diagnostics,
+                offline_diagnostics,
                 offline,
                 offline_identity,
+                retained_root is not None,
             )
             try:
                 started_wall = time.time()
-                events = _build_events(offline_fixture, "offline-after-prepare", 1)
-                samples, expected, rows = _invoke_event_group(
+                events = [(projects[1], raw_offline, offline_input, offline_hash)]
+                samples, expected, _rows, offline_wait = _invoke_event_group(
                     offline_fixture,
                     events,
                     mode="sequential",
                     timeout=timeout,
                     max_workers=1,
                 )
+                rows = {
+                    str(projects[1].root): _full_evaluation_history(projects[1].root)
+                }
+                findings = {
+                    str(projects[1].root): _full_findings(projects[1].root)
+                }
                 accounting = account_evaluations(
                     rows, expected, selected, started_wall_time=started_wall
                 )
-                _assert_clean_accounting(accounting, "offline-after-prepare")
+                accounting["findings"] = account_findings(
+                    findings, rows, expected
+                )
                 blocked_attempts = _jsonl(block_log) if block_log.exists() else []
+                activation_records = (
+                    _jsonl(activation_log) if activation_log.exists() else []
+                )
+                offline_daemon_boundary_activated = any(
+                    record.get("kind") == "sitecustomize_loaded"
+                    and record.get("pid") == offline_identity.get("pid")
+                    for record in activation_records
+                    if isinstance(record, dict)
+                )
+                offline_predictions = _persisted_predictions(
+                    rows,
+                    project=projects[1].root,
+                    input_sha256=offline_hash,
+                    rule_ids=[item.rule_id for item in selected],
+                )
+                comparison = compare_persisted_predictions(
+                    online_predictions, offline_predictions
+                )
+                online_input_bytes = exact_input.encode("utf-8")
+                offline_input_bytes = offline_input.encode("utf-8")
+                input_identity_equal = (
+                    online_input_bytes == offline_input_bytes
+                    and input_sha256 == offline_hash
+                )
+                comparison["prediction_records_exactly_equal"] = comparison[
+                    "exactly_equal"
+                ]
+                comparison["input_identity_equal"] = input_identity_equal
+                comparison["exactly_equal"] = bool(
+                    input_identity_equal
+                    and comparison["prediction_records_exactly_equal"]
+                )
+                if not input_identity_equal:
+                    comparison["first_difference"] = {
+                        "rule_id": None,
+                        "differing_fields": ["exact_declared_input_utf8"],
+                        "online": {
+                            "sha256": input_sha256,
+                            "utf8_hex": online_input_bytes.hex(),
+                        },
+                        "offline": {
+                            "sha256": offline_hash,
+                            "utf8_hex": offline_input_bytes.hex(),
+                        },
+                    }
+                online_latency_ns = online_samples[0].get(
+                    "event_to_all_query_visible_evaluations_ns"
+                )
+                offline_latency_ns = samples[0].get(
+                    "event_to_all_query_visible_evaluations_ns"
+                )
+                paired_latency = {
+                    "online_ns": online_latency_ns,
+                    "offline_ns": offline_latency_ns,
+                    "offline_minus_online_ns": (
+                        int(offline_latency_ns) - int(online_latency_ns)
+                        if online_latency_ns is not None
+                        and offline_latency_ns is not None
+                        else None
+                    ),
+                    "descriptive_only": True,
+                }
+                online_hook_ok = bool(
+                    online_samples
+                    and (online_samples[0].get("hook") or {}).get(
+                        "contract_preserved"
+                    )
+                )
+                offline_hook_ok = bool(
+                    samples
+                    and (samples[0].get("hook") or {}).get(
+                        "contract_preserved"
+                    )
+                )
+                online_arm_failure = _offline_arm_system_violation(
+                    online_wait,
+                    online_accounting,
+                    online_samples[0] if online_samples else None,
+                )
+                offline_arm_failure = _offline_arm_system_violation(
+                    offline_wait,
+                    accounting,
+                    samples[0] if samples else None,
+                )
+                system_failure = bool(
+                    online_arm_failure
+                    or offline_arm_failure
+                    or not offline_daemon_boundary_activated
+                    or not input_identity_equal
+                    or not comparison["exactly_equal"]
+                )
                 return {
+                    "status": (
+                        "system_violation"
+                        if system_failure
+                        else "completed"
+                    ),
                     "prepared_online": True,
                     "fresh_offline_daemon": True,
                     "rule_count": rule_count,
                     "online_daemon_identity": online_identity,
                     "offline_daemon_identity": offline_identity,
-                    "network_control": (
-                        "Python AF_INET/AF_INET6 connect paths blocked via sitecustomize; "
-                        "common model-hub offline flags also set"
+                    "network_boundary": _python_socket_boundary(),
+                    "boundary_source_receipt": boundary_source_receipt,
+                    "boundary_activation_records": activation_records,
+                    "offline_daemon_boundary_activated": (
+                        offline_daemon_boundary_activated
                     ),
                     "blocked_internet_attempts": len(blocked_attempts),
                     "blocked_attempt_records": blocked_attempts,
-                    "accounting": accounting,
-                    "sample": samples[0],
+                    "exact_declared_input": {
+                        "encoding": "UTF-8 rendered as lowercase hexadecimal",
+                        "online_utf8_hex": online_input_bytes.hex(),
+                        "offline_utf8_hex": offline_input_bytes.hex(),
+                        "online_sha256": input_sha256,
+                        "offline_sha256": offline_hash,
+                        "identical": input_identity_equal,
+                    },
+                    "online": {
+                        "status": (
+                            "system_violation"
+                            if online_arm_failure
+                            else "completed"
+                        ),
+                        "hook_contract_preserved": online_hook_ok,
+                        "envelope": _envelope_projection(raw_online),
+                        "accounting": online_accounting,
+                        "sample": online_samples[0],
+                        "wait": {
+                            key: value
+                            for key, value in online_wait.items()
+                            if key != "query_samples"
+                        },
+                        "persisted_predictions": online_predictions,
+                        "evidence": online_evidence,
+                    },
+                    "offline": {
+                        "status": (
+                            "system_violation"
+                            if offline_arm_failure
+                            else "completed"
+                        ),
+                        "hook_contract_preserved": offline_hook_ok,
+                        "envelope": _envelope_projection(raw_offline),
+                        "accounting": accounting,
+                        "sample": samples[0],
+                        "wait": {
+                            key: value
+                            for key, value in offline_wait.items()
+                            if key != "query_samples"
+                        },
+                        "persisted_predictions": offline_predictions,
+                        "evidence": _fixture_evidence(
+                            offline_fixture, rows, findings
+                        ),
+                    },
+                    "comparison": comparison,
+                    "paired_event_to_all_latency": paired_latency,
+                    "evidence": {
+                        "online": online_evidence,
+                        "offline": _fixture_evidence(
+                            offline_fixture, rows, findings
+                        ),
+                    },
                     "limitation": (
-                        "This is process-level Python socket blocking, not an OS network "
-                        "namespace; native libraries that bypass Python sockets are outside "
-                        "the injected boundary."
+                        "This is the named CPython socket-API boundary, not an OS "
+                        "network namespace. Persisted prediction labels are compared; "
+                        "the journal does not expose raw decoder token bytes."
                     ),
                 }
             finally:
@@ -1618,7 +4635,7 @@ def _wait_for_any_daemon(timeout: float) -> dict[str, Any]:
         if details:
             return details
         time.sleep(0.05)
-    raise SystemsHarnessError("auto-respawned daemon did not become ready")
+    raise SystemViolationError("auto-respawned daemon did not become ready")
 
 
 def _single_event(
@@ -1629,7 +4646,7 @@ def _single_event(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     started_wall = time.time()
     events = _build_events(fixture, condition_id, 1)
-    samples, expected, rows = _invoke_event_group(
+    samples, expected, rows, _wait = _invoke_event_group(
         fixture,
         events,
         mode="sequential",
@@ -1639,11 +4656,371 @@ def _single_event(
     accounting = account_evaluations(
         rows, expected, fixture.artifacts, started_wall_time=started_wall
     )
+    findings = {
+        str(project.root): _full_findings(project.root) for project in fixture.projects
+    }
+    accounting["findings"] = account_findings(findings, rows, expected)
     return samples[0], accounting
 
 
-def _fault_daemon_crash(artifact: RuleArtifact, timeout: float) -> dict[str, Any]:
-    with _running_fixture((artifact,), 1) as fixture:
+def _hook_projection(hook: dict[str, Any]) -> dict[str, Any]:
+    started_ns = int(hook["started_ns"])
+    exited_ns = int(hook["exited_ns"])
+    latency_ns = exited_ns - started_ns
+    return {
+        "started_monotonic_ns": started_ns,
+        "exited_monotonic_ns": exited_ns,
+        "latency_ns": latency_ns,
+        "returncode": hook.get("returncode"),
+        "stdout": hook.get("stdout", ""),
+        "stderr": hook.get("stderr", ""),
+        "timed_out": bool(hook.get("timed_out")),
+        "contract_preserved": bool(hook.get("contract_preserved")),
+        "contract_error": str(hook.get("contract_error", "")),
+        "latency_ms": round(latency_ns / 1_000_000, 3),
+    }
+
+
+def _persistent_state_integrity(fixture: RunningFixture) -> dict[str, Any]:
+    database = rap_config.db_path()
+    database_check: str | None = None
+    database_error = ""
+    if database.exists():
+        try:
+            with sqlite3.connect(str(database), timeout=2.0) as connection:
+                database_check = str(
+                    connection.execute("PRAGMA integrity_check").fetchone()[0]
+                )
+        except sqlite3.Error as exc:
+            database_error = f"{type(exc).__name__}: {exc}"
+    journal_errors = []
+    for project in fixture.projects:
+        for path in (
+            rap_config.project_evaluation_log_file(str(project.root)),
+            rap_config.project_log_file(str(project.root)),
+        ):
+            if not path.exists():
+                continue
+            try:
+                _jsonl(path)
+            except SystemsHarnessError as exc:
+                journal_errors.append(str(exc))
+    return {
+        "database_present": database.exists(),
+        "sqlite_integrity_check": database_check,
+        "database_error": database_error,
+        "journal_parse_errors": journal_errors,
+        "ok": (database_check in (None, "ok") and not database_error and not journal_errors),
+    }
+
+
+def _fault_fixture_observations(fixture: RunningFixture) -> dict[str, Any]:
+    snapshot = ipc.send_request({"type": "snapshot"}, timeout=2.0) or {}
+    return {
+        "persistent_state_integrity": _persistent_state_integrity(fixture),
+        "operator_visible_incidents": list(snapshot.get("health_issues") or []),
+        "orphan_process_count": None,
+        "orphan_process_count_status": (
+            "not_applicable_until_fixture_cleanup; retained process and state evidence "
+            "is available for independent inspection"
+        ),
+        "runtime_evidence": _fixture_evidence(fixture),
+    }
+
+
+def _orphan_processes(retained_root: Path | None) -> dict[str, Any]:
+    if retained_root is None:
+        return {"processes": None, "scan_errors": [], "race_diagnostics": []}
+    expected_state = str(retained_root / "state")
+    matches = []
+    scan_errors = []
+    race_diagnostics = []
+    for process in psutil.process_iter(["pid", "uids"]):
+        try:
+            uids = process.info.get("uids")
+            if uids is None:
+                uids = process.uids()
+            if int(uids.effective) != os.geteuid():
+                continue
+            if process.environ().get("RAP_STATE_DIR") != expected_state:
+                continue
+            matches.append(
+                {
+                    "pid": process.pid,
+                    "create_time": process.create_time(),
+                    "cmdline": list(process.cmdline() or []),
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.ZombieProcess) as exc:
+            race_diagnostics.append(
+                {
+                    "pid": int(getattr(process, "pid", -1)),
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+        except (psutil.AccessDenied, OSError) as exc:
+            scan_errors.append(
+                {
+                    "pid": int(getattr(process, "pid", -1)),
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+    return {
+        "processes": sorted(matches, key=lambda item: int(item["pid"])),
+        "scan_errors": sorted(
+            scan_errors, key=lambda item: (item["pid"], item["type"], item["message"])
+        ),
+        "race_diagnostics": sorted(
+            race_diagnostics,
+            key=lambda item: (item["pid"], item["type"], item["message"]),
+        ),
+    }
+
+
+def _wait_for_fault_process_cleanup(
+    retained_root: Path | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Retain bounded evidence that every fixture process exited after shutdown."""
+    started_ns = time.perf_counter_ns()
+    deadline_ns = started_ns + max(0, round(timeout * 1_000_000_000))
+    observations: list[dict[str, Any]] = []
+    while True:
+        query_started_ns = time.perf_counter_ns()
+        scan = _orphan_processes(retained_root)
+        # Preserve compatibility with focused test doubles while production
+        # always emits the complete scan receipt above.
+        if isinstance(scan, dict):
+            processes = scan.get("processes")
+            scan_errors = list(scan.get("scan_errors") or [])
+            race_diagnostics = list(scan.get("race_diagnostics") or [])
+        else:  # pragma: no cover - compatibility seam for external test doubles
+            processes = scan
+            scan_errors = []
+            race_diagnostics = []
+        query_finished_ns = time.perf_counter_ns()
+        within_deadline = query_finished_ns <= deadline_ns
+        observations.append(
+            {
+                "query_started_monotonic_ns": query_started_ns,
+                "query_finished_monotonic_ns": query_finished_ns,
+                "within_deadline": within_deadline,
+                "processes": processes,
+                "scan_errors": scan_errors,
+                "race_diagnostics": race_diagnostics,
+            }
+        )
+        if processes is None:
+            return {
+                "status": "not_measured_without_retained_runtime_root",
+                "started_monotonic_ns": started_ns,
+                "deadline_monotonic_ns": deadline_ns,
+                "finished_monotonic_ns": query_finished_ns,
+                "poll_interval_seconds": QUERY_POLL_INTERVAL_SECONDS,
+                "completed_within_deadline": False,
+                "observations": observations,
+                "final_orphan_processes": None,
+                "final_scan_errors": scan_errors,
+            }
+        if not processes and not scan_errors and within_deadline:
+            return {
+                "status": "complete",
+                "started_monotonic_ns": started_ns,
+                "deadline_monotonic_ns": deadline_ns,
+                "finished_monotonic_ns": query_finished_ns,
+                "poll_interval_seconds": QUERY_POLL_INTERVAL_SECONDS,
+                "completed_within_deadline": True,
+                "observations": observations,
+                "final_orphan_processes": [],
+                "final_scan_errors": [],
+            }
+        if query_finished_ns >= deadline_ns:
+            return {
+                "status": "timed_out",
+                "started_monotonic_ns": started_ns,
+                "deadline_monotonic_ns": deadline_ns,
+                "finished_monotonic_ns": query_finished_ns,
+                "poll_interval_seconds": QUERY_POLL_INTERVAL_SECONDS,
+                "completed_within_deadline": False,
+                "observations": observations,
+                "final_orphan_processes": processes,
+                "final_scan_errors": scan_errors,
+            }
+        remaining = (deadline_ns - query_finished_ns) / 1_000_000_000
+        time.sleep(min(QUERY_POLL_INTERVAL_SECONDS, remaining))
+
+
+def _force_terminate_fault_processes(
+    retained_root: Path,
+    processes: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Kill only processes whose retained runtime identity still matches exactly."""
+    expected_state_dir = str(retained_root / "state")
+    started_ns = time.perf_counter_ns()
+    actions: list[dict[str, Any]] = []
+    for captured in processes or ():
+        pid = int(captured.get("pid", -1))
+        captured_create_time = captured.get("create_time")
+        action: dict[str, Any] = {
+            "pid": pid,
+            "captured_create_time": captured_create_time,
+            "captured_cmdline": list(captured.get("cmdline") or []),
+            "expected_rap_state_dir": expected_state_dir,
+            "ownership_confirmed": False,
+            "action": "not_sent",
+        }
+        try:
+            process = psutil.Process(pid)
+            observed_create_time = process.create_time()
+            observed_state_dir = process.environ().get("RAP_STATE_DIR")
+            action["observed_create_time"] = observed_create_time
+            action["observed_rap_state_dir"] = observed_state_dir
+            action["observed_cmdline"] = process.cmdline()
+            identity_matches = (
+                captured_create_time is not None
+                and observed_create_time == captured_create_time
+                and observed_state_dir == expected_state_dir
+            )
+            action["ownership_confirmed"] = identity_matches
+            if not identity_matches:
+                action["action"] = "skipped_identity_mismatch"
+            else:
+                process.kill()
+                action["action"] = "sigkill_sent"
+        except psutil.NoSuchProcess:
+            action["action"] = "already_exited"
+        except (psutil.AccessDenied, psutil.ZombieProcess, OSError) as exc:
+            action["action"] = "kill_error"
+            action["error"] = f"{type(exc).__name__}: {exc}"
+        actions.append(action)
+    finished_ns = time.perf_counter_ns()
+    return {
+        "status": (
+            "completed_with_errors"
+            if any(item["action"] == "kill_error" for item in actions)
+            else "completed"
+        ),
+        "started_monotonic_ns": started_ns,
+        "finished_monotonic_ns": finished_ns,
+        "expected_rap_state_dir": expected_state_dir,
+        "actions": actions,
+    }
+
+
+def _fault_cleanup_error(exc: BaseException, stage: str) -> dict[str, Any]:
+    now_ns = time.perf_counter_ns()
+    return {
+        "status": "measurement_error",
+        "stage": stage,
+        "started_monotonic_ns": now_ns,
+        "deadline_monotonic_ns": now_ns,
+        "finished_monotonic_ns": now_ns,
+        "poll_interval_seconds": QUERY_POLL_INTERVAL_SECONDS,
+        "completed_within_deadline": False,
+        "observations": [],
+        "final_orphan_processes": None,
+        "final_scan_errors": [
+            {"pid": -1, "type": type(exc).__name__, "message": str(exc)}
+        ],
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        },
+    }
+
+
+def _settle_and_force_fault_cleanup(
+    retained_root: Path | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Settle, force exact retained processes if needed, and prove isolation."""
+    try:
+        initial_settle = _wait_for_fault_process_cleanup(retained_root, timeout)
+    except BaseException as exc:
+        initial_settle = _fault_cleanup_error(exc, "initial_settle")
+
+    force_actions: dict[str, Any] | None = None
+    final_settle = initial_settle
+    if retained_root is not None and not bool(
+        initial_settle.get("completed_within_deadline")
+    ):
+        force_started_ns = time.perf_counter_ns()
+        try:
+            force_actions = _force_terminate_fault_processes(
+                retained_root,
+                initial_settle.get("final_orphan_processes"),
+            )
+        except BaseException as exc:
+            force_finished_ns = time.perf_counter_ns()
+            force_actions = {
+                "status": "force_error",
+                "started_monotonic_ns": force_started_ns,
+                "finished_monotonic_ns": force_finished_ns,
+                "expected_rap_state_dir": str(retained_root / "state"),
+                "actions": [],
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "traceback": traceback.format_exc(),
+                },
+            }
+        try:
+            final_settle = _wait_for_fault_process_cleanup(retained_root, timeout)
+        except BaseException as exc:
+            final_settle = _fault_cleanup_error(exc, "post_force_settle")
+
+    final_orphans = final_settle.get("final_orphan_processes")
+    final_scan_errors = list(final_settle.get("final_scan_errors") or [])
+    measurable = retained_root is not None
+    safe_to_continue = (
+        not measurable
+        or (
+            bool(final_settle.get("completed_within_deadline"))
+            and final_orphans == []
+            and not final_scan_errors
+        )
+    )
+    return {
+        "initial_settle": initial_settle,
+        "forced_actions": force_actions,
+        "final_settle": final_settle,
+        "measurable": measurable,
+        "safe_to_continue": safe_to_continue,
+        "final_orphan_processes": final_orphans,
+        "final_scan_errors": final_scan_errors,
+    }
+
+
+def _attach_fault_cleanup_evidence(
+    probe_result: dict[str, Any], cleanup: Mapping[str, Any]
+) -> None:
+    initial_settle = dict(cleanup["initial_settle"])
+    final_settle = dict(cleanup["final_settle"])
+    orphan_processes = cleanup.get("final_orphan_processes")
+    probe_result["post_shutdown_process_cleanup"] = dict(cleanup)
+    probe_result["post_shutdown_process_settle"] = initial_settle
+    probe_result["forced_process_cleanup"] = cleanup.get("forced_actions")
+    probe_result["post_force_process_settle"] = final_settle
+    probe_result["orphan_processes_after_cleanup"] = orphan_processes
+    probe_result["orphan_process_count"] = (
+        len(orphan_processes) if orphan_processes is not None else None
+    )
+    probe_result["orphan_process_count_status"] = (
+        "measurement incomplete because the final process scan had errors"
+        if cleanup.get("final_scan_errors")
+        else "measured after bounded post-shutdown fixture cleanup and forced recheck"
+        if orphan_processes is not None
+        else "not measured without a retained runtime root"
+    )
+
+
+def _fault_daemon_crash(
+    artifact: RuleArtifact, timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         _warm_fixture(fixture, 1, timeout)
         old_pid = fixture.daemon.pid
         os.killpg(old_pid, signal.SIGKILL)
@@ -1678,14 +5055,17 @@ def _fault_daemon_crash(artifact: RuleArtifact, timeout: float) -> dict[str, Any
         recovery_sample, recovery_accounting = _single_event(
             recovery_fixture, "daemon-crash-recovery", timeout=timeout
         )
-        _assert_clean_accounting(recovery_accounting, "daemon crash recovery")
         return {
             "old_pid": old_pid,
             "new_pid": int(respawned.get("pid", -1)),
+            "old_pid_confirmed_dead": not psutil.pid_exists(old_pid),
             "faulting_hook_exit_ms": round(
                 (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
             ),
-            "faulting_hook_contract_preserved": True,
+            "faulting_hook_contract_preserved": bool(
+                hook.get("contract_preserved")
+            ),
+            "faulting_hook": _hook_projection(hook),
             "faulting_event_evaluations": len(lost_rows),
             "faulting_event_expected_loss": len(lost_rows) == 0,
             "interpretation": (
@@ -1696,17 +5076,19 @@ def _fault_daemon_crash(artifact: RuleArtifact, timeout: float) -> dict[str, Any
                 "sample": recovery_sample,
                 "accounting": recovery_accounting,
             },
+            **_fault_fixture_observations(fixture),
         }
 
 
-def _fault_worker_exit(artifact: RuleArtifact, timeout: float) -> dict[str, Any]:
-    with _running_fixture((artifact,), 1) as fixture:
+def _fault_worker_exit(
+    artifact: RuleArtifact, timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         _warm_fixture(fixture, 1, timeout)
         killed = integrated._kill_inference_worker(fixture.daemon.pid)
         sample, accounting = _single_event(
             fixture, "worker-exit-recovery", timeout=timeout
         )
-        _assert_clean_accounting(accounting, "worker exit recovery")
         new_pids = [
             pid
             for _rss, process in integrated._inference_workers(fixture.daemon.pid)
@@ -1715,9 +5097,13 @@ def _fault_worker_exit(artifact: RuleArtifact, timeout: float) -> dict[str, Any]
         return {
             **killed,
             "new_worker_pids": new_pids,
+            "old_worker_confirmed_absent": not psutil.pid_exists(
+                int(killed["old_worker_pid"])
+            ),
             "worker_replaced": killed["old_worker_pid"] not in new_pids
             and bool(new_pids),
             "recovery": {"sample": sample, "accounting": accounting},
+            **_fault_fixture_observations(fixture),
         }
 
 
@@ -1748,15 +5134,91 @@ def _wait_for_conversation(
     return last
 
 
-def _fault_worker_timeout(artifact: RuleArtifact, timeout: float) -> dict[str, Any]:
-    with _running_fixture((artifact,), 1) as fixture:
+def _wait_for_process_stopped(
+    process: psutil.Process,
+    *,
+    timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    started_ns = time.perf_counter_ns()
+    deadline_ns = started_ns + int(timeout_seconds * 1_000_000_000)
+    observations: list[dict[str, Any]] = []
+    stopped_statuses = {
+        psutil.STATUS_STOPPED,
+        getattr(psutil, "STATUS_TRACING_STOP", "tracing-stop"),
+    }
+    while True:
+        observed_ns = time.perf_counter_ns()
+        try:
+            status = process.status()
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+            return {
+                "confirmed": False,
+                "started_monotonic_ns": started_ns,
+                "finished_monotonic_ns": observed_ns,
+                "deadline_monotonic_ns": deadline_ns,
+                "observations": observations,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        observations.append(
+            {"observed_monotonic_ns": observed_ns, "status": status}
+        )
+        if status in stopped_statuses and observed_ns <= deadline_ns:
+            return {
+                "confirmed": True,
+                "started_monotonic_ns": started_ns,
+                "finished_monotonic_ns": observed_ns,
+                "deadline_monotonic_ns": deadline_ns,
+                "observations": observations,
+                "error": None,
+            }
+        if observed_ns >= deadline_ns:
+            return {
+                "confirmed": False,
+                "started_monotonic_ns": started_ns,
+                "finished_monotonic_ns": observed_ns,
+                "deadline_monotonic_ns": deadline_ns,
+                "observations": observations,
+                "error": None,
+            }
+        time.sleep(0.01)
+
+
+def _fault_worker_timeout(
+    artifact: RuleArtifact, timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         _warm_fixture(fixture, 1, timeout)
         candidates = integrated._inference_workers(fixture.daemon.pid)
         if not candidates:
-            raise SystemsHarnessError("could not identify worker for timeout probe")
+            raise SystemViolationError("could not identify worker for timeout probe")
         _rss, worker = max(candidates, key=lambda item: item[0])
         old_pid = worker.pid
+        stop_signal_sent_ns = time.perf_counter_ns()
         worker.send_signal(signal.SIGSTOP)
+        stopped = _wait_for_process_stopped(worker)
+        if not stopped["confirmed"]:
+            try:
+                if worker.is_running():
+                    worker.send_signal(signal.SIGCONT)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            return {
+                "old_worker_pid": old_pid,
+                "stop_signal_sent_monotonic_ns": stop_signal_sent_ns,
+                "old_worker_confirmed_stopped_before_dispatch": False,
+                "stop_confirmation": stopped,
+                "faulting_hook": None,
+                "failed_outcome": {
+                    "status": "not_applicable",
+                    "error_code": None,
+                    "error": "worker stop was not confirmed; no event dispatched",
+                },
+                "new_worker_pids": [],
+                "old_worker_confirmed_absent": False,
+                "worker_replaced": False,
+                "recovery": {"sample": None, "accounting": None},
+                **_fault_fixture_observations(fixture),
+            }
         project = fixture.projects[0]
         raw = _raw_event(
             project.root,
@@ -1780,47 +5242,52 @@ def _fault_worker_timeout(artifact: RuleArtifact, timeout: float) -> dict[str, A
                     worker.send_signal(signal.SIGCONT)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-        if row is None or str(row.get("status", "")) != "failed":
-            raise SystemsHarnessError(
-                "paused worker did not produce a failed timeout outcome"
-            )
+        failed_visible_ns = time.perf_counter_ns()
         recovery_sample, recovery_accounting = _single_event(
             fixture, "worker-timeout-recovery", timeout=max(timeout, 12.0)
         )
-        _assert_clean_accounting(recovery_accounting, "worker timeout recovery")
         new_pids = [
             process.pid
             for _rss, process in integrated._inference_workers(fixture.daemon.pid)
         ]
         return {
             "old_worker_pid": old_pid,
+            "stop_signal_sent_monotonic_ns": stop_signal_sent_ns,
+            "old_worker_confirmed_stopped_before_dispatch": True,
+            "stop_confirmation": stopped,
             "faulting_hook_exit_ms": round(
                 (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
             ),
+            "faulting_hook": _hook_projection(hook),
             "time_to_failed_outcome_ms": round(
-                (time.perf_counter_ns() - started) / 1_000_000, 3
+                (failed_visible_ns - started) / 1_000_000, 3
             ),
             "failed_outcome": {
-                "status": row.get("status"),
-                "error_code": (row.get("outcome") or {}).get("error_code"),
-                "error": (row.get("outcome") or {}).get("error"),
+                "status": (row or {}).get("status", "missing"),
+                "error_code": ((row or {}).get("outcome") or {}).get("error_code"),
+                "error": ((row or {}).get("outcome") or {}).get("error"),
             },
             "new_worker_pids": new_pids,
+            "old_worker_confirmed_absent": not psutil.pid_exists(old_pid),
             "worker_replaced": old_pid not in new_pids and bool(new_pids),
             "recovery": {
                 "sample": recovery_sample,
                 "accounting": recovery_accounting,
             },
+            **_fault_fixture_observations(fixture),
         }
 
 
-def _fault_sqlite_lock(timeout: float) -> dict[str, Any]:
+def _fault_sqlite_lock(
+    timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
     artifact = deterministic_artifact()
-    with _running_fixture((artifact,), 1) as fixture:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         _warm_fixture(fixture, 1, timeout)
         database = rap_config.db_path()
         lock = sqlite3.connect(str(database), timeout=1.0, isolation_level=None)
         lock.execute("BEGIN EXCLUSIVE")
+        lock_acquired_ns = time.perf_counter_ns()
         project = fixture.projects[0]
         raw = _raw_event(
             project.root,
@@ -1831,38 +5298,70 @@ def _fault_sqlite_lock(timeout: float) -> dict[str, Any]:
         )
         try:
             hook = _invoke_raw(project.wrapper, raw, fixture.environment)
-            time.sleep(SQLITE_BUSY_TIMEOUT_SECONDS + 1.0)
+            hold_deadline_ns = lock_acquired_ns + int(
+                (SQLITE_BUSY_TIMEOUT_SECONDS + 1.0) * 1_000_000_000
+            )
+            while time.perf_counter_ns() < hold_deadline_ns:
+                time.sleep(0.05)
+            snapshot_while_held = (
+                ipc.send_request({"type": "snapshot"}, timeout=2.0) or {}
+            )
         finally:
+            lock_release_started_ns = time.perf_counter_ns()
             lock.execute("ROLLBACK")
             lock.close()
+            lock_released_ns = time.perf_counter_ns()
         row = _wait_for_conversation(
             project.root, str(raw["session_id"]), 1.0, require_terminal=False
         )
-        snapshot = ipc.send_request({"type": "snapshot"}, timeout=2.0) or {}
+        snapshot_after_release = (
+            ipc.send_request({"type": "snapshot"}, timeout=2.0) or {}
+        )
         recovery_sample, recovery_accounting = _single_event(
             fixture, "sqlite-lock-recovery", timeout=timeout
         )
-        _assert_clean_accounting(recovery_accounting, "SQLite lock recovery")
         return {
             "lock_mode": "BEGIN EXCLUSIVE",
-            "held_seconds": SQLITE_BUSY_TIMEOUT_SECONDS + 1.0,
+            "lock_acquired_monotonic_ns": lock_acquired_ns,
+            "lock_release_started_monotonic_ns": lock_release_started_ns,
+            "lock_released_monotonic_ns": lock_released_ns,
+            "held_ns": lock_release_started_ns - lock_acquired_ns,
+            "held_seconds": round(
+                (lock_release_started_ns - lock_acquired_ns) / 1_000_000_000,
+                9,
+            ),
             "production_sqlite_timeout_seconds": SQLITE_BUSY_TIMEOUT_SECONDS,
             "faulting_hook_exit_ms": round(
                 (hook["exited_ns"] - hook["started_ns"]) / 1_000_000, 3
             ),
-            "faulting_hook_contract_preserved": True,
+            "faulting_hook_contract_preserved": bool(
+                hook.get("contract_preserved")
+            ),
+            "faulting_hook": _hook_projection(hook),
             "faulting_evaluation_status": (row or {}).get("status", "missing"),
             "faulting_evaluation_outcome": (row or {}).get("outcome", {}),
-            "health_issues": list(snapshot.get("health_issues") or []),
+            "health_issues_while_lock_held": list(
+                snapshot_while_held.get("health_issues") or []
+            ),
+            "health_issues_after_lock_release": list(
+                snapshot_after_release.get("health_issues") or []
+            ),
             "recovery": {"sample": recovery_sample, "accounting": recovery_accounting},
+            **_fault_fixture_observations(fixture),
         }
 
 
-def _fault_malformed_payload(timeout: float) -> dict[str, Any]:
+def _fault_malformed_payload(
+    timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
     artifact = deterministic_artifact()
-    with _running_fixture((artifact,), 1) as fixture:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         project = fixture.projects[0]
-        before = len(_evaluation_history(project.root))
+        baseline_rows = _full_evaluation_history(project.root)
+        baseline_ids = {
+            str(row.get("evaluation_id", "")) for row in baseline_rows
+        }
+        before = len(baseline_rows)
         malformed = _invoke_payload(
             project.wrapper, project.root, "{not-json", fixture.environment
         )
@@ -1876,28 +5375,38 @@ def _fault_malformed_payload(timeout: float) -> dict[str, Any]:
             tool_input={"command": "x" * 2048},
         )
         oversized_hook = _invoke_raw(project.wrapper, oversized, fixture.environment)
+        oversized_input_sha256 = _sha256_bytes(
+            _expected_input(oversized).encode("utf-8")
+        )
         oversized_row = _wait_for_conversation(
             project.root,
             str(oversized["session_id"]),
             timeout,
             require_terminal=True,
         )
-        if oversized_row is None:
-            raise SystemsHarnessError(
-                "oversized input did not reach evaluation history"
-            )
         recovery_sample, recovery_accounting = _single_event(
             fixture, "malformed-recovery", timeout=timeout
         )
-        _assert_clean_accounting(recovery_accounting, "malformed payload recovery")
+        final_exact_accounting = _fault_evaluation_quiescence(
+            project.root,
+            baseline_evaluation_ids=baseline_ids,
+            expected_input_sha256=(
+                oversized_input_sha256,
+                str(recovery_sample.get("input_sha256", "")),
+            ),
+        )
         return {
             "invalid_json": {
                 "hook_exit_ms": round(
                     (malformed["exited_ns"] - malformed["started_ns"]) / 1_000_000,
                     3,
                 ),
-                "hook_contract_preserved": True,
+                "hook_contract_preserved": bool(
+                    malformed.get("contract_preserved")
+                ),
+                "hook": _hook_projection(malformed),
                 "evaluation_history_delta": after - before,
+                "early_history_delta_is_diagnostic_only": True,
             },
             "oversized_trigger_field": {
                 "bytes": 2048,
@@ -1907,16 +5416,92 @@ def _fault_malformed_payload(timeout: float) -> dict[str, Any]:
                     / 1_000_000,
                     3,
                 ),
-                "status": oversized_row.get("status"),
-                "error_code": (oversized_row.get("outcome") or {}).get("error_code"),
+                "hook": _hook_projection(oversized_hook),
+                "status": (oversized_row or {}).get("status", "missing"),
+                "error_code": ((oversized_row or {}).get("outcome") or {}).get(
+                    "error_code"
+                ),
             },
+            "final_exact_evaluation_accounting": final_exact_accounting,
             "recovery": {"sample": recovery_sample, "accounting": recovery_accounting},
+            **_fault_fixture_observations(fixture),
         }
 
 
-def _fault_duplicate_delivery(timeout: float) -> dict[str, Any]:
+def _fault_evaluation_quiescence(
+    project_root: Path,
+    *,
+    baseline_evaluation_ids: set[str],
+    expected_input_sha256: Sequence[str],
+    settle_seconds: float = FINAL_DRAIN_SETTLE_SECONDS,
+) -> dict[str, Any]:
+    """Prove a bounded fault fixture has only its two declared evaluations."""
+
+    def scan() -> dict[str, Any]:
+        started_ns = time.perf_counter_ns()
+        rows = [
+            row
+            for row in _full_evaluation_history(project_root)
+            if str(row.get("evaluation_id", "")) not in baseline_evaluation_ids
+        ]
+        projections = _canonical_projection_order(
+            [_evaluation_projection(row) for row in rows]
+        )
+        finished_ns = time.perf_counter_ns()
+        return {
+            "started_monotonic_ns": started_ns,
+            "finished_monotonic_ns": finished_ns,
+            "count": len(rows),
+            "terminal_count": sum(
+                str(row.get("status", "")) in {"completed", "failed"}
+                for row in rows
+            ),
+            "input_sha256_counts": dict(
+                sorted(Counter(_input_hash_from_row(row) for row in rows).items())
+            ),
+            "canonical_projection_sha256": _sha256_bytes(
+                _canonical_json_bytes(projections)
+            ),
+            "records": projections,
+        }
+
+    before_settle = scan()
+    settle_started_ns = time.perf_counter_ns()
+    time.sleep(settle_seconds)
+    settle_finished_ns = time.perf_counter_ns()
+    after_settle = scan()
+    expected_counts = dict(sorted(Counter(expected_input_sha256).items()))
+    stable = (
+        before_settle["canonical_projection_sha256"]
+        == after_settle["canonical_projection_sha256"]
+    )
+    exact = (
+        after_settle["count"] == len(expected_input_sha256)
+        and after_settle["terminal_count"] == len(expected_input_sha256)
+        and after_settle["input_sha256_counts"] == expected_counts
+    )
+    return {
+        "complete": stable and exact,
+        "stable_across_settle": stable,
+        "exact_declared_terminal_records": exact,
+        "expected_input_sha256_counts": expected_counts,
+        "before_settle": before_settle,
+        "after_settle": after_settle,
+        "settle_seconds": settle_seconds,
+        "settle_started_monotonic_ns": settle_started_ns,
+        "settle_finished_monotonic_ns": settle_finished_ns,
+        "interpretation": (
+            "The early 0.2-second count is diagnostic only; pass/fail uses this "
+            "fixed quiescence interval and exact final bounded-fixture projection."
+        ),
+    }
+
+
+def _fault_duplicate_delivery(
+    timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
     artifact = deterministic_artifact()
-    with _running_fixture((artifact,), 1) as fixture:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         project = fixture.projects[0]
         raw = _raw_event(
             project.root,
@@ -1945,7 +5530,7 @@ def _fault_duplicate_delivery(timeout: float) -> dict[str, Any]:
                 rule_id=artifact.rule_id,
             )
         ]
-        rows, _first, _complete = _wait_for_expected(
+        rows, _first, _complete, _wait = _wait_for_expected(
             fixture.projects,
             expected,
             {input_hash: min(item["started_ns"] for item in hooks)},
@@ -1953,7 +5538,7 @@ def _fault_duplicate_delivery(timeout: float) -> dict[str, Any]:
         )
         relevant = [
             row
-            for row in rows[str(project.root)]
+            for row in rows.get(str(project.root), [])
             if _input_hash_from_row(row) == input_hash
             and str((row.get("rule") or {}).get("id", "")) == artifact.rule_id
         ]
@@ -1971,7 +5556,9 @@ def _fault_duplicate_delivery(timeout: float) -> dict[str, Any]:
         after_count = int(((after.get("daemon") or {}).get("ingress_duplicates", 0)))
         return {
             "deliveries": 2,
-            "hook_contracts_preserved": len(hooks) == 2,
+            "hook_contracts_preserved": len(hooks) == 2
+            and all(bool(hook.get("contract_preserved")) for hook in hooks),
+            "hooks": [_hook_projection(hook) for hook in hooks],
             "evaluations": len(relevant),
             "findings": finding_count,
             "ingress_duplicate_counter_delta": after_count - before_count,
@@ -1984,6 +5571,7 @@ def _fault_duplicate_delivery(timeout: float) -> dict[str, Any]:
                 "byte-identical concurrent redelivery while one daemon and its "
                 "short-window admission cache remain live"
             ),
+            **_fault_fixture_observations(fixture),
         }
 
 
@@ -2006,9 +5594,11 @@ def _seed_compiler_catalog() -> None:
     )
 
 
-def _fault_deployment_failure(timeout: float) -> dict[str, Any]:
+def _fault_deployment_failure(
+    timeout: float, retained_root: Path | None = None
+) -> dict[str, Any]:
     artifact = deterministic_artifact()
-    with _running_fixture((artifact,), 1) as fixture:
+    with _running_fixture((artifact,), 1, retained_root=retained_root) as fixture:
         _seed_compiler_catalog()
         project = fixture.projects[0]
         prepared = ipc.send_request(
@@ -2027,41 +5617,253 @@ def _fault_deployment_failure(timeout: float) -> dict[str, Any]:
             timeout=5.0,
         )
         if not prepared or not prepared.get("ok"):
-            raise SystemsHarnessError(
+            raise SystemViolationError(
                 f"deployment prepare failed unexpectedly: {prepared}"
             )
         changed_source = artifact.source.replace(
-            'name="Synthetic systems fault probe"',
-            'name="Changed after prepare"',
+            'return ctx.result("WARNING")',
+            'return ctx.result("CRITICAL")',
         )
+        working_behavior_changed = (
+            revisions.behavior_hash(changed_source) != artifact.behavior_sha256
+        )
+        if not working_behavior_changed:
+            raise SystemsHarnessError(
+                "deployment fault source mutation did not change behavior identity"
+            )
         saved = rules_api.save_rule(
             artifact.rule_id, changed_source, "project", str(project.root)
         )
         if not saved.get("ok"):
-            raise SystemsHarnessError(f"could not change prepared draft: {saved}")
+            raise SystemViolationError(f"could not change prepared draft: {saved}")
         committed = ipc.send_request(
             {"type": "commit_deployment", "token": str(prepared["token"])},
             timeout=5.0,
         )
-        if committed and committed.get("ok"):
-            raise SystemsHarnessError("stale deployment token unexpectedly committed")
         sample, accounting = _single_event(
             fixture, "deployment-failure-active-revision", timeout=timeout
         )
-        _assert_clean_accounting(accounting, "deployment failure active revision")
+        current = rules_api.get_rule(artifact.rule_id, str(project.root)) or {}
+        post_failure_active_source_sha256 = str(
+            (current.get("active") or {}).get("source_hash", "")
+        )
         return {
             "prepare_ok": True,
-            "working_source_changed_after_prepare": True,
+            "working_source_changed_after_prepare": (
+                revisions.hash_source(changed_source) != artifact.source_sha256
+            ),
+            "working_behavior_changed_after_prepare": working_behavior_changed,
             "commit_ok": bool((committed or {}).get("ok")),
             "commit_error": str((committed or {}).get("error", "")),
             "previous_active_source_sha256": artifact.source_sha256,
+            "post_failure_active_source_sha256": post_failure_active_source_sha256,
             "post_failure_accounting": accounting,
             "post_failure_sample": sample,
             "previous_active_revision_remained_effective": (
                 accounting["provenance_mismatch_count"] == 0
                 and accounting["failed_count"] == 0
+                and post_failure_active_source_sha256 == artifact.source_sha256
             ),
+            **_fault_fixture_observations(fixture),
         }
+
+
+def _accounting_is_clean(accounting: dict[str, Any] | None) -> bool:
+    accounting = accounting or {}
+    if any(accounting.get(key) for key in ACCOUNTING_FAILURE_KEYS):
+        return False
+    findings = dict(accounting.get("findings") or {})
+    return not any(
+        findings.get(key)
+        for key in (
+            "loss_count",
+            "duplicate_count",
+            "unexpected_count",
+            "wrong_project_count",
+            "finding_id_mismatch_count",
+            "evaluation_id_mismatch_count",
+        )
+    )
+
+
+def _fault_passed(name: str, result: dict[str, Any]) -> bool:
+    integrity = bool((result.get("persistent_state_integrity") or {}).get("ok"))
+    orphan_count = result.get("orphan_process_count")
+    cleanup_ok = orphan_count == 0 and bool(
+        (result.get("post_shutdown_process_settle") or {}).get(
+            "completed_within_deadline"
+        )
+    )
+    recovery = dict(result.get("recovery") or {})
+    recovery_accounting = recovery.get("accounting")
+    recovery_hook_ok = bool(
+        ((recovery.get("sample") or {}).get("hook") or {}).get(
+            "contract_preserved"
+        )
+    )
+    if name == "duplicate_delivery":
+        return (
+            cleanup_ok
+            and integrity
+            and result.get("hook_contracts_preserved") is True
+            and result.get("evaluations") == 1
+            and result.get("findings") == 1
+            and result.get("ingress_duplicate_counter_delta") == 1
+            and result.get("exactly_once_within_live_daemon_window") is True
+        )
+    if name == "deployment_failure":
+        return (
+            cleanup_ok
+            and integrity
+            and result.get("prepare_ok") is True
+            and result.get("working_source_changed_after_prepare") is True
+            and result.get("working_behavior_changed_after_prepare") is True
+            and result.get("commit_ok") is False
+            and "working draft changed" in str(result.get("commit_error", ""))
+            and result.get("previous_active_revision_remained_effective") is True
+            and result.get("post_failure_active_source_sha256")
+            == result.get("previous_active_source_sha256")
+            and _accounting_is_clean(result.get("post_failure_accounting"))
+            and bool(
+                ((result.get("post_failure_sample") or {}).get("hook") or {}).get(
+                    "contract_preserved"
+                )
+            )
+        )
+    if name == "malformed_payload":
+        malformed = dict(result.get("invalid_json") or {})
+        oversized = dict(result.get("oversized_trigger_field") or {})
+        return (
+            cleanup_ok
+            and integrity
+            and bool(malformed.get("hook_contract_preserved"))
+            and (result.get("final_exact_evaluation_accounting") or {}).get(
+                "complete"
+            )
+            and bool((oversized.get("hook") or {}).get("contract_preserved"))
+            and oversized.get("status") == "failed"
+            and oversized.get("error_code") == "input_too_large"
+            and _accounting_is_clean(recovery_accounting)
+            and recovery_hook_ok
+        )
+    if name == "worker_exit":
+        return (
+            cleanup_ok
+            and integrity
+            and bool(result.get("worker_replaced"))
+            and result.get("old_worker_confirmed_absent") is True
+            and bool(result.get("new_worker_pids"))
+            and _accounting_is_clean(recovery_accounting)
+            and recovery_hook_ok
+        )
+    if name == "worker_timeout":
+        return (
+            cleanup_ok
+            and integrity
+            and result.get("old_worker_confirmed_stopped_before_dispatch") is True
+            and (result.get("failed_outcome") or {}).get("status") == "failed"
+            and (result.get("failed_outcome") or {}).get("error_code")
+            == "invalid_output"
+            and bool(
+                (result.get("faulting_hook") or {}).get("contract_preserved")
+            )
+            and bool(result.get("worker_replaced"))
+            and result.get("old_worker_confirmed_absent") is True
+            and bool(result.get("new_worker_pids"))
+            and _accounting_is_clean(recovery_accounting)
+            and recovery_hook_ok
+        )
+    if name == "daemon_crash":
+        return (
+            cleanup_ok
+            and integrity
+            and result.get("old_pid_confirmed_dead") is True
+            and isinstance(result.get("new_pid"), int)
+            and int(result.get("new_pid", -1)) > 0
+            and result.get("new_pid") != result.get("old_pid")
+            and bool(result.get("faulting_hook_contract_preserved"))
+            and _accounting_is_clean(recovery_accounting)
+            and recovery_hook_ok
+        )
+    if name == "sqlite_lock":
+        return (
+            cleanup_ok
+            and integrity
+            and result.get("lock_mode") == "BEGIN EXCLUSIVE"
+            and float(result.get("held_seconds", 0.0))
+            > float(result.get("production_sqlite_timeout_seconds", float("inf")))
+            and bool(result.get("faulting_hook_contract_preserved"))
+            and _accounting_is_clean(recovery_accounting)
+            and recovery_hook_ok
+        )
+    return cleanup_ok and integrity
+
+
+def _standardized_fault_outcomes(
+    name: str, result: dict[str, Any]
+) -> dict[str, Any]:
+    recovery = dict(result.get("recovery") or {})
+    hook = (
+        result.get("faulting_hook")
+        or (result.get("invalid_json") or {}).get("hook")
+        or result.get("hooks")
+    )
+    return {
+        "schema_version": 1,
+        "injected_boundary": FAULT_CAPABILITIES[name].get("boundary", ""),
+        "fail_open_hook_contract_and_latency": hook,
+        "current_event_survival": {
+            key: result.get(key)
+            for key in (
+                "faulting_event_evaluations",
+                "faulting_event_expected_loss",
+                "faulting_evaluation_status",
+                "faulting_evaluation_outcome",
+            )
+            if key in result
+        },
+        "loss_and_duplication": (
+            recovery.get("accounting")
+            or result.get("post_failure_accounting")
+            or {
+                "evaluations": result.get("evaluations"),
+                "findings": result.get("findings"),
+            }
+        ),
+        "healthy_recovery": recovery or {
+            "sample": result.get("post_failure_sample"),
+            "accounting": result.get("post_failure_accounting"),
+        },
+        "previous_deployment_continuity": result.get(
+            "previous_active_revision_remained_effective"
+        ),
+        "orphan_process_count": result.get("orphan_process_count"),
+        "orphan_process_count_status": result.get("orphan_process_count_status"),
+        "post_shutdown_process_cleanup": result.get(
+            "post_shutdown_process_cleanup"
+        ),
+        "persistent_state_integrity": result.get("persistent_state_integrity"),
+        "operator_visible_incident_records": result.get(
+            "operator_visible_incidents", []
+        ),
+    }
+
+
+def _unknown_standardized_fault_outcomes(name: str) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "injected_boundary": FAULT_CAPABILITIES[name].get("boundary", ""),
+        "fail_open_hook_contract_and_latency": None,
+        "current_event_survival": None,
+        "loss_and_duplication": None,
+        "healthy_recovery": None,
+        "previous_deployment_continuity": None,
+        "orphan_process_count": None,
+        "orphan_process_count_status": "unknown_after_caught_exception",
+        "post_shutdown_process_cleanup": None,
+        "persistent_state_integrity": None,
+        "operator_visible_incident_records": [],
+    }
 
 
 def run_fault_suite(
@@ -2071,6 +5873,7 @@ def run_fault_suite(
     timeout: float,
     repetitions: int = DEFAULT_FAULT_REPETITIONS,
     strict: bool = True,
+    recorder: AttemptRecorder | None = None,
 ) -> dict[str, Any]:
     if repetitions < 1:
         raise ValueError("fault repetitions must be positive")
@@ -2079,13 +5882,13 @@ def run_fault_suite(
         raise ValueError(f"unknown fault probes: {unknown}")
     external = external_artifacts[0]
     runners = {
-        "daemon_crash": lambda: _fault_daemon_crash(external, timeout),
-        "worker_exit": lambda: _fault_worker_exit(external, timeout),
-        "worker_timeout": lambda: _fault_worker_timeout(external, timeout),
-        "sqlite_lock": lambda: _fault_sqlite_lock(timeout),
-        "malformed_payload": lambda: _fault_malformed_payload(timeout),
-        "duplicate_delivery": lambda: _fault_duplicate_delivery(timeout),
-        "deployment_failure": lambda: _fault_deployment_failure(timeout),
+        "daemon_crash": lambda root: _fault_daemon_crash(external, timeout, root),
+        "worker_exit": lambda root: _fault_worker_exit(external, timeout, root),
+        "worker_timeout": lambda root: _fault_worker_timeout(external, timeout, root),
+        "sqlite_lock": lambda root: _fault_sqlite_lock(timeout, root),
+        "malformed_payload": lambda root: _fault_malformed_payload(timeout, root),
+        "duplicate_delivery": lambda root: _fault_duplicate_delivery(timeout, root),
+        "deployment_failure": lambda root: _fault_deployment_failure(timeout, root),
     }
     results = {}
     for name in fault_names:
@@ -2095,36 +5898,147 @@ def run_fault_suite(
             continue
         attempts = []
         for repetition in range(repetitions):
+            attempt_id = f"{name}-rep{repetition}"
+            started_utc = datetime.now(timezone.utc).isoformat()
+            started_ns = time.perf_counter_ns()
+            if recorder:
+                recorder.record(
+                    "faults",
+                    attempt_id,
+                    "started",
+                    {
+                        "fault": name,
+                        "repetition": repetition,
+                        "phase": "started",
+                        "started_utc": started_utc,
+                        "started_monotonic_ns": started_ns,
+                    },
+                )
+            retained_root = (
+                recorder.root / "runtime" / "faults" / attempt_id
+                if recorder
+                else None
+            )
+            probe_result: dict[str, Any] | None = None
+            retained_exception: dict[str, Any] | None = None
+            cleanup: dict[str, Any]
             try:
-                attempts.append(
-                    {
-                        "repetition": repetition,
-                        "status": "completed",
-                        "result": runners[name](),
-                    }
-                )
+                probe_result = runners[name](retained_root)
             except Exception as exc:
-                attempts.append(
-                    {
-                        "repetition": repetition,
-                        "status": "error",
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-                if strict:
+                retained_exception = _retained_error(exc, retained_root)
+            finally:
+                cleanup = _settle_and_force_fault_cleanup(retained_root, timeout)
+            if probe_result is not None:
+                _attach_fault_cleanup_evidence(probe_result, cleanup)
+                passed = _fault_passed(name, probe_result)
+                finished_ns = time.perf_counter_ns()
+                duration_ns = finished_ns - started_ns
+                attempt = {
+                    "fault": name,
+                    "repetition": repetition,
+                    "status": "completed" if passed else "system_violation",
+                    "passed": passed,
+                    "started_utc": started_utc,
+                    "finished_utc": datetime.now(timezone.utc).isoformat(),
+                    "started_monotonic_ns": started_ns,
+                    "finished_monotonic_ns": finished_ns,
+                    "duration_ms": round(duration_ns / 1_000_000, 3),
+                    "duration_ns": duration_ns,
+                    "standardized_outcomes": _standardized_fault_outcomes(
+                        name, probe_result
+                    ),
+                    "probe_specific": probe_result,
+                    "error": None,
+                }
+            else:
+                if retained_exception is None:  # pragma: no cover - defensive
                     raise SystemsHarnessError(
-                        f"fault probe {name} repetition {repetition} failed: {exc}"
-                    ) from exc
+                        "fault probe produced neither a result nor an exception"
+                    )
+                exception_probe = {
+                    "probe_exception": retained_exception["error"],
+                }
+                _attach_fault_cleanup_evidence(exception_probe, cleanup)
+                standardized = _unknown_standardized_fault_outcomes(name)
+                standardized["orphan_process_count"] = exception_probe[
+                    "orphan_process_count"
+                ]
+                standardized["orphan_process_count_status"] = exception_probe[
+                    "orphan_process_count_status"
+                ]
+                standardized["post_shutdown_process_cleanup"] = cleanup
+                finished_ns = time.perf_counter_ns()
+                duration_ns = finished_ns - started_ns
+                attempt = {
+                    "fault": name,
+                    "repetition": repetition,
+                    "status": retained_exception["status"],
+                    "classification_basis": retained_exception[
+                        "classification_basis"
+                    ],
+                    "passed": False,
+                    "started_utc": started_utc,
+                    "finished_utc": datetime.now(timezone.utc).isoformat(),
+                    "started_monotonic_ns": started_ns,
+                    "finished_monotonic_ns": finished_ns,
+                    "duration_ms": round(duration_ns / 1_000_000, 3),
+                    "duration_ns": duration_ns,
+                    "standardized_outcomes": standardized,
+                    "probe_specific": exception_probe,
+                    "error": retained_exception["error"],
+                }
+            if not cleanup["safe_to_continue"]:
+                attempt["status"] = "system_violation"
+                attempt["passed"] = False
+                attempt["cleanup_system_violation"] = {
+                    "classification_basis": (
+                        "post-shutdown retained-runtime processes could not be "
+                        "proven absent after exact-owner forced cleanup"
+                    ),
+                    "cleanup": cleanup,
+                }
+            attempts.append(attempt)
+            if recorder:
+                recorder.record("faults", attempt_id, "terminal", attempt)
+            if not cleanup["safe_to_continue"]:
+                raise SystemViolationError(
+                    f"fault cleanup isolation failed after {attempt_id}; "
+                    "subsequent units were not started"
+                )
         results[name] = {
             "status": (
                 "completed"
-                if all(item["status"] == "completed" for item in attempts)
-                else "completed_with_errors"
+                if all(item["passed"] for item in attempts)
+                else "harness_error"
+                if any(item["status"] == "harness_error" for item in attempts)
+                else "infrastructure_error"
+                if any(
+                    item["status"] == "infrastructure_error" for item in attempts
+                )
+                else "unclassified_failure"
+                if any(
+                    item["status"] == "unclassified_failure" for item in attempts
+                )
+                else "system_violation"
             ),
             "capability": capability,
             "repetitions_planned": repetitions,
             "repetitions_completed": sum(
-                item["status"] == "completed" for item in attempts
+                item["status"] in ("completed", "system_violation")
+                for item in attempts
+            ),
+            "repetitions_passed": sum(item["passed"] for item in attempts),
+            "repetitions_system_violation": sum(
+                item["status"] == "system_violation" for item in attempts
+            ),
+            "repetitions_harness_error": sum(
+                item["status"] == "harness_error" for item in attempts
+            ),
+            "repetitions_infrastructure_error": sum(
+                item["status"] == "infrastructure_error" for item in attempts
+            ),
+            "repetitions_unclassified_failure": sum(
+                item["status"] == "unclassified_failure" for item in attempts
             ),
             "attempts": attempts,
         }
@@ -2139,7 +6053,8 @@ def _measurement_boundary() -> dict[str, Any]:
         "hook_start": "parent immediately before exact installed wrapper process launch",
         "hook_end": "parent immediately after the installed wrapper exits",
         "evaluation_start": (
-            "same parent timestamp immediately before installed wrapper process launch"
+            "parent time.perf_counter_ns immediately before executor.submit in burst "
+            "mode or direct installed-wrapper invocation in sequential mode"
         ),
         "evaluation_first_end": (
             "first successful daemon Evaluation History query containing any terminal "
@@ -2169,6 +6084,296 @@ def _measurement_boundary() -> dict[str, Any]:
             "installed-path, query-visible all-evaluation latency; not Codex turn or UI latency"
         ),
         "query_poll_interval_ms": int(QUERY_POLL_INTERVAL_SECONDS * 1000),
+        "single_event_timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+        "burst_and_soak_drain_timeout_seconds": DEFAULT_DRAIN_TIMEOUT_SECONDS,
+    }
+
+
+def reduce_matrix_attempts(
+    plan: Sequence[dict[str, Any]], matrix: Sequence[dict[str, Any]]
+) -> dict[str, Any]:
+    """Apply the preregistered complete-attempt reducer without dropping failures."""
+    planned_ids = [str(item["condition_id"]) for item in plan]
+    observed_by_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in matrix:
+        observed_by_id[str(item.get("condition_id", ""))].append(dict(item))
+    missing = [condition_id for condition_id in planned_ids if not observed_by_id[condition_id]]
+    duplicate_terminal = {
+        condition_id: len(items)
+        for condition_id, items in observed_by_id.items()
+        if condition_id and len(items) > 1
+    }
+    unexpected = sorted(set(observed_by_id) - set(planned_ids) - {""})
+
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for planned in plan:
+        condition_id = str(planned["condition_id"])
+        terminal = observed_by_id.get(condition_id, [])
+        item = terminal[0] if len(terminal) == 1 else {
+            "condition_id": condition_id,
+            "status": "missing_or_duplicate_terminal",
+            "samples": [],
+            "accounting": {},
+        }
+        key = (
+            int(planned["rule_count"]),
+            int(planned["project_count"]),
+            str(planned["schedule"]),
+            str(planned["mode"]),
+            int(planned["events"]),
+        )
+        grouped[key].append(item)
+
+    cells = []
+    for key, attempts in sorted(grouped.items()):
+        pooled_samples = [
+            sample for attempt in attempts for sample in attempt.get("samples", [])
+        ]
+        statuses = Counter(str(attempt.get("status", "missing")) for attempt in attempts)
+        accounting_totals: Counter[str] = Counter()
+        finding_totals: Counter[str] = Counter()
+        for attempt in attempts:
+            accounting = dict(attempt.get("accounting") or {})
+            for name in ACCOUNTING_FAILURE_KEYS:
+                accounting_totals[name] += int(accounting.get(name, 0) or 0)
+            for name in (
+                "loss_count",
+                "duplicate_count",
+                "unexpected_count",
+                "wrong_project_count",
+                "finding_id_mismatch_count",
+                "evaluation_id_mismatch_count",
+            ):
+                finding_totals[name] += int(
+                    (accounting.get("findings") or {}).get(name, 0) or 0
+                )
+        latency = (
+            _latency_summary(
+                pooled_samples, "event_to_all_query_visible_evaluations_ms"
+            )
+            if pooled_samples
+            else {
+                "unit": "ns",
+                "count": 0,
+                "observed_count": 0,
+                "right_censored_count": 0,
+                "available": False,
+            }
+        )
+        failed_attempts = sum(
+            count for status, count in statuses.items() if status != "completed"
+        )
+        cells.append(
+            {
+                "cell_id": (
+                    f"r{key[0]}-p{key[1]}-{key[2]}-{key[3]}{key[4]}"
+                ),
+                "rule_count": key[0],
+                "project_count": key[1],
+                "schedule": key[2],
+                "mode": key[3],
+                "events": key[4],
+                "repetitions_planned": len(attempts),
+                "attempt_status_counts": dict(sorted(statuses.items())),
+                "failed_or_incomplete_attempts": failed_attempts,
+                "event_to_all_query_visible_evaluations": latency,
+                "accounting_failure_totals": dict(accounting_totals),
+                "finding_failure_totals": dict(finding_totals),
+                "condition_ids": [
+                    str(attempt.get("condition_id", "")) for attempt in attempts
+                ],
+            }
+        )
+
+    def worst_key(cell: dict[str, Any]) -> tuple[Any, ...]:
+        latency = dict(cell["event_to_all_query_visible_evaluations"])
+        incomplete = int(cell["failed_or_incomplete_attempts"] > 0)
+        violations = sum(cell["accounting_failure_totals"].values()) + sum(
+            cell["finding_failure_totals"].values()
+        )
+        censored = int(latency.get("right_censored_count", 0) or 0)
+        p95 = int(latency.get("p95_nearest_rank_ns", -1) or -1)
+        maximum = int(latency.get("maximum_ns", -1) or -1)
+        return (
+            incomplete,
+            violations > 0,
+            censored > 0,
+            censored,
+            p95,
+            maximum,
+            cell["cell_id"],
+        )
+
+    worst = max(cells, key=worst_key) if cells else None
+    marginals = []
+    direct_by_dimensions = {
+        (
+            int(item.get("rule_count", 0)),
+            int(item.get("project_count", 0)),
+            str(item.get("schedule", "")),
+            str(item.get("mode", "")),
+            int(item.get("event_count", 0)),
+            int(item.get("repeat", -1)),
+        ): item
+        for item in matrix
+        if item.get("event_to_all_query_visible_evaluations")
+    }
+    for dimensions, item in sorted(direct_by_dimensions.items()):
+        rules, projects, schedule, mode, events, repeat = dimensions
+        current_ns = int(
+            item["event_to_all_query_visible_evaluations"].get(
+                "p95_nearest_rank_ns", 0
+            )
+            or 0
+        )
+        for factor_index, factor_name in ((0, "rule_count"), (1, "project_count")):
+            values = sorted({key[factor_index] for key in direct_by_dimensions})
+            previous_values = [value for value in values if value < dimensions[factor_index]]
+            if not previous_values:
+                continue
+            prior_value = max(previous_values)
+            prior_dimensions = list(dimensions)
+            prior_dimensions[factor_index] = prior_value
+            prior = direct_by_dimensions.get(tuple(prior_dimensions))
+            if prior is None:
+                continue
+            prior_p95_ns = int(
+                prior["event_to_all_query_visible_evaluations"].get(
+                    "p95_nearest_rank_ns", 0
+                )
+                or 0
+            )
+            added_units = dimensions[factor_index] - prior_value
+            delta_ns = current_ns - prior_p95_ns
+            change_per_unit_ns = delta_ns / added_units
+            marginals.append(
+                {
+                    "factor": factor_name,
+                    "from": prior_value,
+                    "to": dimensions[factor_index],
+                    "otherwise_matched": {
+                        "rule_count": rules,
+                        "project_count": projects,
+                        "schedule": schedule,
+                        "mode": mode,
+                        "events": events,
+                        "repeat": repeat,
+                    },
+                    "p95_delta_ns": delta_ns,
+                    "added_units": added_units,
+                    "p95_ns_change_per_added_unit": change_per_unit_ns,
+                    "display_p95_ms_change_per_added_unit": round(
+                        change_per_unit_ns / 1_000_000, 6
+                    ),
+                }
+            )
+    return {
+        "contract": {
+            "repetition_reducer": "pool event samples across all planned repetitions",
+            "censoring": (
+                "timeouts remain right-censored and enter percentile lower bounds at "
+                "their timeout; missing/error attempts outrank numeric cells as worse"
+            ),
+            "worst_case_order": (
+                "missing/error attempt, any accounting violation, any censoring, "
+                "censored count, pooled integer-ns p95 lower bound, integer-ns "
+                "maximum, lexical cell ID"
+            ),
+            "marginals": (
+                "adjacent rule/project finite differences selected from integer-ns "
+                "p95 within the same repetition, traffic, mode, and event count; "
+                "milliseconds are display-only"
+            ),
+        },
+        "plan_accounting": {
+            "planned": len(planned_ids),
+            "terminal_records": len(matrix),
+            "missing": missing,
+            "duplicate_terminal": duplicate_terminal,
+            "unexpected": unexpected,
+        },
+        "cells": cells,
+        "worst_case": worst,
+        "marginal_contrasts": marginals,
+    }
+
+
+def _git_state_allowing_attempt(attempt_root: Path | None) -> dict[str, Any]:
+    scope = ["rules_as_programs", "experiments/eacl2027", "pyproject.toml"]
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+        ).strip()
+        status = subprocess.check_output(
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+                "--",
+                *scope,
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+        ).splitlines()
+        allowed_prefix = ""
+        if attempt_root is not None:
+            try:
+                allowed_prefix = str(attempt_root.resolve().relative_to(REPO_ROOT))
+            except ValueError:
+                allowed_prefix = ""
+        dirty = [
+            line
+            for line in status
+            if not allowed_prefix
+            or not line[3:].strip().startswith(allowed_prefix)
+        ]
+        return {"commit": commit, "dirty": bool(dirty), "scope": scope}
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": "", "dirty": True, "scope": scope}
+
+
+def _classify_unit_exception(exc: BaseException) -> tuple[str, str]:
+    """Classify only from positive cause evidence; unknown is never rerunnable."""
+    if isinstance(exc, SystemViolationError):
+        return (
+            "system_violation",
+            "explicit measured daemon/worker/evaluation/accounting/fault-boundary failure",
+        )
+    if isinstance(exc, ExternalInfrastructureError):
+        return (
+            "infrastructure_error",
+            "positive host/storage durability failure outside measured RAP behavior",
+        )
+    if isinstance(exc, MemoryError) or (
+        isinstance(exc, OSError) and exc.errno == errno.ENOMEM
+    ):
+        return (
+            "system_violation",
+            "fixed-resource process memory exhaustion at a measured boundary",
+        )
+    if isinstance(exc, SystemsHarnessError):
+        return (
+            "harness_error",
+            "explicit runner/plan/schema invariant failure",
+        )
+    return (
+        "unclassified_failure",
+        "cause is not positively proven as harness or external infrastructure; not rerun-eligible",
+    )
+
+
+def _retained_error(exc: BaseException, retained_root: Path | None) -> dict[str, Any]:
+    status, basis = _classify_unit_exception(exc)
+    return {
+        "status": status,
+        "classification_basis": basis,
+        "error": {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+            "retained_runtime_root": str(retained_root) if retained_root else None,
+        },
     }
 
 
@@ -2180,13 +6385,45 @@ def run_study(
     run_offline_probe: bool,
     strict: bool,
     formal: bool = False,
+    recorder: AttemptRecorder | None = None,
 ) -> dict[str, Any]:
     config.validate(len(bundle.artifacts))
-    plan = build_matrix_plan(config)
+    matrix_plan = build_matrix_plan(config)
+    plan = build_study_plan(
+        config,
+        fault_names=fault_names,
+        run_offline_probe=run_offline_probe,
+    )
+    source_state_at_start = (
+        dict((recorder.manifest.get("identity") or {}).get("git") or {})
+        if recorder and formal
+        else integrated._git_state()
+    )
     matrix = []
-    for item in plan:
-        matrix.append(
-            run_condition(
+    for item in matrix_plan:
+        condition_id = str(item["condition_id"])
+        started_utc = datetime.now(timezone.utc).isoformat()
+        started_ns = time.perf_counter_ns()
+        retained_root = (
+            recorder.root / "runtime" / "matrix" / condition_id
+            if recorder
+            else None
+        )
+        if recorder:
+            recorder.record(
+                "matrix",
+                condition_id,
+                "started",
+                {
+                    "phase": "started",
+                    "plan": item,
+                    "started_utc": started_utc,
+                    "started_monotonic_ns": started_ns,
+                    "retained_runtime_root": str(retained_root),
+                },
+            )
+        try:
+            condition = run_condition(
                 bundle.artifacts,
                 rule_count=int(item["rule_count"]),
                 project_count=int(item["project_count"]),
@@ -2196,51 +6433,245 @@ def run_study(
                 warmups_per_project=config.warmups_per_project,
                 timeout=config.timeout_seconds,
                 max_hook_workers=config.max_hook_workers,
+                drain_timeout=config.drain_timeout_seconds,
                 schedule=str(item["schedule"]),
                 strict=strict,
+                retained_root=retained_root,
             )
-        )
+        except Exception as exc:
+            retained = _retained_error(exc, retained_root)
+            condition = {
+                **item,
+                **retained,
+                "started_utc": started_utc,
+                "finished_utc": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": round(
+                    (time.perf_counter_ns() - started_ns) / 1_000_000, 3
+                ),
+                "samples": [],
+                "accounting": {},
+            }
+        matrix.append(condition)
+        if recorder:
+            recorder.record("matrix", condition_id, "terminal", condition)
     soak = None
     if config.soak_events:
-        soak = run_soak(
-            bundle.artifacts,
-            rule_count=config.soak_rule_count,
-            project_count=config.soak_project_count,
-            event_count=config.soak_events,
-            batch_size=config.soak_batch_size,
-            warmups_per_project=config.warmups_per_project,
-            timeout=config.timeout_seconds,
-            max_hook_workers=config.max_hook_workers,
-            strict=strict,
-        )
-    offline = (
-        run_offline_after_prepare(
-            bundle.artifacts,
-            rule_count=max(config.rule_counts),
-            timeout=config.timeout_seconds,
-        )
-        if run_offline_probe
-        else None
-    )
+        soak_id = f"soak-r{config.soak_rule_count}-p{config.soak_project_count}"
+        soak_root = recorder.root / "runtime" / "soak" if recorder else None
+        if recorder:
+            recorder.record(
+                "soak",
+                soak_id,
+                "started",
+                {
+                    "phase": "started",
+                    "events": config.soak_events,
+                    "started_utc": datetime.now(timezone.utc).isoformat(),
+                    "retained_runtime_root": str(soak_root),
+                },
+            )
+        try:
+            soak = run_soak(
+                bundle.artifacts,
+                rule_count=config.soak_rule_count,
+                project_count=config.soak_project_count,
+                event_count=config.soak_events,
+                batch_size=config.soak_batch_size,
+                warmups_per_project=config.warmups_per_project,
+                timeout=config.timeout_seconds,
+                max_hook_workers=config.max_hook_workers,
+                drain_timeout=config.drain_timeout_seconds,
+                strict=strict,
+                retained_root=soak_root,
+            )
+        except Exception as exc:
+            retained = _retained_error(exc, soak_root)
+            soak = {
+                **retained,
+            }
+        if recorder:
+            recorder.record("soak", soak_id, "terminal", soak)
+    offline = None
+    if run_offline_probe:
+        offline_id = "online-offline-exact-replay"
+        offline_root = recorder.root / "runtime" / "offline" if recorder else None
+        if recorder:
+            recorder.record(
+                "offline",
+                offline_id,
+                "started",
+                {
+                    "phase": "started",
+                    "started_utc": datetime.now(timezone.utc).isoformat(),
+                    "network_boundary": _python_socket_boundary(),
+                    "retained_runtime_root": str(offline_root),
+                },
+            )
+        try:
+            offline = run_offline_after_prepare(
+                bundle.artifacts,
+                rule_count=max(config.rule_counts),
+                timeout=config.timeout_seconds,
+                retained_root=offline_root,
+            )
+        except Exception as exc:
+            retained = _retained_error(exc, offline_root)
+            offline = {
+                **retained,
+                "network_boundary": _python_socket_boundary(),
+            }
+        if recorder:
+            recorder.record("offline", offline_id, "terminal", offline)
     faults = run_fault_suite(
         bundle.artifacts,
         fault_names,
         timeout=config.timeout_seconds,
         repetitions=config.fault_repetitions,
         strict=strict,
+        recorder=recorder,
+    )
+    analysis = reduce_matrix_attempts(matrix_plan, matrix)
+    global_outcome_statuses: list[str] = []
+    terminal_units = [
+        {
+            "component": "matrix",
+            "unit_id": str(item.get("condition_id", "")),
+            "status": str(item.get("status", "")),
+        }
+        for item in matrix
+    ]
+    if soak is not None:
+        terminal_units.append(
+            {
+                "component": "soak",
+                "unit_id": (
+                    f"soak-r{config.soak_rule_count}-p{config.soak_project_count}"
+                ),
+                "status": str(soak.get("status", "")),
+            }
+        )
+    if offline is not None:
+        terminal_units.append(
+            {
+                "component": "offline",
+                "unit_id": "online-offline-exact-replay",
+                "status": str(offline.get("status", "")),
+            }
+        )
+    terminal_units.extend(
+        {
+            "component": "faults",
+            "unit_id": (
+                f"{attempt.get('fault', '')}-rep{attempt.get('repetition', '')}"
+            ),
+            "status": str(attempt.get("status", "")),
+        }
+        for value in faults.values()
+        for attempt in value.get("attempts", [])
+    )
+    planned_keys = [
+        (str(item["component"]), str(item["unit_id"])) for item in plan
+    ]
+    terminal_keys = [
+        (str(item["component"]), str(item["unit_id"]))
+        for item in terminal_units
+    ]
+    planned_key_set = set(planned_keys)
+    terminal_key_counts = Counter(terminal_keys)
+    missing_unit_keys = [
+        {"component": component, "unit_id": unit_id}
+        for component, unit_id in planned_keys
+        if terminal_key_counts[(component, unit_id)] == 0
+    ]
+    duplicate_unit_keys = [
+        {"component": component, "unit_id": unit_id, "count": count}
+        for (component, unit_id), count in sorted(terminal_key_counts.items())
+        if count > 1
+    ]
+    unexpected_unit_keys = [
+        {"component": component, "unit_id": unit_id}
+        for component, unit_id in sorted(set(terminal_keys) - planned_key_set)
+    ]
+    invalid_unit_statuses = [
+        dict(item) for item in terminal_units if item["status"] not in UNIT_STATUSES
+    ]
+    unit_statuses = [str(item["status"]) for item in terminal_units]
+    all_planned_units_terminal = not (
+        missing_unit_keys
+        or duplicate_unit_keys
+        or unexpected_unit_keys
+        or invalid_unit_statuses
+    ) and len(terminal_units) == len(plan)
+    has_harness_error = (
+        not all_planned_units_terminal
+        or any(status == "harness_error" for status in unit_statuses)
+        or any(status == "harness_error" for status in global_outcome_statuses)
+    )
+    has_infrastructure_error = any(
+        status == "infrastructure_error"
+        for status in [*unit_statuses, *global_outcome_statuses]
+    )
+    has_unclassified_failure = any(
+        status == "unclassified_failure"
+        for status in [*unit_statuses, *global_outcome_statuses]
+    )
+    incomplete = (
+        has_harness_error
+        or has_infrastructure_error
+        or has_unclassified_failure
+    )
+    system_violations = sum(
+        status == "system_violation"
+        for status in [*unit_statuses, *global_outcome_statuses]
+    )
+    attempt_status = (
+        "incomplete_unclassified_failure"
+        if has_unclassified_failure
+        else "incomplete_infrastructure_error"
+        if has_infrastructure_error
+        else "incomplete_harness_error"
+        if has_harness_error
+        else "completed_with_system_violations"
+        if system_violations
+        else "completed"
     )
     return {
-        "schema_version": 1,
-        "status": (
-            "formal_protocol_v3_amendment_004"
+        "schema_version": 2,
+        "status": attempt_status,
+        "complete_plan": all_planned_units_terminal,
+        "primary_numeric_eligible": not incomplete,
+        "all_planned_units_terminal": all_planned_units_terminal,
+        "terminal_unit_count": len(unit_statuses),
+        "planned_unit_count": len(plan),
+        "system_violation_units": system_violations,
+        "unit_plan_accounting": {
+            "planned": len(plan),
+            "terminal": len(terminal_units),
+            "missing": missing_unit_keys,
+            "duplicate": duplicate_unit_keys,
+            "unexpected": unexpected_unit_keys,
+            "invalid_status": invalid_unit_statuses,
+            "exact": all_planned_units_terminal,
+        },
+        "terminal_units": terminal_units,
+        "global_outcomes": {
+            "statuses": global_outcome_statuses,
+        },
+        "protocol_status": (
+            "formal_protocol_v3_amendment_005"
             if formal
             else "candidate_noncanonical"
         ),
         "study_mode": "formal" if formal else "candidate_noncanonical",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "measurement_boundary": _measurement_boundary(),
+        "non_censoring_policy": (
+            "system timeouts, accounting defects, logical fault failures, and per-attempt "
+            "exceptions are terminal records; independent planned attempts continue"
+        ),
         "config": asdict(config),
         "plan": plan,
+        "matrix_plan": matrix_plan,
         "artifact_provenance": bundle.provenance,
         "protocol_amendment": (
             {
@@ -2259,6 +6690,7 @@ def run_study(
             for artifact in bundle.artifacts
         ],
         "matrix": matrix,
+        "analysis": analysis,
         "soak": soak,
         "offline_after_prepare": offline,
         "faults": faults,
@@ -2276,7 +6708,12 @@ def run_study(
             "llama-cpp-python": integrated._package_version("llama-cpp-python"),
             "psutil": integrated._package_version("psutil"),
         },
-        "git": integrated._git_state(),
+        "git": {
+            "start": source_state_at_start,
+            "end": None,
+            "unchanged_during_attempt": None,
+            "end_receipt_pending": True,
+        },
         "slurm": {
             "job_id": os.environ.get("SLURM_JOB_ID", ""),
             "partition": os.environ.get("SLURM_JOB_PARTITION", ""),
@@ -2300,6 +6737,165 @@ def _validate_output_path(path: Path) -> Path:
     )
 
 
+def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
+    if _sha256_file(FORMAL_AMENDMENT) != FORMAL_AMENDMENT_SHA256:
+        raise SystemsHarnessError("protocol-v3 amendment 005 bytes changed")
+    try:
+        contract = json.loads(FORMAL_AMENDMENT.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemsHarnessError(f"invalid amendment 005: {exc}") from exc
+    if contract.get("amendment_id") != "protocol-v3-amendment-005":
+        raise SystemsHarnessError("unexpected formal amendment identity")
+    if require_frozen:
+        if contract.get("freeze_state") != "frozen_outcome_blind":
+            raise SystemsHarnessError(
+                "protocol-v3 amendment 005 is not frozen outcome-blind"
+            )
+        frozen_utc = contract.get("frozen_utc")
+        try:
+            frozen_at = datetime.fromisoformat(
+                str(frozen_utc).replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise SystemsHarnessError(
+                "protocol-v3 amendment 005 has no valid frozen_utc"
+            ) from exc
+        if frozen_at.tzinfo is None:
+            raise SystemsHarnessError(
+                "protocol-v3 amendment 005 frozen_utc must be timezone-aware"
+            )
+    prefix = (
+        (contract.get("effective_protocol_identity") or {}).get("frozen_prefix")
+        or []
+    )
+    for item in prefix:
+        path = (REPO_ROOT / str(item.get("path", ""))).resolve()
+        try:
+            path.relative_to(REPO_ROOT)
+        except ValueError as exc:
+            raise SystemsHarnessError("protocol contract path escapes repository") from exc
+        if not path.is_file() or _sha256_file(path) != str(item.get("sha256", "")):
+            raise SystemsHarnessError(f"formal protocol hash mismatch: {path}")
+    return contract
+
+
+def _git_commit_parent(commit: str) -> str:
+    completed = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", commit],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    fields = completed.stdout.strip().split()
+    if completed.returncode != 0 or len(fields) != 2 or fields[0] != commit:
+        raise SystemsHarnessError(
+            f"formal chronology requires a single-parent commit: {commit}"
+        )
+    return fields[1]
+
+
+def _git_commit_diff_paths(commit: str) -> list[str]:
+    completed = subprocess.run(
+        [
+            "git",
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "--no-renames",
+            "-r",
+            commit,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise SystemsHarnessError(
+            f"formal chronology cannot inspect commit paths: {commit}"
+        )
+    return sorted(line for line in completed.stdout.splitlines() if line)
+
+
+def _validate_formal_git_topology(
+    head: str, required_git: Mapping[str, Any]
+) -> dict[str, Any]:
+    if re.fullmatch(r"[0-9a-f]{40}", head) is None:
+        raise SystemsHarnessError("formal source HEAD is not a full Git commit")
+    runtime_lock_commit = head
+    implementation_commit = _git_commit_parent(runtime_lock_commit)
+    protocol_commit = _git_commit_parent(implementation_commit)
+    protocol_parent = _git_commit_parent(protocol_commit)
+    expected_parent = str(required_git.get("protocol_commit_parent_must_equal", ""))
+    expected_protocol_paths = sorted(
+        str(path) for path in required_git.get("protocol_commit_diff_paths_exactly", [])
+    )
+    expected_implementation_paths = sorted(
+        str(path)
+        for path in required_git.get("implementation_commit_diff_paths_exactly", [])
+    )
+    expected_lock_paths = sorted(
+        str(path)
+        for path in required_git.get("runtime_lock_commit_diff_paths_exactly", [])
+    )
+    observed_paths = {
+        "protocol": _git_commit_diff_paths(protocol_commit),
+        "implementation": _git_commit_diff_paths(implementation_commit),
+        "runtime_lock": _git_commit_diff_paths(runtime_lock_commit),
+    }
+    expected_paths = {
+        "protocol": expected_protocol_paths,
+        "implementation": expected_implementation_paths,
+        "runtime_lock": expected_lock_paths,
+    }
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", expected_parent) is None
+        or protocol_parent != expected_parent
+        or required_git.get("implementation_commit_parent_must_equal_protocol_commit")
+        is not True
+        or required_git.get(
+            "runtime_lock_commit_parent_must_equal_implementation_commit"
+        )
+        is not True
+        or required_git.get("head_must_equal_runtime_lock_commit") is not True
+        or observed_paths != expected_paths
+    ):
+        raise SystemsHarnessError(
+            "formal source violates the frozen protocol/implementation/runtime-lock "
+            "three-commit chronology"
+        )
+    return {
+        "protocol_parent": protocol_parent,
+        "protocol_commit": protocol_commit,
+        "implementation_commit": implementation_commit,
+        "runtime_lock_commit": runtime_lock_commit,
+        "head_equals_runtime_lock_commit": head == runtime_lock_commit,
+        "commit_diff_paths": observed_paths,
+    }
+
+
+def _formal_source_state() -> tuple[dict[str, Any], dict[str, Any]]:
+    state = integrated._git_state()
+    if state.get("dirty") or not state.get("commit"):
+        raise SystemsHarnessError(
+            "formal execution requires a clean scoped Git source state"
+        )
+    required_git = dict(
+        (
+            (
+                (_formal_contract().get("effective_protocol_identity") or {}).get(
+                    "acyclic_formal_binding"
+                )
+                or {}
+            ).get("required_git_state", {})
+            or {}
+        )
+    )
+    topology = _validate_formal_git_topology(str(state["commit"]), required_git)
+    return state, topology
+
+
 def _validate_formal_config(
     config: MatrixConfig,
     *,
@@ -2308,45 +6904,242 @@ def _validate_formal_config(
     strict: bool,
     require_partition: bool,
 ) -> None:
-    if _sha256_file(FORMAL_AMENDMENT) != FORMAL_AMENDMENT_SHA256:
-        raise SystemsHarnessError("protocol-v3 amendment 004 bytes changed")
+    contract = _formal_contract()
+    effective = dict(contract.get("formal_effective_config") or {})
     expected = {
-        "rule_counts": DEFAULT_RULE_COUNTS,
-        "project_counts": DEFAULT_PROJECT_COUNTS,
-        "burst_sizes": DEFAULT_BURST_SIZES,
-        "repeats": DEFAULT_REPEATS,
-        "sequential_events": DEFAULT_SEQUENTIAL_EVENTS,
-        "soak_events": DEFAULT_SOAK_EVENTS,
-        "soak_rule_count": 8,
-        "soak_project_count": 8,
-        "fault_repetitions": DEFAULT_FAULT_REPETITIONS,
+        name: effective[name]
+        for name in asdict(config)
+        if name in effective
     }
-    observed = asdict(config)
+    observed = json.loads(json.dumps(asdict(config)))
     mismatches = {
         name: {"expected": value, "observed": observed[name]}
         for name, value in expected.items()
         if observed[name] != value
     }
-    feasible_faults = tuple(
-        name for name, value in FAULT_CAPABILITIES.items() if value["feasible"]
-    )
-    if tuple(fault_names) != feasible_faults:
+    missing_config_fields = sorted(set(observed) - set(expected))
+    if missing_config_fields:
+        mismatches["unbound_config_fields"] = missing_config_fields
+    expected_faults = tuple(effective.get("fault_names_in_order") or ())
+    if tuple(fault_names) != expected_faults:
         mismatches["fault_names"] = {
-            "expected": feasible_faults,
+            "expected": expected_faults,
             "observed": tuple(fault_names),
         }
-    if not run_offline_probe:
-        mismatches["offline_probe"] = {"expected": True, "observed": False}
-    if not strict:
-        mismatches["strict"] = {"expected": True, "observed": False}
+    for name, expected_value, observed_value in (
+        ("offline_probe", bool(effective.get("offline_probe")), run_offline_probe),
+        ("strict_accounting", bool(effective.get("strict_accounting")), strict),
+        (
+            "traffic_patterns_in_order",
+            tuple(effective.get("traffic_patterns_in_order") or ()),
+            TRAFFIC_PATTERNS,
+        ),
+        (
+            "query_poll_interval_seconds",
+            effective.get("query_poll_interval_seconds"),
+            QUERY_POLL_INTERVAL_SECONDS,
+        ),
+        (
+            "matrix_history_duplicate_headroom",
+            effective.get("matrix_history_duplicate_headroom"),
+            MATRIX_HISTORY_DUPLICATE_HEADROOM,
+        ),
+        (
+            "soak_journal_poll_interval_seconds",
+            effective.get("soak_journal_poll_interval_seconds"),
+            SOAK_JOURNAL_POLL_INTERVAL_SECONDS,
+        ),
+        (
+            "soak_history_checkpoint_retry_seconds",
+            effective.get("soak_history_checkpoint_retry_seconds"),
+            SOAK_HISTORY_CHECKPOINT_RETRY_SECONDS,
+        ),
+        (
+            "soak_batch_settle_seconds",
+            effective.get("soak_batch_settle_seconds"),
+            SOAK_BATCH_SETTLE_SECONDS,
+        ),
+        (
+            "resource_sample_interval_seconds",
+            effective.get("resource_sample_interval_seconds"),
+            RESOURCE_SAMPLE_INTERVAL_SECONDS,
+        ),
+        (
+            "evaluation_history_limit",
+            effective.get("evaluation_history_limit"),
+            EVALUATION_HISTORY_LIMIT,
+        ),
+        (
+            "evaluation_journal_rotation_bytes",
+            effective.get("evaluation_journal_rotation_bytes"),
+            evaluation_log.MAX_LOG_BYTES,
+        ),
+        (
+            "evaluation_journal_rotation_backups",
+            effective.get("evaluation_journal_rotation_backups"),
+            evaluation_log.MAX_BACKUPS,
+        ),
+        (
+            "sqlite_busy_timeout_seconds",
+            effective.get("sqlite_busy_timeout_seconds"),
+            SQLITE_BUSY_TIMEOUT_SECONDS,
+        ),
+        (
+            "hook_process_timeout_seconds",
+            effective.get("hook_process_timeout_seconds"),
+            integrated.HOOK_TIMEOUT_SECONDS,
+        ),
+        (
+            "burst_and_soak_batch_drain_timeout_seconds",
+            effective.get("burst_and_soak_batch_drain_timeout_seconds"),
+            config.drain_timeout_seconds,
+        ),
+        (
+            "soak_final_drain_timeout_seconds",
+            effective.get("soak_final_drain_timeout_seconds"),
+            config.drain_timeout_seconds,
+        ),
+        (
+            "final_drain_settle_seconds",
+            effective.get("final_drain_settle_seconds"),
+            FINAL_DRAIN_SETTLE_SECONDS,
+        ),
+        (
+            "offline_socket_boundary_id",
+            effective.get("offline_socket_boundary_id"),
+            PYTHON_SOCKET_BOUNDARY_ID,
+        ),
+    ):
+        if observed_value != expected_value:
+            mismatches[name] = {
+                "expected": expected_value,
+                "observed": observed_value,
+            }
+    plan = build_matrix_plan(config)
+    checks = dict(effective.get("deterministic_plan_checks") or {})
+    observed_checks = {
+        "matrix_conditions": len(plan),
+        "matrix_events": sum(int(item["events"]) for item in plan),
+        "matrix_expected_evaluations": sum(
+            int(item["events"]) * int(item["rule_count"]) for item in plan
+        ),
+        "soak_expected_evaluations": config.soak_events * config.soak_rule_count,
+        "fault_attempts": len(expected_faults) * config.fault_repetitions,
+        "top_level_units": len(
+            build_study_plan(
+                config,
+                fault_names=expected_faults,
+                run_offline_probe=run_offline_probe,
+            )
+        ),
+        "rule_order": list(EXTERNAL_RULE_ORDER),
+    }
+    for name, value in observed_checks.items():
+        if checks.get(name) != value:
+            mismatches[f"plan.{name}"] = {
+                "expected": checks.get(name),
+                "observed": value,
+            }
+    runtime_budget = dict(
+        (contract.get("formal_runtime_profile") or {}).get("runtime_budget") or {}
+    )
+    matrix_warmup_evaluations = sum(
+        int(item["project_count"])
+        * config.warmups_per_project
+        * int(item["rule_count"])
+        for item in plan
+    )
+    soak_warmup_evaluations = (
+        config.soak_project_count
+        * config.warmups_per_project
+        * config.soak_rule_count
+    )
+    offline_rule_count = max(config.rule_counts)
+    offline_measured_evaluations = 2 * offline_rule_count
+    offline_warmup_evaluations = offline_rule_count
+    fault_allowance = int(
+        runtime_budget.get("conservative_fault_evaluation_allowance", -1)
+    )
+    planned_evaluations = (
+        observed_checks["matrix_expected_evaluations"]
+        + matrix_warmup_evaluations
+        + observed_checks["soak_expected_evaluations"]
+        + soak_warmup_evaluations
+        + offline_measured_evaluations
+        + offline_warmup_evaluations
+        + fault_allowance
+    )
+    evaluation_seconds = float(
+        runtime_budget.get("validated_seconds_per_serial_evaluation", -1)
+    )
+    projected_seconds = planned_evaluations * evaluation_seconds
+    soak_batches = math.ceil(config.soak_events / config.soak_batch_size)
+    matrix_warmup_wait_seconds = sum(
+        int(item["project_count"])
+        * config.warmups_per_project
+        * config.timeout_seconds
+        for item in plan
+    )
+    sequential_wait_seconds = sum(
+        int(item["events"]) * config.timeout_seconds
+        for item in plan
+        if item["mode"] == "sequential"
+    )
+    burst_wait_seconds = sum(
+        config.drain_timeout_seconds for item in plan if item["mode"] == "burst"
+    )
+    soak_wait_seconds = (
+        config.soak_project_count
+        * config.warmups_per_project
+        * config.timeout_seconds
+        + soak_batches * config.drain_timeout_seconds
+        + config.drain_timeout_seconds
+        + soak_batches * SOAK_BATCH_SETTLE_SECONDS
+        + config.timeout_seconds
+    )
+    wait_reserve = float(runtime_budget.get("bounded_wait_reserve_seconds", -1))
+    bounded_wait_envelope = (
+        matrix_warmup_wait_seconds
+        + sequential_wait_seconds
+        + burst_wait_seconds
+        + soak_wait_seconds
+        + wait_reserve
+    )
+    budget_checks = {
+        "matrix_warmup_evaluations": matrix_warmup_evaluations,
+        "soak_warmup_evaluations": soak_warmup_evaluations,
+        "offline_measured_evaluations": offline_measured_evaluations,
+        "offline_warmup_evaluations": offline_warmup_evaluations,
+        "planned_evaluations_including_matrix_soak_all_warmups_offline_and_conservative_fault_allowance": planned_evaluations,
+        "projected_inference_seconds": projected_seconds,
+        "projected_days": round(projected_seconds / 86400, 6),
+        "conservative_bounded_wait_envelope_seconds": bounded_wait_envelope,
+        "conservative_bounded_wait_envelope_days": round(
+            bounded_wait_envelope / 86400, 6
+        ),
+    }
+    for name, observed in budget_checks.items():
+        if runtime_budget.get(name) != observed:
+            mismatches[f"runtime_budget.{name}"] = {
+                "expected": runtime_budget.get(name),
+                "observed": observed,
+            }
+    if bounded_wait_envelope >= float(
+        runtime_budget.get("seven_day_budget_seconds", -1)
+    ):
+        mismatches["runtime_budget.seven_day_feasibility"] = {
+            "budget": runtime_budget.get("seven_day_budget_seconds"),
+            "bounded_wait_envelope": bounded_wait_envelope,
+        }
     if mismatches:
         raise SystemsHarnessError(
-            "formal configuration differs from protocol v3: "
+            "formal configuration differs from protocol v3 amendment 005: "
             + json.dumps(mismatches, sort_keys=True)
         )
-    if require_partition and os.environ.get("SLURM_JOB_PARTITION", "") != "ALL":
+    expected_partition = str(effective.get("slurm_partition", "ALL"))
+    if require_partition and os.environ.get("SLURM_JOB_PARTITION", "") != expected_partition:
         raise SystemsHarnessError(
-            "formal watgpu execution requires SLURM_JOB_PARTITION='ALL'"
+            f"formal watgpu execution requires SLURM_JOB_PARTITION={expected_partition!r}"
         )
 
 
@@ -2364,6 +7157,477 @@ def _fault_names(value: str) -> tuple[str, ...]:
     if unknown:
         raise argparse.ArgumentTypeError(f"unknown fault names: {','.join(unknown)}")
     return names
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+
+
+def _git_blob_sha1(path: Path) -> str:
+    value = path.read_bytes()
+    return hashlib.sha1(
+        f"blob {len(value)}\0".encode("ascii") + value,
+        usedforsecurity=False,
+    ).hexdigest()
+
+
+def _replacement_retention_plan(
+    replacement: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if replacement.get("kind") != "replacement_attempt":
+        return {"self_contained": True, "copies": []}, []
+    retained: list[dict[str, Any]] = []
+    copies: list[dict[str, Any]] = []
+
+    def add(role: str, source: str, target: str, byte_count: int, digest: str) -> None:
+        entry = {
+            "role": role,
+            "retained_path": target,
+            "bytes": int(byte_count),
+            "sha256": str(digest),
+        }
+        retained.append(entry)
+        copies.append(
+            {
+                "source_path": source,
+                "retained_path": target,
+                "bytes": int(byte_count),
+                "sha256": str(digest),
+            }
+        )
+
+    add(
+        "replacement_receipt",
+        str(replacement["receipt_path"]),
+        "replacement/replacement.json",
+        int(replacement["receipt_bytes"]),
+        str(replacement["receipt_sha256"]),
+    )
+    artifacts = dict(replacement.get("predecessor_artifacts") or {})
+    predecessor_launch = artifacts.get("launch.json") or {}
+    predecessor_root = Path(str(predecessor_launch.get("path", ""))).parent
+    for receipt in replacement.get("predecessor_tree") or []:
+        relative = Path(str(receipt.get("relative_path", "")))
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise SystemsHarnessError(
+                "replacement predecessor tree contains an invalid relative path"
+            )
+        if receipt.get("type") != "regular_file":
+            continue
+        source = predecessor_root / relative
+        add(
+            f"predecessor_tree:{relative.as_posix()}",
+            str(source),
+            f"replacement/predecessor-tree/{relative.as_posix()}",
+            int(receipt["bytes"]),
+            str(receipt["sha256"]),
+        )
+    for index, receipt in enumerate(replacement.get("evidence_receipts") or []):
+        kind = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(receipt["kind"])).strip(
+            "._"
+        ) or "evidence"
+        add(
+            f"evidence:{receipt['kind']}",
+            str(receipt["path"]),
+            f"replacement/evidence/{index:03d}-{kind}",
+            int(receipt["bytes"]),
+            str(receipt["sha256"]),
+        )
+    return {
+        "self_contained": True,
+        "copies": retained,
+    }, copies
+
+
+def _runtime_preflight_retention_plan(
+    runtime: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not runtime:
+        return {"self_contained": True, "copies": []}, []
+    retained: list[dict[str, Any]] = []
+    copies: list[dict[str, Any]] = []
+    for role, value, target in (
+        (
+            "setup_receipt",
+            (runtime.get("setup_preflight_receipt") or {}).get("file") or {},
+            "runtime/preflight/setup-receipt.json",
+        ),
+        (
+            "setup_log",
+            runtime.get("setup_preflight_log") or {},
+            "runtime/preflight/setup.log",
+        ),
+    ):
+        source = str(value.get("resolved_path") or value.get("path") or "")
+        entry = {
+            "role": role,
+            "retained_path": target,
+            "bytes": int(value.get("bytes", -1)),
+            "sha256": str(value.get("sha256", "")),
+        }
+        if not source or entry["bytes"] < 0 or not entry["sha256"]:
+            raise SystemsHarnessError(
+                f"formal runtime omitted retainable {role} receipt"
+            )
+        retained.append(entry)
+        copies.append(
+            {
+                "source_path": source,
+                "retained_path": target,
+                "bytes": entry["bytes"],
+                "sha256": entry["sha256"],
+            }
+        )
+    return {"self_contained": True, "copies": retained}, copies
+
+
+def _launch_manifest(
+    attempt_dir: Path,
+    config: MatrixConfig,
+    plan: Sequence[dict[str, Any]],
+    bundle: ArtifactBundle,
+    *,
+    formal: bool,
+) -> dict[str, Any]:
+    attempt_id = attempt_dir.name
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", attempt_id):
+        raise SystemsHarnessError(
+            "formal attempt directory basename must be a caller-supplied unique slug"
+        )
+    contract = _formal_contract(require_frozen=formal)
+    if formal:
+        source, source_topology = _formal_source_state()
+    else:
+        source = integrated._git_state()
+        source_topology = None
+    runtime_profile = dict(contract.get("formal_runtime_profile") or {})
+    replacement = (
+        replacement_launch_binding(
+            attempt_dir,
+            os.environ.get("RAP_EACL_REPLACEMENT_RECEIPT"),
+        )
+        if formal
+        else {"kind": "candidate_not_applicable"}
+    )
+    replacement_retention, prelaunch_copies = _replacement_retention_plan(
+        replacement
+    )
+    if formal:
+        expected_repo = str(
+            (runtime_profile.get("cache_and_dependency_receipt") or {}).get(
+                "formal_repository", ""
+            )
+        )
+        if str(REPO_ROOT.resolve()) != expected_repo:
+            raise SystemsHarnessError(
+                f"formal repository must resolve to {expected_repo}, got {REPO_ROOT.resolve()}"
+            )
+        try:
+            runtime = formal_runtime_receipt(
+                runtime_profile,
+                [artifact.program_id for artifact in bundle.artifacts],
+                raw_attempt_id=attempt_id,
+                expected_replacement_chain=replacement,
+            )
+        except RuntimeContractError as exc:
+            raise SystemsHarnessError(str(exc)) from exc
+    else:
+        runtime = None
+    runtime_retention, runtime_prelaunch_copies = (
+        _runtime_preflight_retention_plan(runtime)
+    )
+    protocol_documents = [
+        {
+            "path": str(item["path"]),
+            "sha256": str(item["sha256"]),
+        }
+        for item in (
+            (contract.get("effective_protocol_identity") or {}).get(
+                "frozen_prefix"
+            )
+            or []
+        )
+        ]
+    protocol_documents.append(
+        {
+            "path": str(FORMAL_AMENDMENT.relative_to(REPO_ROOT)),
+            "sha256": _sha256_file(FORMAL_AMENDMENT),
+        }
+    )
+    runner = Path(__file__).resolve()
+    identity = {
+        "attempt_id": attempt_id,
+        "study_mode": "formal" if formal else "candidate_noncanonical",
+        "attempt_replacement": replacement,
+        "replacement_retention": replacement_retention,
+        "runtime_preflight_retention": runtime_retention,
+        "git": source,
+        "git_topology": source_topology,
+        "runner": {
+            "path": str(runner.relative_to(REPO_ROOT)),
+            "sha256": _sha256_file(runner),
+            "git_blob": _git_blob_sha1(runner),
+        },
+        "protocol_documents": protocol_documents,
+        "config": json.loads(json.dumps(asdict(config))),
+        "plan_sha256": _sha256_bytes(_canonical_json_bytes(list(plan))),
+        "artifact_provenance": bundle.provenance,
+        "formal_runtime": runtime,
+        "packages": {
+            name: integrated._package_version(name)
+            for name in (
+                "rules-as-programs",
+                "programasweights",
+                "llama-cpp-python",
+                "psutil",
+            )
+        },
+        "machine": {
+            "platform": platform.platform(),
+            "python": sys.version,
+            "cpu_count_logical": os.cpu_count(),
+        },
+        "slurm": {
+            "job_id": os.environ.get("SLURM_JOB_ID", ""),
+            "partition": os.environ.get("SLURM_JOB_PARTITION", ""),
+            "node_list": os.environ.get("SLURM_JOB_NODELIST", ""),
+        },
+    }
+    return {
+        "schema_version": 1,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "identity": identity,
+        "identity_sha256": _sha256_bytes(_canonical_json_bytes(identity)),
+        "plan": list(plan),
+        "retention": {
+            "immutable": True,
+            "unit_terminal_journal": "units.jsonl",
+            "runtime_roots": "runtime/",
+        },
+        "_prelaunch_copy_specs": [
+            *prelaunch_copies,
+            *runtime_prelaunch_copies,
+        ],
+    }
+
+
+def _attempt_exit_code(status: str) -> int:
+    return {
+        "completed": 0,
+        "plan_only": 0,
+        "completed_with_system_violations": 3,
+        "incomplete_harness_error": 2,
+        "incomplete_infrastructure_error": 4,
+        "incomplete_unclassified_failure": 5,
+    }.get(status, 5)
+
+
+def _capture_formal_cache_end(
+    bundle: ArtifactBundle,
+    recorder: AttemptRecorder,
+) -> dict[str, Any]:
+    try:
+        runtime_profile = dict(
+            _formal_contract().get("formal_runtime_profile") or {}
+        )
+        launch_cache_receipt = dict(
+            (
+                (
+                    (recorder.manifest.get("identity") or {}).get("formal_runtime")
+                    or {}
+                ).get("paw_cache")
+                or {}
+            )
+        )
+        changed_root = recorder.root / "runtime" / "cache-end-changed-files"
+        return retain_cache_end_receipt(
+            runtime_profile,
+            [artifact.program_id for artifact in bundle.artifacts],
+            launch_receipt=launch_cache_receipt,
+            changed_files_root=changed_root,
+        )
+    except RuntimeContractError as exc:
+        return {
+            "status": "system_violation",
+            "unchanged": False,
+            "error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "traceback": traceback.format_exc(),
+            },
+        }
+    except BaseException as exc:
+        return _retained_error(exc, recorder.root / "runtime")
+
+
+def _merge_global_outcome(
+    result: dict[str, Any], name: str, outcome: dict[str, Any]
+) -> dict[str, Any]:
+    merged = dict(result)
+    global_outcomes = dict(merged.get("global_outcomes") or {})
+    statuses = list(global_outcomes.get("statuses") or [])
+    status = str(outcome.get("status", "unclassified_failure"))
+    global_outcomes[name] = outcome
+    if status != "completed":
+        statuses.append(status)
+    global_outcomes["statuses"] = statuses
+    merged["global_outcomes"] = global_outcomes
+    if status == "system_violation":
+        merged["system_violation_units"] = int(
+            merged.get("system_violation_units", 0)
+        ) + 1
+    current = str(merged.get("status", "incomplete_unclassified_failure"))
+    ranks = {
+        "completed": 0,
+        "completed_with_system_violations": 1,
+        "incomplete_harness_error": 2,
+        "incomplete_infrastructure_error": 3,
+        "incomplete_unclassified_failure": 4,
+    }
+    proposed = {
+        "completed": current,
+        "system_violation": "completed_with_system_violations",
+        "harness_error": "incomplete_harness_error",
+        "infrastructure_error": "incomplete_infrastructure_error",
+        "unclassified_failure": "incomplete_unclassified_failure",
+    }.get(status, "incomplete_unclassified_failure")
+    if ranks.get(proposed, 4) > ranks.get(current, 4):
+        merged["status"] = proposed
+    if status in {"harness_error", "infrastructure_error", "unclassified_failure"}:
+        merged["primary_numeric_eligible"] = False
+    return merged
+
+
+def _finalize_source_state(
+    result: dict[str, Any], attempt_root: Path | None
+) -> dict[str, Any]:
+    """Capture the terminal source receipt and apply its eligibility decision."""
+    merged = dict(result)
+    git = dict(merged.get("git") or {})
+    source_start = dict(git.get("start") or {})
+    try:
+        source_end: dict[str, Any] = _git_state_allowing_attempt(attempt_root)
+        source_error = None
+    except BaseException as exc:
+        source_error = {
+            "type": type(exc).__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        source_end = {
+            "status": "unavailable",
+            "error": source_error,
+        }
+    source_unchanged = source_error is None and source_start == source_end
+    git.update(
+        {
+            "start": source_start,
+            "end": source_end,
+            "unchanged_during_attempt": source_unchanged,
+            "end_receipt_pending": False,
+            "end_receipt_error": source_error,
+        }
+    )
+    merged["git"] = git
+    if not source_unchanged:
+        merged["status"] = "incomplete_unclassified_failure"
+        merged["primary_numeric_eligible"] = False
+        merged["source_integrity_failure"] = {
+            "cause": (
+                "source_end_receipt_unavailable"
+                if source_error is not None
+                else "source_changed_during_attempt"
+            ),
+            "rerun_eligible": False,
+        }
+    return merged
+
+
+def _aborted_attempt_result(
+    exc: BaseException,
+    *,
+    config: MatrixConfig,
+    plan: Sequence[dict[str, Any]],
+    formal: bool,
+    attempt_root: Path | None,
+    launch_git: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    retained = _retained_error(exc, attempt_root)
+    source_start = dict(launch_git or integrated._git_state())
+    unit_classification = str(retained["status"])
+    status = {
+        "harness_error": "incomplete_harness_error",
+        "infrastructure_error": "incomplete_infrastructure_error",
+        "unclassified_failure": "incomplete_unclassified_failure",
+        # A measured system violation is not rerun eligibility, but an escaping
+        # exception means the runner failed to finish the independent plan.  The
+        # cause of that plan-level incompleteness requires adjudication.
+        "system_violation": "incomplete_unclassified_failure",
+    }.get(unit_classification, "incomplete_unclassified_failure")
+    return {
+        "schema_version": 2,
+        "status": status,
+        "complete_plan": False,
+        "primary_numeric_eligible": False,
+        "all_planned_units_terminal": False,
+        "terminal_unit_count": 0,
+        "planned_unit_count": len(plan),
+        "system_violation_units": int(unit_classification == "system_violation"),
+        "protocol_status": (
+            "formal_protocol_v3_amendment_005"
+            if formal
+            else "candidate_noncanonical"
+        ),
+        "study_mode": "formal" if formal else "candidate_noncanonical",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "config": asdict(config),
+        "plan": list(plan),
+        "git": {
+            "start": source_start,
+            "end": None,
+            "unchanged_during_attempt": None,
+            "end_receipt_pending": True,
+        },
+        "abort": {
+            **retained,
+            "attempt_status_rule": (
+                "an escaping measured exception retains its unit classification, "
+                "while unfinished orchestration is incomplete_unclassified_failure"
+                if unit_classification == "system_violation"
+                else "attempt status follows the positively evidenced abort class"
+            ),
+        },
+    }
+
+
+def _artifact_initialization_abort_result(
+    recorder: AttemptRecorder,
+    *,
+    config: MatrixConfig,
+    plan: Sequence[dict[str, Any]],
+    formal: bool,
+) -> dict[str, Any] | None:
+    """Abort before measurement when attempt publication durability is uncertain."""
+
+    if not recorder.initialization_warnings:
+        return None
+    try:
+        raise ExternalInfrastructureError(
+            "; ".join(recorder.initialization_warnings)
+        )
+    except ExternalInfrastructureError as exc:
+        return _aborted_attempt_result(
+            exc,
+            config=config,
+            plan=plan,
+            formal=formal,
+            attempt_root=recorder.root,
+            launch_git=dict(
+                (recorder.manifest.get("identity") or {}).get("git") or {}
+            ),
+        )
 
 
 def main() -> int:
@@ -2392,6 +7656,9 @@ def main() -> int:
     )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument(
+        "--drain-timeout", type=float, default=DEFAULT_DRAIN_TIMEOUT_SECONDS
+    )
+    parser.add_argument(
         "--max-hook-workers", type=int, default=DEFAULT_MAX_HOOK_WORKERS
     )
     parser.add_argument("--soak-events", type=int, default=0)
@@ -2415,6 +7682,11 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
+        "--attempt-dir",
+        type=Path,
+        help="new immutable directory for launch, unit, result, and raw runtime evidence",
+    )
+    parser.add_argument(
         "--formal",
         action="store_true",
         help="enforce the exact protocol-v3 design and ALL-partition execution",
@@ -2428,6 +7700,7 @@ def main() -> int:
         sequential_events=args.sequential_events,
         warmups_per_project=args.warmups_per_project,
         timeout_seconds=args.timeout,
+        drain_timeout_seconds=args.drain_timeout,
         max_hook_workers=args.max_hook_workers,
         soak_events=args.soak_events,
         soak_rule_count=args.soak_rule_count,
@@ -2444,10 +7717,47 @@ def main() -> int:
             strict=not args.continue_on_error,
             require_partition=not args.plan,
         )
+        if not args.plan and args.attempt_dir is None:
+            raise SystemsHarnessError("formal execution requires --attempt-dir")
+        if not args.plan:
+            expected_parent = FORMAL_RAW_ATTEMPT_ROOT.resolve()
+            runtime_dependency = dict(
+                (_formal_contract().get("formal_runtime_profile") or {}).get(
+                    "cache_and_dependency_receipt"
+                )
+                or {}
+            )
+            configured_parent = str(runtime_dependency.get("formal_attempt_root", ""))
+            if str(FORMAL_RAW_ATTEMPT_ROOT) != configured_parent:
+                raise SystemsHarnessError(
+                    "runner formal-attempt root differs from amendment runtime profile"
+                )
+            if FORMAL_RAW_ATTEMPT_ROOT.is_symlink():
+                raise SystemsHarnessError(
+                    "formal-attempt root must not itself be a symlink"
+                )
+            try:
+                expected_parent.relative_to(REPO_ROOT.resolve())
+            except ValueError:
+                pass
+            else:
+                raise SystemsHarnessError(
+                    "formal-attempt root must resolve outside the Git worktree"
+                )
+            if args.attempt_dir.expanduser().resolve().parent != expected_parent:
+                raise SystemsHarnessError(
+                    f"formal attempt directory must be directly below {expected_parent}"
+                )
+    recorder: AttemptRecorder | None = None
     if args.plan:
         result = {
             "status": "plan_only",
             "config": asdict(config),
+            "plan": build_study_plan(
+                config,
+                fault_names=args.faults,
+                run_offline_probe=not args.skip_offline_probe,
+            ),
             "matrix": build_matrix_plan(config),
             "faults_selected": list(args.faults),
             "fault_capabilities": FAULT_CAPABILITIES,
@@ -2456,26 +7766,117 @@ def main() -> int:
         }
     else:
         bundle = load_external_artifacts()
-        result = run_study(
-            bundle,
+        plan = build_study_plan(
             config,
             fault_names=args.faults,
             run_offline_probe=not args.skip_offline_probe,
-            strict=not args.continue_on_error,
-            formal=args.formal,
         )
-    rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
+        recorder = (
+            AttemptRecorder(
+                args.attempt_dir,
+                _launch_manifest(
+                    args.attempt_dir,
+                    config,
+                    plan,
+                    bundle,
+                    formal=args.formal,
+                ),
+                capture_process_streams=args.formal,
+            )
+            if args.attempt_dir
+            else None
+        )
+        result = (
+            _artifact_initialization_abort_result(
+                recorder,
+                config=config,
+                plan=plan,
+                formal=args.formal,
+            )
+            if recorder is not None
+            else None
+        )
+        if result is None:
+            try:
+                result = run_study(
+                    bundle,
+                    config,
+                    fault_names=args.faults,
+                    run_offline_probe=not args.skip_offline_probe,
+                    strict=not args.continue_on_error,
+                    formal=args.formal,
+                    recorder=recorder,
+                )
+            except BaseException as exc:
+                result = _aborted_attempt_result(
+                    exc,
+                    config=config,
+                    plan=plan,
+                    formal=args.formal,
+                    attempt_root=recorder.root if recorder else None,
+                    launch_git=(
+                        dict(
+                            (recorder.manifest.get("identity") or {}).get("git") or {}
+                        )
+                        if recorder
+                        else None
+                    ),
+                )
+        if args.formal:
+            if recorder is None:
+                raise SystemsHarnessError(
+                    "formal cache end retention requires an attempt recorder"
+                )
+            result = _merge_global_outcome(
+                result,
+                "cache_end_receipt",
+                _capture_formal_cache_end(bundle, recorder),
+            )
+        result = _finalize_source_state(
+            result, recorder.root if recorder else None
+        )
+        if recorder:
+            result = recorder.finalize(result)
+    exit_code = _attempt_exit_code(str(result.get("status", "")))
+    if recorder is not None:
+        result_path = recorder.root / "result.json"
+        rendered_value = {
+            "status": result.get("status"),
+            "raw_attempt_id": recorder.root.name,
+            "result_json": str(result_path),
+            "result_sha256": _sha256_file(result_path),
+            "exit_code": exit_code,
+        }
+    else:
+        rendered_value = result
+    rendered = json.dumps(rendered_value, indent=2, sort_keys=True) + "\n"
     if args.output:
         output = _validate_output_path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
-        temporary = output.with_suffix(output.suffix + ".tmp")
-        temporary.write_text(rendered, encoding="utf-8")
-        os.replace(temporary, output)
+        if args.formal:
+            try:
+                with output.open("x", encoding="utf-8") as handle:
+                    handle.write(rendered)
+            except FileExistsError as exc:
+                raise SystemsHarnessError(
+                    f"refusing to replace formal output: {output}"
+                ) from exc
+        else:
+            temporary = output.with_suffix(output.suffix + ".tmp")
+            temporary.write_text(rendered, encoding="utf-8")
+            os.replace(temporary, output)
         print(output)
     else:
         print(rendered, end="")
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (SystemsHarnessError, ValueError) as exc:
+        print(f"systems harness preflight error: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+    except Exception:
+        traceback.print_exc()
+        raise SystemExit(5) from None
