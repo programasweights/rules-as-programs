@@ -1569,7 +1569,7 @@ def test_component_successor_binding_requires_pushed_exact_h4_bytes(
                     "parent_must_equal_i4": True,
                     "diff_paths_exactly": paths["runtime_lock"],
                 },
-                "head_must_equal_h4_before_r04_setup": True,
+                "head_must_equal_h4_before_r05_setup": True,
             }
         }
     }
@@ -1642,8 +1642,9 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     )
     receipt.update(
         {
-            "schema_version": 3,
+            "schema_version": 4,
             "prepublication_failure": {"retained": "r03-terminal-archive"},
+            "r04_prepublication_failure": {"retained": "r04-terminal-archive"},
             "successor_source": {"external": "p4-i4-h4"},
             "whole_attempt_protocol_correction": {"source": "r03-full-430"},
         }
@@ -1665,6 +1666,11 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
         "r03_prepublication_failure_binding",
         lambda: receipt["prepublication_failure"],
     )
+    monkeypatch.setattr(
+        attempts,
+        "r04_prepublication_failure_binding",
+        lambda: receipt["r04_prepublication_failure"],
+    )
 
     binding = attempts.replacement_launch_binding(successor, str(receipt_path))
 
@@ -1684,12 +1690,13 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
         {
             "schema_version": 1,
             "successor_raw_attempt_id": wrong_edge.name,
-            "predecessor_raw_attempt_id": successor.name,
+            "predecessor_raw_attempt_id": "formal-v3-20260831t051023z-r04",
         }
     )
     wrong_receipt.pop("successor_source")
     wrong_receipt.pop("whole_attempt_protocol_correction")
     wrong_receipt.pop("prepublication_failure")
+    wrong_receipt.pop("r04_prepublication_failure")
     _write_json(receipt_path, wrong_receipt)
     with pytest.raises(attempts.SystemsHarnessError, match="not permitted"):
         attempts.replacement_launch_binding(wrong_edge, str(receipt_path))
@@ -1789,7 +1796,99 @@ def test_r03_prepublication_archive_binding_rehashes_every_sealed_member(tmp_pat
         attempts.r03_prepublication_failure_binding(amendment)
 
 
-def test_historical_r03_roles_are_retained_and_derived_only_to_r04():
+def test_r04_prepublication_archive_binding_rehashes_every_sealed_member(tmp_path):
+    amendment = attempts._load_component_amendment()
+    amendment = json.loads(json.dumps(amendment))
+    correction = amendment["supervisor_wait_correction"]
+    observed = correction["observed_r04_terminal_boundary"]
+    archive = tmp_path / "1525449-v1"
+    archive.mkdir(mode=0o700)
+    attempt_root = tmp_path / attempts._COMPONENT_BURNED_R04_ID
+    setup = {
+        "raw_attempt_id": attempts._COMPONENT_BURNED_R04_ID,
+        "slurm_job_id": attempts._COMPONENT_R04_PREPUBLICATION_JOB_ID,
+        "study_mode": "formal_protocol_v3_amendment_008",
+    }
+    supervisor_start = {
+        "raw_attempt_id": attempts._COMPONENT_BURNED_R04_ID,
+        "slurm_job_id": attempts._COMPONENT_R04_PREPUBLICATION_JOB_ID,
+        "slurm_partition": "ALL",
+        "attempt_root": str(attempt_root),
+    }
+    contents = {
+        name: b"" for name in attempts._COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES
+    }
+    contents.update(
+        {
+            "repo-head.stdout.bin": (
+                correction["parent_runtime_lock_commit"] + "\n"
+            ).encode(),
+            "setup-receipt.json": json.dumps(setup).encode() + b"\n",
+            "slurm.stderr.bin": b"started supervisor child was not waited\n",
+            "supervisor-start.json": json.dumps(supervisor_start).encode() + b"\n",
+            "terminal-sacct.stdout.bin": (
+                b"1525449|rap-eacl-systems-v3|ALL|FAILED|2:0|start|end\n"
+            ),
+        }
+    )
+    manifest_names = sorted(
+        attempts._COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES
+        - {"evidence.sha256", "evidence.sha256.sha256"}
+    )
+    manifest = b"".join(
+        f"{hashlib.sha256(contents[name]).hexdigest()}  ./{name}\n".encode()
+        for name in manifest_names
+    )
+    contents["evidence.sha256"] = manifest
+    manifest_sha = hashlib.sha256(manifest).hexdigest()
+    contents["evidence.sha256.sha256"] = (
+        f"{manifest_sha}  evidence.sha256\n".encode()
+    )
+    for name, raw in contents.items():
+        path = archive / name
+        path.write_bytes(raw)
+        path.chmod(0o444)
+    archive.chmod(0o500)
+    observed["attempt_root"] = str(attempt_root)
+    observed["attempt_root_present"] = False
+    observed["measurement_started"] = False
+    observed["terminal_archive"].update(
+        {
+            "path": str(archive),
+            "directory_mode": 0o500,
+            "member_mode": 0o444,
+            "manifest_sha256": manifest_sha,
+            "setup_receipt_bytes": len(contents["setup-receipt.json"]),
+            "setup_receipt_sha256": hashlib.sha256(
+                contents["setup-receipt.json"]
+            ).hexdigest(),
+            "slurm_stderr_bytes": len(contents["slurm.stderr.bin"]),
+            "slurm_stderr_sha256": hashlib.sha256(
+                contents["slurm.stderr.bin"]
+            ).hexdigest(),
+            "supervisor_start_bytes": len(contents["supervisor-start.json"]),
+            "supervisor_start_sha256": hashlib.sha256(
+                contents["supervisor-start.json"]
+            ).hexdigest(),
+        }
+    )
+
+    binding = attempts.r04_prepublication_failure_binding(amendment)
+    assert binding["attempt_root_absent"] is True
+    assert binding["measurement_started"] is False
+    assert set(binding["terminal_archive_members"]) == set(contents)
+
+    archive.chmod(0o700)
+    member = archive / "archiver.py"
+    member.chmod(0o644)
+    member.write_text("mutated\n", encoding="utf-8")
+    member.chmod(0o444)
+    archive.chmod(0o500)
+    with pytest.raises(attempts.SystemsHarnessError, match="manifest rehash"):
+        attempts.r04_prepublication_failure_binding(amendment)
+
+
+def test_historical_r03_roles_are_retained_and_derived_only_to_successor():
     ordered = [
         {
             "plan_index": index,
@@ -1802,7 +1901,7 @@ def test_historical_r03_roles_are_retained_and_derived_only_to_r04():
         attempts._canonical_json_bytes(ordered)
     ).hexdigest()
 
-    derived = attempts._derive_r04_partial_forensics(
+    derived = attempts._derive_successor_partial_forensics(
         payload,
         receipt_type="r02_partial_terminal_forensics",
         payload_sha256="a" * 64,
@@ -1829,7 +1928,7 @@ def test_historical_r03_roles_are_retained_and_derived_only_to_r04():
         [*ordered[:5], {**ordered[5], "plan_index": 6}, *ordered[6:]],
     ):
         with pytest.raises(attempts.SystemsHarnessError, match="historical"):
-            attempts._derive_r04_partial_forensics(
+            attempts._derive_successor_partial_forensics(
                 {"ordered_units": invalid},
                 receipt_type="r02_partial_terminal_forensics",
                 payload_sha256="a" * 64,

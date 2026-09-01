@@ -1834,13 +1834,13 @@ def test_symlinked_attempt_entry_is_a_ledger_blocker(tmp_path):
     assert report["primary_numeric"]["selection_blocked_by"] == "formal-v3-r01"
 
 
-def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
+def test_whole_attempt_uses_all_r05_rows_and_retains_r02_partial_sensitivity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     r01_id = "formal-v3-20260831t051023z-r01"
     r02_id = analyzer.attempts_contract._COMPONENT_PREDECESSOR_ID
-    r04_id = analyzer.attempts_contract._COMPONENT_SUCCESSOR_ID
-    for attempt_id in (r01_id, r02_id, r04_id):
+    r05_id = analyzer.attempts_contract._COMPONENT_SUCCESSOR_ID
+    for attempt_id in (r01_id, r02_id, r05_id):
         (tmp_path / attempt_id).mkdir()
 
     full_plan = [
@@ -1860,25 +1860,25 @@ def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
             "value": {"source": source, "position": position},
         }
 
-    r04_units = [unit(item, position, source="r04") for position, item in enumerate(full_plan)]
+    r05_units = [unit(item, position, source="r05") for position, item in enumerate(full_plan)]
     ordered_partial = [
         {
             "plan_index": position,
             "component": item["component"],
             "unit_id": item["unit_id"],
-            "primary_source_attempt_id": r04_id,
+            "primary_source_attempt_id": r05_id,
             "r02_raw_state": "terminal" if position < 279 else "never_started",
         }
         for position, item in enumerate(full_plan)
     ]
-    r04_report = {
-        "component_r04": True,
+    r05_report = {
+        "component_r05": True,
         "identity": {
-            "attempt_id": r04_id,
+            "attempt_id": r05_id,
             "attempt_replacement": {
                 "classification": analyzer.attempts_contract._COMPONENT_CLASSIFICATION,
                 "predecessor_raw_attempt_id": r02_id,
-                "successor_raw_attempt_id": r04_id,
+                "successor_raw_attempt_id": r05_id,
                 "prepublication_failure": {
                     "raw_attempt_id": (
                         analyzer.attempts_contract._COMPONENT_BURNED_PREPUBLICATION_ID
@@ -1889,8 +1889,17 @@ def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
                         for name in analyzer.attempts_contract._COMPONENT_PREPUBLICATION_MEMBER_NAMES
                     },
                 },
+                "r04_prepublication_failure": {
+                    "raw_attempt_id": analyzer.attempts_contract._COMPONENT_BURNED_R04_ID,
+                    "attempt_root_absent": True,
+                    "measurement_started": False,
+                    "terminal_archive_members": {
+                        name: {"sha256": "e" * 64}
+                        for name in analyzer.attempts_contract._COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES
+                    },
+                },
                 "whole_attempt_protocol_correction": {
-                    "primary_source_attempt_id": r04_id
+                    "primary_source_attempt_id": r05_id
                 },
                 "r02_partial_terminal_forensics": {
                     "receipt_type": "r02_partial_terminal_forensics",
@@ -1906,7 +1915,7 @@ def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
         "result_sha256": "3" * 64,
         "input_receipts": {},
         "plan": full_plan,
-        "units": r04_units,
+        "units": r05_units,
         "source_unchanged": True,
         "eligible": True,
     }
@@ -1914,7 +1923,7 @@ def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
     monkeypatch.setattr(
         analyzer,
         "validate_attempt",
-        lambda path: r04_report if path.name == r04_id else None,
+        lambda path: r05_report if path.name == r05_id else None,
     )
     monkeypatch.setattr(
         analyzer,
@@ -1933,15 +1942,15 @@ def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
         tmp_path, analyzer.COMPONENT_ANALYSIS_ID
     )
 
-    assert report["primary_r04"] == {
+    assert report["primary_r05"] == {
         "promoted": True,
         "unit_count": 430,
-        "source_attempt_id": r04_id,
+        "source_attempt_id": r05_id,
         "reason": "all exact whole-attempt promotion gates passed",
     }
     assert len(report["primary_unit_ledger"]) == 430
     assert {row["source_attempt_id"] for row in report["primary_unit_ledger"]} == {
-        r04_id
+        r05_id
     }
     sensitivity = report["r02_partial_sensitivity"]
     assert sensitivity["primary_selection_effect"] == "none"
@@ -1964,11 +1973,11 @@ def test_withdrawn_partial_composite_reducer_fails_closed(tmp_path):
         )
 
 
-def test_component_contract_routes_through_amendment_012():
+def test_component_contract_routes_through_amendment_013():
     contract = analyzer._load_amendment_008()
     assert contract["historical_role_correction"]["amendment_id"] == (
         "protocol-v3-amendment-012"
     )
     assert contract["effective_protocol_identity"]["interpretation_order"] == list(
-        analyzer.PROTOCOL_PATHS_012
+        analyzer.PROTOCOL_PATHS_013
     )

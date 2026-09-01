@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 try:
     import psutil
@@ -102,6 +102,9 @@ FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT = (
 )
 FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT = (
     ROOT / "protocol-v3-amendment-012.json"
+)
+FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT = (
+    ROOT / "protocol-v3-amendment-013.json"
 )
 FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
 FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
@@ -178,9 +181,9 @@ SOCKET_CLEANUP_TIMEOUT_SECONDS = 2.0
 FORMAL_RAW_ATTEMPT_ROOT = Path("/u4/yuntian/rap-eacl-systems-formal-v3/attempts")
 FORMAL_SUPERVISOR_ROOT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/"
-    "formal-v3-20260831t051023z-r04"
+    "formal-v3-20260831t051023z-r05"
 )
-FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r04"
+FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r05"
 _SUPERVISOR_SENSITIVE_ENV_MARKERS = (
     "API_KEY",
     "TOKEN",
@@ -1117,7 +1120,7 @@ def build_full_attempt_plan(config: MatrixConfig) -> dict[str, Any]:
         "unit_count": len(full_plan),
         "canonical_sha256": _sha256_bytes(_canonical_json_bytes(full_plan)),
         "ordered_membership_sha256": _sha256_bytes(_canonical_json_bytes(plan_keys)),
-        "primary_source_attempt_id": "formal-v3-20260831t051023z-r04",
+        "primary_source_attempt_id": FORMAL_RAW_ATTEMPT_ID,
         "execution_roles": {
             "provenance_rerun": {"start": 0, "stop": 279, "count": 279},
             "direct_first_completion": {"start": 279, "stop": 350, "count": 71},
@@ -7273,6 +7276,11 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         or not FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT.is_file()
     ):
         raise SystemsHarnessError("protocol-v3 amendment 012 is absent or a symlink")
+    if (
+        FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT.is_symlink()
+        or not FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT.is_file()
+    ):
+        raise SystemsHarnessError("protocol-v3 amendment 013 is absent or a symlink")
 
     def reject_constant(value: str) -> None:
         raise ValueError(f"non-finite JSON number {value}")
@@ -7428,7 +7436,10 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         fatal = contract["fatal_result_contract"]
         successor = str(override["successor_raw_attempt_id"])
         supervisor_root = Path(str(override["supervisor_root_exact"]))
-        if successor != FORMAL_RAW_ATTEMPT_ID or supervisor_root != FORMAL_SUPERVISOR_ROOT:
+        if (
+            successor != "formal-v3-20260831t051023z-r04"
+            or supervisor_root.name != successor
+        ):
             raise SystemsHarnessError("amendment-011 successor identity differs")
         fatal["supervisor_parent_exact"] = str(override["supervisor_parent_exact"])
         fatal["supervisor_closeout_root_exact"] = str(supervisor_root)
@@ -7471,6 +7482,57 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         contract["effective_protocol_identity"]["interpretation_order"] = (
             historical_identity["interpretation_order"]
         )
+        try:
+            wait_correction = json.loads(
+                FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT.read_text(
+                    encoding="utf-8"
+                ),
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemsHarnessError(f"invalid strict amendment 013: {exc}") from exc
+        wait_identity = (
+            wait_correction.get("effective_protocol_identity")
+            if isinstance(wait_correction, dict)
+            else None
+        )
+        wait_override = (
+            wait_correction.get("explicit_override")
+            if isinstance(wait_correction, dict)
+            else None
+        )
+        if (
+            not isinstance(wait_correction, dict)
+            or wait_correction.get("amendment_id") != "protocol-v3-amendment-013"
+            or wait_correction.get("parent_amendment")
+            != "protocol-v3-amendment-012"
+            or not str(wait_correction.get("status", "")).startswith("frozen ")
+            or not isinstance(wait_identity, dict)
+            or not isinstance(wait_override, dict)
+        ):
+            raise SystemsHarnessError("protocol-v3 amendment 013 is not frozen")
+        contract["effective_protocol_identity"]["required_git_topology"] = (
+            wait_identity["required_git_topology"]
+        )
+        contract["effective_protocol_identity"]["interpretation_order"] = (
+            wait_identity["interpretation_order"]
+        )
+        successor = str(wait_override["successor_raw_attempt_id"])
+        if successor != FORMAL_RAW_ATTEMPT_ID:
+            raise SystemsHarnessError("amendment-013 successor identity differs")
+        fatal = contract["fatal_result_contract"]
+        fatal["supervisor_closeout_root_exact"] = str(FORMAL_SUPERVISOR_ROOT)
+        fatal["supervisor_start_path_exact"] = str(FORMAL_SUPERVISOR_ROOT / "start.json")
+        fatal["supervisor_child_stdout_path_exact"] = str(
+            FORMAL_SUPERVISOR_ROOT / "child.stdout.bin"
+        )
+        fatal["supervisor_child_stderr_path_exact"] = str(
+            FORMAL_SUPERVISOR_ROOT / "child.stderr.bin"
+        )
+        fatal["supervisor_closeout_path_exact"] = str(
+            FORMAL_SUPERVISOR_ROOT / "closeout.json"
+        )
     interpretation_order = list(
         (contract.get("effective_protocol_identity") or {}).get("interpretation_order")
         or []
@@ -7479,7 +7541,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         "experiments/eacl2027/protocol-v3.json",
         *[
             f"experiments/eacl2027/protocol-v3-amendment-{index:03d}.json"
-            for index in range(1, 13)
+            for index in range(1, 14)
         ],
     ]
     if interpretation_order != expected_order:
@@ -7520,7 +7582,7 @@ def _formal_runtime_profile() -> dict[str, Any]:
         _formal_contract().get("corrected_direct_paw_cache_contract") or {}
     )
     dependency["formal_cache_dir"] = corrected.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v8.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v9.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -7577,7 +7639,7 @@ def _required_git_state(contract: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "runtime_lock_commit_diff_paths_exactly": h4.get("diff_paths_exactly"),
         "head_must_equal_runtime_lock_commit": topology.get(
-            "head_must_equal_h4_before_r04_setup"
+            "head_must_equal_h4_before_r05_setup"
         ),
         "dirty_must_equal": topology.get("dirty_must_equal"),
         "dirty_scope": topology.get("dirty_scope"),
@@ -7869,7 +7931,7 @@ def _validate_formal_config(
         "unit_count": 430,
         "canonical_sha256": FORMAL_FULL_PLAN_SHA256,
         "ordered_membership_sha256": FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
-        "primary_source_attempt_id": "formal-v3-20260831t051023z-r04",
+        "primary_source_attempt_id": FORMAL_RAW_ATTEMPT_ID,
     }
     for name, expected_value in full_expected.items():
         if full_attempt[name] != expected_value:
@@ -8865,6 +8927,66 @@ def _supervisor_environment() -> dict[str, str]:
     return dict(sorted(environment.items()))
 
 
+def _supervisor_exception_diagnostic(
+    stage: str, exc: BaseException
+) -> dict[str, str]:
+    return {
+        "stage": stage,
+        "type": f"{type(exc).__module__}.{type(exc).__qualname__}",
+        "message": str(exc),
+        "traceback_utf8": "".join(
+            traceback.TracebackException.from_exception(exc).format(chain=True)
+        ),
+    }
+
+
+def _wait_started_supervisor_child(
+    child: subprocess.Popen[bytes], diagnostics: list[dict[str, str]]
+) -> int:
+    """Wait without a timeout; retain transient wait failures and retry."""
+
+    while True:
+        try:
+            return child.wait()
+        except BaseException as exc:
+            diagnostics.append(_supervisor_exception_diagnostic("child_wait", exc))
+
+
+def _register_initial_supervisor_child(
+    pid: int,
+    registered: dict[tuple[int, int], dict[str, Any]],
+    diagnostics: list[dict[str, str]],
+) -> None:
+    """Best-effort identity capture that can never abandon a started child."""
+
+    try:
+        identity = _supervisor_process_identity(pid)
+        registered[(pid, int(identity["proc_start_ticks"]))] = identity
+    except BaseException as exc:
+        diagnostics.append(
+            _supervisor_exception_diagnostic("initial_child_identity", exc)
+        )
+
+
+def _start_supervisor_drain_thread(
+    *,
+    target: Callable[..., None],
+    args: tuple[Any, Any],
+    diagnostics: list[dict[str, str]],
+) -> threading.Thread:
+    """Start a required lossless drain, retaining and retrying sync failures."""
+
+    while True:
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        try:
+            thread.start()
+            return thread
+        except BaseException as exc:
+            diagnostics.append(
+                _supervisor_exception_diagnostic("stream_drain_thread_start", exc)
+            )
+
+
 def _supervisor_observed_exit(
     returncode: int | None, spawn_error: BaseException | None
 ) -> dict[str, Any]:
@@ -9609,7 +9731,7 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
     child_args.append("--supervised-child")
     attempt_root = _formal_attempt_dir_from_argv(child_args)
     if attempt_root is None or attempt_root.name != FORMAL_RAW_ATTEMPT_ID:
-        raise SystemsHarnessError("supervisor requires exact r04 --attempt-dir")
+        raise SystemsHarnessError("supervisor requires exact r05 --attempt-dir")
     contract = _formal_contract()["fatal_result_contract"]
     supervisor_root = Path(str(contract["supervisor_closeout_root_exact"]))
     if supervisor_root != FORMAL_SUPERVISOR_ROOT:
@@ -9651,6 +9773,8 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
     returncode: int | None = None
     process_group_id: int | None = None
     registered: dict[tuple[int, int], dict[str, Any]] = {}
+    supervisor_diagnostics: list[dict[str, str]] = []
+    diagnostics_lock = threading.Lock()
     drain_threads: list[threading.Thread] = []
     registry_stop = threading.Event()
     registry_thread: threading.Thread | None = None
@@ -9659,6 +9783,11 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
         try:
             while chunk := source.read(1024 * 1024):
                 sink.write(chunk)
+        except BaseException as exc:
+            with diagnostics_lock:
+                supervisor_diagnostics.append(
+                    _supervisor_exception_diagnostic("stream_drain", exc)
+                )
         finally:
             source.close()
 
@@ -9666,12 +9795,22 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
         while not registry_stop.wait(0.05):
             try:
                 descendants = psutil.Process(pid).children(recursive=True)
-            except psutil.Error:
+            except psutil.Error as exc:
+                with diagnostics_lock:
+                    supervisor_diagnostics.append(
+                        _supervisor_exception_diagnostic("descendant_registry", exc)
+                    )
                 descendants = []
             for descendant in descendants:
                 try:
                     identity = _supervisor_process_identity(descendant.pid)
-                except (OSError, ValueError, SystemsHarnessError):
+                except (OSError, ValueError, SystemsHarnessError) as exc:
+                    with diagnostics_lock:
+                        supervisor_diagnostics.append(
+                            _supervisor_exception_diagnostic(
+                                "descendant_identity", exc
+                            )
+                        )
                     continue
                 registered[(descendant.pid, int(identity["proc_start_ticks"]))] = (
                     identity
@@ -9685,37 +9824,45 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
+    except BaseException as exc:
+        spawn_error = exc
+    if child is not None:
         process_group_id = child.pid
-        identity = _supervisor_process_identity(child.pid)
-        registered[(child.pid, int(identity["proc_start_ticks"]))] = identity
-        registry_thread = threading.Thread(
-            target=register_descendants, args=(child.pid,), daemon=True
-        )
-        registry_thread.start()
         assert child.stdout is not None and child.stderr is not None
         drain_threads = [
-            threading.Thread(
-                target=drain, args=(child.stdout, stream_handles[0]), daemon=True
+            _start_supervisor_drain_thread(
+                target=drain,
+                args=(child.stdout, stream_handles[0]),
+                diagnostics=supervisor_diagnostics,
             ),
-            threading.Thread(
-                target=drain, args=(child.stderr, stream_handles[1]), daemon=True
+            _start_supervisor_drain_thread(
+                target=drain,
+                args=(child.stderr, stream_handles[1]),
+                diagnostics=supervisor_diagnostics,
             ),
         ]
-        for thread in drain_threads:
-            thread.start()
-        returncode = child.wait()
-    except BaseException as exc:
-        if child is None:
-            spawn_error = exc
-        else:
-            try:
-                returncode = child.wait(timeout=1)
-            except BaseException:
-                returncode = child.returncode
-    finally:
-        registry_stop.set()
-        if registry_thread is not None:
+        _register_initial_supervisor_child(
+            child.pid, registered, supervisor_diagnostics
+        )
+        try:
+            registry_thread = threading.Thread(
+                target=register_descendants, args=(child.pid,), daemon=True
+            )
+            registry_thread.start()
+        except BaseException as exc:
+            registry_thread = None
+            supervisor_diagnostics.append(
+                _supervisor_exception_diagnostic("registry_thread_start", exc)
+            )
+        returncode = _wait_started_supervisor_child(child, supervisor_diagnostics)
+    registry_stop.set()
+    if registry_thread is not None:
+        try:
             registry_thread.join(timeout=1)
+        except BaseException as exc:
+            supervisor_diagnostics.append(
+                _supervisor_exception_diagnostic("registry_thread_join", exc)
+            )
     observed_exit = _supervisor_observed_exit(returncode, spawn_error)
     quiescence = _supervisor_quiesce(
         child=child,
@@ -9804,6 +9951,7 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
         "attempt_root": str(attempt_root),
         "start_receipt": _supervisor_file_receipt(start_path),
         "observed_runner_exit": observed_exit,
+        "supervisor_diagnostics": supervisor_diagnostics,
         "quiescence": quiescence,
         "attempt_root_state": attempt_state,
         "ordinary_result": ordinary,
@@ -9819,12 +9967,14 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
         _supervisor_file_receipt(path)
     _fsync_directory(supervisor_root)
     os.chmod(supervisor_root, 0o500)
-    if sorted(path.name for path in supervisor_root.iterdir()) != [
-        "supervisor-child.stderr.log",
-        "supervisor-child.stdout.log",
-        "supervisor-closeout.json",
-        "supervisor-start.json",
-    ]:
+    contract_paths = (start_path, *stream_paths.values(), closeout_path)
+    if (
+        any(path.parent != supervisor_root for path in contract_paths)
+        or len({path.name for path in contract_paths}) != 4
+    ):
+        raise SystemsHarnessError("frozen supervisor paths are not four distinct members")
+    expected_members = sorted(path.name for path in contract_paths)
+    if sorted(path.name for path in supervisor_root.iterdir()) != expected_members:
         raise SystemsHarnessError("sealed supervisor root membership differs")
     return final_exit
 

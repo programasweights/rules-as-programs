@@ -412,9 +412,9 @@ def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
         planned["ordered_membership_sha256"]
         == systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
     )
-    assert planned["primary_source_attempt_id"].endswith("-r04")
+    assert planned["primary_source_attempt_id"].endswith("-r05")
     assert contract["effective_protocol_identity"]["interpretation_order"][-1].endswith(
-        "protocol-v3-amendment-012.json"
+        "protocol-v3-amendment-013.json"
     )
     assert planned["full_plan"] == systems.build_study_plan(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),
@@ -2543,6 +2543,73 @@ def test_supervisor_observed_exit_preserves_exit_signal_and_spawn_traceback():
     assert observed["spawn_error"]["type"] == "builtins.RuntimeError"
     assert observed["spawn_error"]["message"] == "synthetic spawn failure"
     assert "raise RuntimeError" in observed["spawn_error"]["traceback_utf8"]
+
+
+def test_started_supervisor_child_wait_retries_without_timeout():
+    class Child:
+        def __init__(self):
+            self.calls = 0
+
+        def wait(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise InterruptedError("synthetic interrupted wait")
+            return 3
+
+    child = Child()
+    diagnostics = []
+
+    assert systems._wait_started_supervisor_child(child, diagnostics) == 3
+    assert child.calls == 2
+    assert [item["stage"] for item in diagnostics] == ["child_wait"]
+    assert diagnostics[0]["message"] == "synthetic interrupted wait"
+
+
+def test_initial_supervisor_identity_failure_is_retained_not_raised(monkeypatch):
+    def fail_identity(pid):
+        raise systems.SystemsHarnessError(f"synthetic identity failure for {pid}")
+
+    monkeypatch.setattr(systems, "_supervisor_process_identity", fail_identity)
+    registered = {}
+    diagnostics = []
+
+    systems._register_initial_supervisor_child(4321, registered, diagnostics)
+
+    assert registered == {}
+    assert [item["stage"] for item in diagnostics] == ["initial_child_identity"]
+    assert diagnostics[0]["message"] == "synthetic identity failure for 4321"
+
+
+def test_required_supervisor_drain_start_failure_is_retained_and_retried(monkeypatch):
+    real_thread = systems.threading.Thread
+    calls = 0
+
+    class BrokenThread:
+        def start(self):
+            raise RuntimeError("synthetic drain start failure")
+
+    def thread_factory(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return BrokenThread()
+        return real_thread(*args, **kwargs)
+
+    monkeypatch.setattr(systems.threading, "Thread", thread_factory)
+    diagnostics = []
+    observed = []
+    thread = systems._start_supervisor_drain_thread(
+        target=lambda source, sink: observed.append((source, sink)),
+        args=("source", "sink"),
+        diagnostics=diagnostics,
+    )
+    thread.join(timeout=1)
+
+    assert observed == [("source", "sink")]
+    assert calls == 2
+    assert [item["stage"] for item in diagnostics] == [
+        "stream_drain_thread_start"
+    ]
 
 
 def test_supervisor_parent_preclaim_creates_private_directory_and_fsyncs(

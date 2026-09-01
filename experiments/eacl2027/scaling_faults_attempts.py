@@ -79,6 +79,9 @@ _COMPONENT_PREPUBLICATION_CORRECTION_PATH = (
 _COMPONENT_HISTORICAL_ROLE_CORRECTION_PATH = (
     _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-012.json"
 )
+_COMPONENT_SUPERVISOR_WAIT_CORRECTION_PATH = (
+    _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-013.json"
+)
 _COMPONENT_CANARY_ARCHIVE_PARENT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4"
 )
@@ -111,9 +114,11 @@ _COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES = (
     "srun.exit-status.txt",
 )
 _COMPONENT_PREDECESSOR_ID = "formal-v3-20260831t051023z-r02"
-_COMPONENT_SUCCESSOR_ID = "formal-v3-20260831t051023z-r04"
+_COMPONENT_SUCCESSOR_ID = "formal-v3-20260831t051023z-r05"
 _COMPONENT_BURNED_PREPUBLICATION_ID = "formal-v3-20260831t051023z-r03"
 _COMPONENT_PREPUBLICATION_JOB_ID = "1524823"
+_COMPONENT_BURNED_R04_ID = "formal-v3-20260831t051023z-r04"
+_COMPONENT_R04_PREPUBLICATION_JOB_ID = "1525449"
 _COMPONENT_PREPUBLICATION_MEMBER_NAMES = frozenset(
     {
         "evidence.sha256",
@@ -131,6 +136,40 @@ _COMPONENT_PREPUBLICATION_MEMBER_NAMES = frozenset(
         "terminal-scontrol.exit-status.txt",
         "terminal-scontrol.stderr.txt",
         "terminal-scontrol.txt",
+    }
+)
+_COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES = frozenset(
+    {
+        "archiver.py",
+        "evidence.sha256",
+        "evidence.sha256.sha256",
+        "repo-head.command.txt",
+        "repo-head.exit-status.txt",
+        "repo-head.stderr.bin",
+        "repo-head.stdout.bin",
+        "repo-status.command.txt",
+        "repo-status.exit-status.txt",
+        "repo-status.stderr.bin",
+        "repo-status.stdout.bin",
+        "setup-receipt.json",
+        "setup.log",
+        "slurm.stderr.bin",
+        "slurm.stdout.bin",
+        "supervisor-child.stderr.bin",
+        "supervisor-child.stdout.bin",
+        "supervisor-start.json",
+        "terminal-sacct.command.txt",
+        "terminal-sacct.exit-status.txt",
+        "terminal-sacct.stderr.bin",
+        "terminal-sacct.stdout.bin",
+        "terminal-scontrol.command.txt",
+        "terminal-scontrol.exit-status.txt",
+        "terminal-scontrol.stderr.bin",
+        "terminal-scontrol.stdout.bin",
+        "terminal-squeue.command.txt",
+        "terminal-squeue.exit-status.txt",
+        "terminal-squeue.stderr.bin",
+        "terminal-squeue.stdout.bin",
     }
 )
 _COMPONENT_CLASSIFICATION = (
@@ -806,7 +845,7 @@ def _load_component_amendment() -> dict[str, Any]:
         or not isinstance(prepublication_identity, dict)
         or not isinstance(explicit_override, dict)
         or explicit_override.get("successor_raw_attempt_id")
-        != _COMPONENT_SUCCESSOR_ID
+        != _COMPONENT_BURNED_R04_ID
     ):
         raise _component_error("amendment 011 is not the frozen exact correction")
     amendment["effective_protocol_identity"]["required_git_topology"] = (
@@ -843,6 +882,36 @@ def _load_component_amendment() -> dict[str, Any]:
         historical_identity["interpretation_order"]
     )
     amendment["historical_role_correction"] = historical
+    if (
+        _COMPONENT_SUPERVISOR_WAIT_CORRECTION_PATH.is_symlink()
+        or not _COMPONENT_SUPERVISOR_WAIT_CORRECTION_PATH.is_file()
+    ):
+        raise _component_error("the frozen amendment-013 correction is unavailable")
+    try:
+        wait_correction = _strict_json_object(
+            _COMPONENT_SUPERVISOR_WAIT_CORRECTION_PATH.read_text(encoding="utf-8"),
+            label="amendment 013",
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _component_error("amendment 013 is unavailable") from exc
+    wait_identity = wait_correction.get("effective_protocol_identity")
+    wait_override = wait_correction.get("explicit_override")
+    if (
+        wait_correction.get("amendment_id") != "protocol-v3-amendment-013"
+        or wait_correction.get("parent_amendment") != "protocol-v3-amendment-012"
+        or not str(wait_correction.get("status", "")).startswith("frozen ")
+        or not isinstance(wait_identity, dict)
+        or not isinstance(wait_override, dict)
+        or wait_override.get("successor_raw_attempt_id") != _COMPONENT_SUCCESSOR_ID
+    ):
+        raise _component_error("amendment 013 is not the frozen exact correction")
+    amendment["effective_protocol_identity"]["required_git_topology"] = (
+        wait_identity["required_git_topology"]
+    )
+    amendment["effective_protocol_identity"]["interpretation_order"] = (
+        wait_identity["interpretation_order"]
+    )
+    amendment["supervisor_wait_correction"] = wait_correction
     return amendment
 
 
@@ -966,6 +1035,152 @@ def r03_prepublication_failure_binding(
         "terminal_archive_members": dict(sorted(members.items())),
         "classification": "prepublication_failure_before_child_spawn",
         "cause": "unclassified_beyond_observed_filenotfounderror",
+    }
+
+
+def r04_prepublication_failure_binding(
+    amendment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate and bind the immutable r04 post-Popen failure archive."""
+
+    amendment = amendment or _load_component_amendment()
+    correction = amendment.get("supervisor_wait_correction")
+    observed = (
+        correction.get("observed_r04_terminal_boundary")
+        if isinstance(correction, dict)
+        else None
+    )
+    if not isinstance(observed, dict):
+        raise _component_error("amendment 013 r04 terminal boundary is absent")
+    archive_contract = observed.get("terminal_archive")
+    if not isinstance(archive_contract, dict):
+        raise _component_error("amendment 013 r04 archive contract is absent")
+    attempt_root = Path(str(observed.get("attempt_root", "")))
+    archive_root = Path(str(archive_contract.get("path", "")))
+    if (
+        observed.get("raw_attempt_id") != _COMPONENT_BURNED_R04_ID
+        or str(observed.get("slurm_job_id"))
+        != _COMPONENT_R04_PREPUBLICATION_JOB_ID
+        or observed.get("attempt_root_present") is not False
+        or observed.get("measurement_started") is not False
+        or os.path.lexists(attempt_root)
+    ):
+        raise _component_error("r04 attempt-root absence or identity differs")
+    _reject_symlink_components(archive_root, label="r04 prepublication archive")
+    try:
+        root_stat = archive_root.lstat()
+    except OSError as exc:
+        raise _component_error("r04 prepublication archive is unavailable") from exc
+    effective_uid = getattr(os, "geteuid", lambda: root_stat.st_uid)()
+    if (
+        archive_root.is_symlink()
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_IMODE(root_stat.st_mode) != int(archive_contract["directory_mode"])
+        or root_stat.st_uid != effective_uid
+    ):
+        raise _component_error("r04 prepublication archive owner/type/mode differs")
+    children = list(archive_root.iterdir())
+    if {path.name for path in children} != _COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES:
+        raise _component_error("r04 prepublication archive member set differs")
+    members: dict[str, dict[str, Any]] = {}
+    identities: set[tuple[int, int]] = set()
+    for path in children:
+        metadata = path.lstat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != int(archive_contract["member_mode"])
+            or metadata.st_uid != root_stat.st_uid
+            or identity in identities
+        ):
+            raise _component_error("r04 prepublication archive member metadata differs")
+        identities.add(identity)
+        members[path.name] = {
+            "mode": stat.S_IMODE(metadata.st_mode),
+            **_file_receipt(path),
+        }
+    manifest = archive_root / "evidence.sha256"
+    sidecar = archive_root / "evidence.sha256.sha256"
+    if (
+        members["evidence.sha256"]["sha256"]
+        != archive_contract["manifest_sha256"]
+        or sidecar.read_text(encoding="utf-8")
+        != f"{archive_contract['manifest_sha256']}  evidence.sha256\n"
+    ):
+        raise _component_error("r04 prepublication manifest or sidecar differs")
+    manifest_entries: dict[str, str] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  \./([^/]+)", line)
+        if match is None or match.group(2) in manifest_entries:
+            raise _component_error("r04 prepublication manifest syntax differs")
+        manifest_entries[match.group(2)] = match.group(1)
+    expected_manifest_names = _COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES - {
+        "evidence.sha256",
+        "evidence.sha256.sha256",
+    }
+    if set(manifest_entries) != expected_manifest_names or any(
+        members[name]["sha256"] != digest
+        for name, digest in manifest_entries.items()
+    ):
+        raise _component_error("r04 prepublication manifest rehash differs")
+    setup = _strict_json_object(
+        (archive_root / "setup-receipt.json").read_text(encoding="utf-8"),
+        label="r04 setup receipt",
+    )
+    supervisor_start = _strict_json_object(
+        (archive_root / "supervisor-start.json").read_text(encoding="utf-8"),
+        label="r04 supervisor start",
+    )
+    if (
+        setup.get("raw_attempt_id") != _COMPONENT_BURNED_R04_ID
+        or str(setup.get("slurm_job_id")) != _COMPONENT_R04_PREPUBLICATION_JOB_ID
+        or setup.get("study_mode") != "formal_protocol_v3_amendment_008"
+        or supervisor_start.get("raw_attempt_id") != _COMPONENT_BURNED_R04_ID
+        or str(supervisor_start.get("slurm_job_id"))
+        != _COMPONENT_R04_PREPUBLICATION_JOB_ID
+        or supervisor_start.get("slurm_partition") != "ALL"
+        or supervisor_start.get("attempt_root") != str(attempt_root)
+        or (archive_root / "repo-head.stdout.bin").read_text(encoding="utf-8").strip()
+        != correction.get("parent_runtime_lock_commit")
+    ):
+        raise _component_error("r04 prepublication setup identity differs")
+    terminal_sacct = (archive_root / "terminal-sacct.stdout.bin").read_text(
+        encoding="utf-8"
+    )
+    fields = terminal_sacct.rstrip("\n").split("|")
+    if (
+        len(fields) < 5
+        or fields[0] != _COMPONENT_R04_PREPUBLICATION_JOB_ID
+        or fields[2:5] != ["ALL", "FAILED", "2:0"]
+        or members["setup-receipt.json"]["bytes"]
+        != archive_contract["setup_receipt_bytes"]
+        or members["setup-receipt.json"]["sha256"]
+        != archive_contract["setup_receipt_sha256"]
+        or members["slurm.stderr.bin"]["bytes"]
+        != archive_contract["slurm_stderr_bytes"]
+        or members["slurm.stderr.bin"]["sha256"]
+        != archive_contract["slurm_stderr_sha256"]
+        or members["supervisor-start.json"]["bytes"]
+        != archive_contract["supervisor_start_bytes"]
+        or members["supervisor-start.json"]["sha256"]
+        != archive_contract["supervisor_start_sha256"]
+    ):
+        raise _component_error("r04 prepublication terminal evidence differs")
+    return {
+        "schema_version": 1,
+        "kind": "retained_prepublication_supervisor_failure",
+        "raw_attempt_id": _COMPONENT_BURNED_R04_ID,
+        "slurm_job_id": _COMPONENT_R04_PREPUBLICATION_JOB_ID,
+        "attempt_root": str(attempt_root),
+        "attempt_root_absent": True,
+        "measurement_started": False,
+        "terminal_archive_root": str(archive_root),
+        "terminal_archive_mode": stat.S_IMODE(root_stat.st_mode),
+        "terminal_archive_members": dict(sorted(members.items())),
+        "classification": "prepublication_failure_after_child_spawn_before_wait",
+        "observed_error": str(observed.get("observed_error")),
+        "cause": "unclassified_beyond_observed_supervisor_message",
     }
 
 
@@ -2208,7 +2423,7 @@ def component_successor_source_binding(
         parent != p4.get("parent_must_equal")
         or i4.get("parent_must_equal_p4") is not True
         or h4.get("parent_must_equal_i4") is not True
-        or topology.get("head_must_equal_h4_before_r04_setup") is not True
+        or topology.get("head_must_equal_h4_before_r05_setup") is not True
         or observed_paths != expected_paths
     ):
         raise _component_error("P4/I4/H4 topology differs from amendment 008")
@@ -5471,7 +5686,7 @@ def _validate_component_protocol_correction(
     return terminal_forensics
 
 
-def _derive_r04_partial_forensics(
+def _derive_successor_partial_forensics(
     payload: dict[str, Any],
     *,
     receipt_type: str,
@@ -5680,7 +5895,7 @@ def _validate_whole_attempt_protocol_correction(
     if any(counts.get(name) != value for name, value in fixed_counts.items()):
         raise _component_error("whole-attempt validation counts differ")
     validation_receipt = evidence_by_kind["whole_attempt_replacement_validation"]
-    derived_partial = _derive_r04_partial_forensics(
+    derived_partial = _derive_successor_partial_forensics(
         payload,
         receipt_type=str(validation_wrapper["receipt_type"]),
         payload_sha256=str(validation_wrapper["payload_sha256"]),
@@ -5847,7 +6062,7 @@ def replacement_launch_binding(
         successor_id == _COMPONENT_SUCCESSOR_ID
         and receipt.get("predecessor_raw_attempt_id") == _COMPONENT_PREDECESSOR_ID
     )
-    expected_schema_version = 3 if component_edge else 1
+    expected_schema_version = 4 if component_edge else 1
     if receipt.get("schema_version") != expected_schema_version:
         raise SystemsHarnessError(
             f"replacement receipt schema_version must equal {expected_schema_version}"
@@ -5870,6 +6085,7 @@ def replacement_launch_binding(
         expected_top_level.update(
             {
                 "prepublication_failure",
+                "r04_prepublication_failure",
                 "successor_source",
                 "whole_attempt_protocol_correction",
             }
@@ -6157,6 +6373,11 @@ def replacement_launch_binding(
             raise SystemsHarnessError(
                 "replacement receipt r03 prepublication failure binding differs"
             )
+        expected_r04_prepublication = r04_prepublication_failure_binding()
+        if receipt.get("r04_prepublication_failure") != expected_r04_prepublication:
+            raise SystemsHarnessError(
+                "replacement receipt r04 prepublication failure binding differs"
+            )
         terminal_forensics = _validate_whole_attempt_protocol_correction(
             receipt=receipt,
             predecessor_root=predecessor_root,
@@ -6188,6 +6409,9 @@ def replacement_launch_binding(
     }
     if whole_attempt_protocol_correction:
         binding["prepublication_failure"] = receipt["prepublication_failure"]
+        binding["r04_prepublication_failure"] = receipt[
+            "r04_prepublication_failure"
+        ]
         binding["successor_source"] = receipt["successor_source"]
         binding["whole_attempt_protocol_correction"] = receipt[
             "whole_attempt_protocol_correction"
