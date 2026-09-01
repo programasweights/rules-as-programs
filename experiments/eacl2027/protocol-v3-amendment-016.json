@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-016",
+  "parent_amendment": "protocol-v3-amendment-015",
+  "created_utc": "2026-09-01T19:34:43Z",
+  "frozen_utc": "2026-09-01T19:34:43Z",
+  "status": "frozen prelaunch supervisor-cache-environment correction",
+  "parent_runtime_lock_commit": "1eca9b65cdc27b5ad9e67fea1fd6c98ece78d1cb",
+  "reason": "Exact r07 completed offline setup on ALL/watgpu108 but failed before attempt publication because the outer supervisor reconstructed PAW_CACHE_DIR from the historical Amendment 008 shared-root field after the sbatch launcher had exported the Amendment 015 dedicated root. The child detected the exact mismatch and exited before any measurement. Fresh r08 changes only the supervisor child-environment derivation so PAW_CACHE_DIR equals the already frozen effective dedicated-cache profile used by the sbatch launcher.",
+  "observed_r07_terminal_boundary": {
+    "raw_attempt_id": "formal-v3-20260831t051023z-r07",
+    "slurm_job_id": "1526084",
+    "partition": "ALL",
+    "node": "watgpu108",
+    "state": "FAILED",
+    "exit_code": "5:0",
+    "elapsed_seconds": 64,
+    "attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r07",
+    "attempt_root_present": false,
+    "measurement_started": false,
+    "observed_child_exit_code": 2,
+    "supervisor_quiescence_passed": true,
+    "observed_error": "systems harness preflight error: formal process environment mismatch: {\"PAW_CACHE_DIR\": {\"expected\": \"/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/formal-v3-r07-programasweights\", \"observed\": \"/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights\"}}",
+    "terminal_archive": {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/prepublication-failures/1526084-v1",
+      "directory_mode": 320,
+      "member_mode": 292,
+      "manifest_bytes": 2684,
+      "manifest_sha256": "99bdecdd7d79953ef3f1d2a16c292aa0cdeaba3a51d73bf174a9b6a0cb44b0b8",
+      "setup_receipt_bytes": 22230571,
+      "setup_receipt_sha256": "9ae2ee353e20210cc194323197e464e1610d8779da874117aebfdbc160c2ec1c",
+      "supervisor_start_bytes": 4784,
+      "supervisor_start_sha256": "8671a24327a9fe657151ec34c653bf5e5a0445fb5b4e35279161fb088917cdb3",
+      "supervisor_closeout_bytes": 1736,
+      "supervisor_closeout_sha256": "59ac92dcb1fb5725269e5391a128f08043136e6c7f0c21f0ae3e8a7b51480752",
+      "child_stderr_bytes": 274,
+      "child_stderr_sha256": "2b72d49128fc196c4e9c53bac59761517343258919fe692f8848c6a697937ae6"
+    }
+  },
+  "explicit_override": {
+    "scope": "Only the exact burned-r07 to fresh-r08 edge, supervisor PAW_CACHE_DIR derivation, r08 identities, and complete r07 archive retention.",
+    "burned_attempt": "formal-v3-20260831t051023z-r07 is terminal and may never be submitted again even though no attempt root was published.",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r08",
+    "requested_partition": "ALL",
+    "requested_node": "watgpu108",
+    "effective_dedicated_cache_root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/formal-v3-r07-programasweights",
+    "supervisor_environment_rule": "The sbatch launcher and outer supervisor must derive PAW_CACHE_DIR from the same effective formal cache-and-dependency profile after all amendments are applied. The supervisor must not read the historical Amendment 008 r03_paw_cache_dir_exact field directly. Before Popen, require the complete recorded child environment PAW_CACHE_DIR to equal both the sbatch process environment and the effective dedicated root; PROGRAMASWEIGHTS_CACHE_DIR remains absent.",
+    "primary_source_rule": "Exact r08 executes the complete unchanged 430-row plan once and is the sole primary numeric source. r01 through r07 contribute no primary row. An unfavorable, system-violating, failed, or incomplete r08 outcome may not be replaced based on favorability.",
+    "retention_rule": "The fresh r08 replacement receipt rehashes and binds the complete sealed r03, r04, r05, r06, and r07 prepublication archives, the complete immutable r01/r02 evidence, and proves exact r03/r04/r05/r06/r07/r08 attempt-root absence before r08 setup.",
+    "unchanged": [
+      "the complete Amendment 008 430-row workload, ordering, repetitions, endpoints, uniform-primary-source rule, censoring, and claim limits",
+      "the Amendment 015 dedicated cache root and every cache, model, program, runtime-manifest, wheelhouse, package, n_ctx, and direct-cache semantic byte",
+      "host_logical_cpu_count=128, multiprocessing_cpu_count=128, llama_cpp_n_threads=64, llama_cpp_n_threads_batch=128, eight allocated CPUs, 16 GiB memory, CPU-only execution, watgpu108, and partition ALL",
+      "Amendment 013 post-Popen wait, drain, quiescence, closeout, and contract-derived membership semantics",
+      "r02 exit 5 remains unclassified; r02 is sensitivity-only; r03/r04/r05/r06/r07 are prepublication-only"
+    ]
+  },
+  "implementation_and_test_gate": {
+    "required_behaviors": [
+      "exact r08 identity propagates through launcher, runner, replacement, analyzer, and reducer",
+      "the sbatch requested node remains exactly watgpu108 and partition remains exactly ALL",
+      "the sbatch environment, effective runtime profile, supervisor recorded child environment, and child process all use the exact same dedicated PAW_CACHE_DIR",
+      "tests fail if the historical shared r03 cache root overwrites the effective dedicated root",
+      "fresh r08 receipt rehashes every sealed r03/r04/r05/r06/r07 archive member and proves all six prepublication attempt roots absent",
+      "no prior archive, cache, receipt, or attempt byte is modified"
+    ],
+    "static_gates": [
+      "focused pytest suite",
+      "Ruff",
+      "Python bytecode compilation",
+      "bash -n",
+      "git diff --check"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json",
+      "experiments/eacl2027/protocol-v3-amendment-011.json",
+      "experiments/eacl2027/protocol-v3-amendment-012.json",
+      "experiments/eacl2027/protocol-v3-amendment-013.json",
+      "experiments/eacl2027/protocol-v3-amendment-014.json",
+      "experiments/eacl2027/protocol-v3-amendment-015.json",
+      "experiments/eacl2027/protocol-v3-amendment-016.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "1eca9b65cdc27b5ad9e67fea1fd6c98ece78d1cb",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-016.json"
+        ],
+        "semantic_role": "P12 prelaunch supervisor-cache-environment correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I12 exact r08 identity, effective-cache supervisor propagation, r07 retention, and Amendment 016 propagation"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v12.json"
+        ],
+        "semantic_role": "H12 live runtime lock for exact r08 with unchanged dedicated cache bytes"
+      },
+      "head_must_equal_h4_before_r08_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v12.json",
+    "chronology_rule": "Commit this file alone as P12 directly on H11 and push it. Commit exactly the declared I12 paths after all implementation and archive-retention tests pass. Generate and commit only formal-runtime-lock-v12.json as H12, push H12, then create a fresh schema-7 r08 receipt candidate; every earlier receipt and archive remains immutable."
+  },
+  "claim_limits": [
+    "This amendment supplies no system-performance measurement.",
+    "It does not change any cache byte, model, program, runtime, host, workload, inference setting, or prior evidence; it corrects only the supervisor child-environment source.",
+    "It does not authorize r08 launch until exact P12/I12/H12, complete r07 retention, environment-equality, and fresh-receipt gates pass."
+  ]
+}
