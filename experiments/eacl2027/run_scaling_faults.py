@@ -100,6 +100,9 @@ FORMAL_ROUTING_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-010.json"
 FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT = (
     ROOT / "protocol-v3-amendment-011.json"
 )
+FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT = (
+    ROOT / "protocol-v3-amendment-012.json"
+)
 FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
 FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
     "For exact raw r03, study_mode is exactly "
@@ -7265,6 +7268,11 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         or not FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT.is_file()
     ):
         raise SystemsHarnessError("protocol-v3 amendment 011 is absent or a symlink")
+    if (
+        FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT.is_symlink()
+        or not FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT.is_file()
+    ):
+        raise SystemsHarnessError("protocol-v3 amendment 012 is absent or a symlink")
 
     def reject_constant(value: str) -> None:
         raise ValueError(f"non-finite JSON number {value}")
@@ -7434,6 +7442,35 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         fatal["supervisor_closeout_path_exact"] = str(
             supervisor_root / "closeout.json"
         )
+        try:
+            historical = json.loads(
+                FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT.read_text(
+                    encoding="utf-8"
+                ),
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemsHarnessError(f"invalid strict amendment 012: {exc}") from exc
+        historical_identity = (
+            historical.get("effective_protocol_identity")
+            if isinstance(historical, dict)
+            else None
+        )
+        if (
+            not isinstance(historical, dict)
+            or historical.get("amendment_id") != "protocol-v3-amendment-012"
+            or historical.get("parent_amendment") != "protocol-v3-amendment-011"
+            or not str(historical.get("status", "")).startswith("frozen ")
+            or not isinstance(historical_identity, dict)
+        ):
+            raise SystemsHarnessError("protocol-v3 amendment 012 is not frozen")
+        contract["effective_protocol_identity"]["required_git_topology"] = (
+            historical_identity["required_git_topology"]
+        )
+        contract["effective_protocol_identity"]["interpretation_order"] = (
+            historical_identity["interpretation_order"]
+        )
     interpretation_order = list(
         (contract.get("effective_protocol_identity") or {}).get("interpretation_order")
         or []
@@ -7442,7 +7479,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         "experiments/eacl2027/protocol-v3.json",
         *[
             f"experiments/eacl2027/protocol-v3-amendment-{index:03d}.json"
-            for index in range(1, 12)
+            for index in range(1, 13)
         ],
     ]
     if interpretation_order != expected_order:
@@ -7483,7 +7520,7 @@ def _formal_runtime_profile() -> dict[str, Any]:
         _formal_contract().get("corrected_direct_paw_cache_contract") or {}
     )
     dependency["formal_cache_dir"] = corrected.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v7.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v8.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"

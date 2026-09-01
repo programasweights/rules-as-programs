@@ -76,6 +76,9 @@ _COMPONENT_ROUTING_CORRECTION_PATH = (
 _COMPONENT_PREPUBLICATION_CORRECTION_PATH = (
     _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-011.json"
 )
+_COMPONENT_HISTORICAL_ROLE_CORRECTION_PATH = (
+    _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-012.json"
+)
 _COMPONENT_CANARY_ARCHIVE_PARENT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4"
 )
@@ -813,6 +816,33 @@ def _load_component_amendment() -> dict[str, Any]:
         prepublication_identity["interpretation_order"]
     )
     amendment["prepublication_correction"] = prepublication
+    if (
+        _COMPONENT_HISTORICAL_ROLE_CORRECTION_PATH.is_symlink()
+        or not _COMPONENT_HISTORICAL_ROLE_CORRECTION_PATH.is_file()
+    ):
+        raise _component_error("the frozen amendment-012 correction is unavailable")
+    try:
+        historical = _strict_json_object(
+            _COMPONENT_HISTORICAL_ROLE_CORRECTION_PATH.read_text(encoding="utf-8"),
+            label="amendment 012",
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _component_error("amendment 012 is unavailable") from exc
+    historical_identity = historical.get("effective_protocol_identity")
+    if (
+        historical.get("amendment_id") != "protocol-v3-amendment-012"
+        or historical.get("parent_amendment") != "protocol-v3-amendment-011"
+        or not str(historical.get("status", "")).startswith("frozen ")
+        or not isinstance(historical_identity, dict)
+    ):
+        raise _component_error("amendment 012 is not the frozen exact correction")
+    amendment["effective_protocol_identity"]["required_git_topology"] = (
+        historical_identity["required_git_topology"]
+    )
+    amendment["effective_protocol_identity"]["interpretation_order"] = (
+        historical_identity["interpretation_order"]
+    )
+    amendment["historical_role_correction"] = historical
     return amendment
 
 
@@ -5441,6 +5471,44 @@ def _validate_component_protocol_correction(
     return terminal_forensics
 
 
+def _derive_r04_partial_forensics(
+    payload: dict[str, Any],
+    *,
+    receipt_type: str,
+    payload_sha256: str,
+    validation_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    """Translate a validated historical-r03 role ledger only in memory."""
+
+    ordered_units = payload.get("ordered_units")
+    if (
+        not isinstance(ordered_units, list)
+        or len(ordered_units) != 430
+        or any(
+            not isinstance(row, dict)
+            or row.get("plan_index") != index
+            or row.get("primary_source_attempt_id")
+            != _COMPONENT_BURNED_PREPUBLICATION_ID
+            for index, row in enumerate(ordered_units)
+        )
+    ):
+        raise _component_error("whole-attempt historical primary-source rows differ")
+    historical_ordered_units_sha256 = sha256(
+        _canonical_json_bytes(ordered_units)
+    ).hexdigest()
+    derived = json.loads(json.dumps(payload))
+    for row in derived["ordered_units"]:
+        row["primary_source_attempt_id"] = _COMPONENT_SUCCESSOR_ID
+    derived["historical_primary_source_attempt_id"] = (
+        _COMPONENT_BURNED_PREPUBLICATION_ID
+    )
+    derived["historical_ordered_units_sha256"] = historical_ordered_units_sha256
+    derived["receipt_type"] = receipt_type
+    derived["payload_sha256"] = payload_sha256
+    derived["receipt"] = validation_receipt
+    return derived
+
+
 def _validate_whole_attempt_protocol_correction(
     *,
     receipt: dict[str, Any],
@@ -5611,18 +5679,13 @@ def _validate_whole_attempt_protocol_correction(
     fixed_counts = dict(schema.get("counts_fixed_values") or {})
     if any(counts.get(name) != value for name, value in fixed_counts.items()):
         raise _component_error("whole-attempt validation counts differ")
-    ordered_units = payload.get("ordered_units")
-    if (
-        not isinstance(ordered_units, list)
-        or len(ordered_units) != 430
-        or any(
-            not isinstance(row, dict)
-            or row.get("plan_index") != index
-            or row.get("primary_source_attempt_id") != _COMPONENT_SUCCESSOR_ID
-            for index, row in enumerate(ordered_units)
-        )
-    ):
-        raise _component_error("whole-attempt uniform primary-source rows differ")
+    validation_receipt = evidence_by_kind["whole_attempt_replacement_validation"]
+    derived_partial = _derive_r04_partial_forensics(
+        payload,
+        receipt_type=str(validation_wrapper["receipt_type"]),
+        payload_sha256=str(validation_wrapper["payload_sha256"]),
+        validation_receipt=validation_receipt,
+    )
 
     canary_binding = dict(
         (amendment.get("pending_terminal_bindings") or {}).get("all_partition_canary")
@@ -5680,7 +5743,6 @@ def _validate_whole_attempt_protocol_correction(
     ):
         raise _component_error("whole-attempt correction values differ")
     historical = dict(correction.get("historical_validation") or {})
-    validation_receipt = evidence_by_kind["whole_attempt_replacement_validation"]
     if historical != {
         "receipt_path": validation_receipt["path"],
         "receipt_bytes": validation_receipt["bytes"],
@@ -5688,6 +5750,7 @@ def _validate_whole_attempt_protocol_correction(
     }:
         raise _component_error("whole-attempt historical validation binding differs")
     return {
+        **derived_partial,
         "validated_canary_archive_files": canary_archive["member_receipts"],
         "whole_attempt_validation": validation_receipt,
         "full_attempt_plan": whole,

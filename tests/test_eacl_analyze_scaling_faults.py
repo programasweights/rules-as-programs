@@ -1962,3 +1962,13 @@ def test_withdrawn_partial_composite_reducer_fails_closed(tmp_path):
         analyzer.analyze_component_composite(
             tmp_path, analyzer.COMPONENT_ANALYSIS_ID
         )
+
+
+def test_component_contract_routes_through_amendment_012():
+    contract = analyzer._load_amendment_008()
+    assert contract["historical_role_correction"]["amendment_id"] == (
+        "protocol-v3-amendment-012"
+    )
+    assert contract["effective_protocol_identity"]["interpretation_order"] == list(
+        analyzer.PROTOCOL_PATHS_012
+    )

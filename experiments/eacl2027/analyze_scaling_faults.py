@@ -56,6 +56,10 @@ PROTOCOL_PATHS_011 = (
     *PROTOCOL_PATHS_010,
     "experiments/eacl2027/protocol-v3-amendment-011.json",
 )
+PROTOCOL_PATHS_012 = (
+    *PROTOCOL_PATHS_011,
+    "experiments/eacl2027/protocol-v3-amendment-012.json",
+)
 # Backward-compatible name for the amendment-007 single-attempt reducer.
 PROTOCOL_PATHS = PROTOCOL_PATHS_007
 TERMINAL_STATUSES = frozenset(
@@ -1040,6 +1044,27 @@ def _load_amendment_008() -> dict[str, Any] | None:
         prepublication_identity["interpretation_order"]
     )
     value["prepublication_correction"] = prepublication
+    historical_path = REPO_ROOT / PROTOCOL_PATHS_012[-1]
+    if historical_path.is_symlink() or not historical_path.is_file():
+        raise AnalysisValidationError("amendment 012 is unavailable")
+    historical = _require_dict(_load_json(historical_path), "amendment 012")
+    historical_identity = _require_dict(
+        historical.get("effective_protocol_identity"),
+        "amendment-012 effective identity",
+    )
+    if (
+        historical.get("amendment_id") != "protocol-v3-amendment-012"
+        or historical.get("parent_amendment") != "protocol-v3-amendment-011"
+        or not str(historical.get("status", "")).startswith("frozen ")
+    ):
+        raise AnalysisValidationError("amendment 012 is not frozen")
+    value["effective_protocol_identity"]["required_git_topology"] = (
+        historical_identity["required_git_topology"]
+    )
+    value["effective_protocol_identity"]["interpretation_order"] = (
+        historical_identity["interpretation_order"]
+    )
+    value["historical_role_correction"] = historical
     return value
 
 
@@ -2146,7 +2171,7 @@ def _effective_formal_runtime_profile(
         "amendment-008 cache correction",
     )
     dependency["formal_cache_dir"] = correction.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v7.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v8.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -2647,7 +2672,7 @@ def _component_static_analysis_binding(analysis_id: str) -> dict[str, Any]:
     binding["analysis_version"] = COMPONENT_ANALYSIS_ID
     binding["protocol_documents"] = [
         {"path": relative, "sha256": _sha256(REPO_ROOT / relative)}
-        for relative in PROTOCOL_PATHS_011
+        for relative in PROTOCOL_PATHS_012
     ]
     binding["reducer_config"] = COMPONENT_REDUCER_CONFIG
     binding["reducer_config_sha256"] = _sha256_bytes(
@@ -6003,7 +6028,7 @@ def validate_attempt(
         legacy_r01=legacy_r01,
         runner_anchor=anchored_r02,
         protocol_paths=(
-            PROTOCOL_PATHS_011
+            PROTOCOL_PATHS_012
             if component_r04
             else PROTOCOL_PATHS_007[:-1]
             if legacy_r01 is not None
@@ -6973,6 +6998,7 @@ def analyze_component_composite(path: Path, analysis_id: str) -> dict[str, Any]:
         "amendment_009_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_009[-1]),
         "amendment_010_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_010[-1]),
         "amendment_011_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_011[-1]),
+        "amendment_012_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_012[-1]),
     }
     return {
         "schema_version": 1,

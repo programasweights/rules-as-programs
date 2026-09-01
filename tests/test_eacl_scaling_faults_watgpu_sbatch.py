@@ -107,7 +107,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     ) in source
     assert (
         'readonly RUNTIME_LOCK="${REPO_ROOT}/'
-            'experiments/eacl2027/formal-runtime-lock-v7.json"'
+            'experiments/eacl2027/formal-runtime-lock-v8.json"'
     ) in source
     assert '! -f "${RUNTIME_LOCK}"' in source
 

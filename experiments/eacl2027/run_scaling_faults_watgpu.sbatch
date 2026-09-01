@@ -30,7 +30,7 @@ readonly WHEELHOUSE_ROOT="${FORMAL_ROOT}/runtime/wheelhouse"
 readonly RAW_ATTEMPTS_ROOT="${FORMAL_ROOT}/attempts"
 readonly SCHEDULER_ROOT="${FORMAL_ROOT}/scheduler"
 readonly RUNNER="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults.py"
-readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v7.json"
+readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v8.json"
 readonly LAUNCH_SCRIPT="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults_watgpu.sbatch"
 
 export PATH="/usr/local/bin:/usr/bin:/bin"

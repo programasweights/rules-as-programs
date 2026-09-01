@@ -1789,6 +1789,54 @@ def test_r03_prepublication_archive_binding_rehashes_every_sealed_member(tmp_pat
         attempts.r03_prepublication_failure_binding(amendment)
 
 
+def test_historical_r03_roles_are_retained_and_derived_only_to_r04():
+    ordered = [
+        {
+            "plan_index": index,
+            "primary_source_attempt_id": attempts._COMPONENT_BURNED_PREPUBLICATION_ID,
+        }
+        for index in range(430)
+    ]
+    payload = {"counts": {"terminal": 279}, "ordered_units": ordered}
+    historical_digest = hashlib.sha256(
+        attempts._canonical_json_bytes(ordered)
+    ).hexdigest()
+
+    derived = attempts._derive_r04_partial_forensics(
+        payload,
+        receipt_type="r02_partial_terminal_forensics",
+        payload_sha256="a" * 64,
+        validation_receipt={"sha256": "b" * 64},
+    )
+
+    assert all(
+        row["primary_source_attempt_id"] == attempts._COMPONENT_SUCCESSOR_ID
+        for row in derived["ordered_units"]
+    )
+    assert all(
+        row["primary_source_attempt_id"]
+        == attempts._COMPONENT_BURNED_PREPUBLICATION_ID
+        for row in payload["ordered_units"]
+    )
+    assert derived["historical_primary_source_attempt_id"] == (
+        attempts._COMPONENT_BURNED_PREPUBLICATION_ID
+    )
+    assert derived["historical_ordered_units_sha256"] == historical_digest
+
+    for invalid in (
+        ordered[:-1],
+        [*ordered[:5], {**ordered[5], "primary_source_attempt_id": "r04"}, *ordered[6:]],
+        [*ordered[:5], {**ordered[5], "plan_index": 6}, *ordered[6:]],
+    ):
+        with pytest.raises(attempts.SystemsHarnessError, match="historical"):
+            attempts._derive_r04_partial_forensics(
+                {"ordered_units": invalid},
+                receipt_type="r02_partial_terminal_forensics",
+                payload_sha256="a" * 64,
+                validation_receipt={"sha256": "b" * 64},
+            )
+
+
 def test_canary_validator_accepts_extra_import_activations_but_requires_worker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

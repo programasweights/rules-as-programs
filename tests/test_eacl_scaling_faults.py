@@ -401,6 +401,7 @@ def test_formal_study_plan_enumerates_all_430_units():
 
 
 def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
+    contract = systems._formal_contract()
     planned = systems.build_full_attempt_plan(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS)
     )
@@ -412,6 +413,9 @@ def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
         == systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
     )
     assert planned["primary_source_attempt_id"].endswith("-r04")
+    assert contract["effective_protocol_identity"]["interpretation_order"][-1].endswith(
+        "protocol-v3-amendment-012.json"
+    )
     assert planned["full_plan"] == systems.build_study_plan(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),
         fault_names=systems.FORMAL_FAULTS,
