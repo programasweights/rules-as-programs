@@ -412,9 +412,9 @@ def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
         planned["ordered_membership_sha256"]
         == systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
     )
-    assert planned["primary_source_attempt_id"].endswith("-r07")
+    assert planned["primary_source_attempt_id"].endswith("-r08")
     assert contract["effective_protocol_identity"]["interpretation_order"][-1].endswith(
-        "protocol-v3-amendment-015.json"
+        "protocol-v3-amendment-016.json"
     )
     assert planned["full_plan"] == systems.build_study_plan(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),
@@ -2734,14 +2734,15 @@ def test_supervisor_environment_is_complete_sanitized_and_all_partition(
     monkeypatch.setenv("SLURM_JOB_ID", "1524999")
     monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
     monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
+    monkeypatch.setenv("PAW_CACHE_DIR", "/formal/dedicated-cache")
     monkeypatch.setenv("SPEECHIFY_API_KEY", "must-not-leak")
     monkeypatch.setenv("PROGRAMASWEIGHTS_CACHE_DIR", "/wrong/cache")
     monkeypatch.setattr(
         systems,
-        "_formal_contract",
+        "_formal_runtime_profile",
         lambda: {
-            "corrected_direct_paw_cache_contract": {
-                "r03_paw_cache_dir_exact": "/formal/cache"
+            "cache_and_dependency_receipt": {
+                "formal_cache_dir": "/formal/dedicated-cache"
             }
         },
     )
@@ -2751,11 +2752,35 @@ def test_supervisor_environment_is_complete_sanitized_and_all_partition(
     assert environment["SLURM_JOB_ID"] == "1524999"
     assert environment["SLURM_JOB_PARTITION"] == "ALL"
     assert environment["SLURM_JOB_NODELIST"] == "watgpu108"
-    assert environment["PAW_CACHE_DIR"] == "/formal/cache"
+    assert environment["PAW_CACHE_DIR"] == "/formal/dedicated-cache"
     assert environment["RAP_EACL_SUPERVISED_CHILD"] == "1"
     assert "SPEECHIFY_API_KEY" not in environment
     assert "PROGRAMASWEIGHTS_CACHE_DIR" not in environment
     assert list(environment) == sorted(environment)
+
+
+def test_supervisor_environment_rejects_sbatch_effective_cache_disagreement(
+    monkeypatch,
+):
+    monkeypatch.setenv("SLURM_JOB_ID", "1526999")
+    monkeypatch.setenv("SLURM_JOB_PARTITION", "ALL")
+    monkeypatch.setenv("SLURM_JOB_NODELIST", "watgpu108")
+    monkeypatch.setenv("PAW_CACHE_DIR", "/formal/historical-shared-cache")
+    monkeypatch.setattr(
+        systems,
+        "_formal_runtime_profile",
+        lambda: {
+            "cache_and_dependency_receipt": {
+                "formal_cache_dir": "/formal/dedicated-cache"
+            }
+        },
+    )
+
+    with pytest.raises(
+        systems.SystemsHarnessError,
+        match="supervisor sbatch and effective PAW_CACHE_DIR differ",
+    ):
+        systems._supervisor_environment()
 
 
 def test_fatal_journal_item_preserves_invalid_complete_and_partial_bytes(tmp_path):

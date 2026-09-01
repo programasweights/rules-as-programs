@@ -43,7 +43,7 @@ _FORMAL_ATTEMPT_RE = re.compile(
 _REPLACEMENT_CLASSIFICATIONS = frozenset({"harness_error", "infrastructure_error"})
 _EXTERNAL_SCHEDULER_STATES = frozenset({"PREEMPTED", "NODE_FAIL", "BOOT_FAIL"})
 _MAX_FORMAL_ATTEMPT_ORDINAL = 5
-_COMPONENT_MAX_FORMAL_ATTEMPT_ORDINAL = 7
+_COMPONENT_MAX_FORMAL_ATTEMPT_ORDINAL = 8
 _MAX_PREDECESSOR_TREE_ENTRIES = 250_000
 _MAX_PREDECESSOR_TREE_REGULAR_BYTES = 8 * 1024**3
 _MIN_STAGING_FREE_RESERVE_BYTES = 1024**3
@@ -89,6 +89,9 @@ _COMPONENT_HOST_ROUTING_CORRECTION_PATH = (
 _COMPONENT_CACHE_ISOLATION_CORRECTION_PATH = (
     _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-015.json"
 )
+_COMPONENT_SUPERVISOR_CACHE_CORRECTION_PATH = (
+    _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-016.json"
+)
 _COMPONENT_CANARY_ARCHIVE_PARENT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4"
 )
@@ -121,7 +124,7 @@ _COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES = (
     "srun.exit-status.txt",
 )
 _COMPONENT_PREDECESSOR_ID = "formal-v3-20260831t051023z-r02"
-_COMPONENT_SUCCESSOR_ID = "formal-v3-20260831t051023z-r07"
+_COMPONENT_SUCCESSOR_ID = "formal-v3-20260831t051023z-r08"
 _COMPONENT_BURNED_PREPUBLICATION_ID = "formal-v3-20260831t051023z-r03"
 _COMPONENT_PREPUBLICATION_JOB_ID = "1524823"
 _COMPONENT_BURNED_R04_ID = "formal-v3-20260831t051023z-r04"
@@ -130,6 +133,8 @@ _COMPONENT_BURNED_R05_ID = "formal-v3-20260831t051023z-r05"
 _COMPONENT_R05_PREPUBLICATION_JOB_ID = "1525595"
 _COMPONENT_BURNED_R06_ID = "formal-v3-20260831t051023z-r06"
 _COMPONENT_R06_PREPUBLICATION_JOB_ID = "1525703"
+_COMPONENT_BURNED_R07_ID = "formal-v3-20260831t051023z-r07"
+_COMPONENT_R07_PREPUBLICATION_JOB_ID = "1526084"
 _COMPONENT_PREPUBLICATION_MEMBER_NAMES = frozenset(
     {
         "evidence.sha256",
@@ -187,6 +192,7 @@ _COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES = frozenset(
     {*_COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES, "supervisor-closeout.json"}
 )
 _COMPONENT_R06_PREPUBLICATION_MEMBER_NAMES = _COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES
+_COMPONENT_R07_PREPUBLICATION_MEMBER_NAMES = _COMPONENT_R06_PREPUBLICATION_MEMBER_NAMES
 _COMPONENT_CLASSIFICATION = (
     "outcome_aware_launch_wide_whole_attempt_protocol_correction"
 )
@@ -979,7 +985,7 @@ def _load_component_amendment() -> dict[str, Any]:
         or not str(cache_isolation.get("status", "")).startswith("frozen ")
         or not isinstance(cache_identity, dict)
         or not isinstance(cache_override, dict)
-        or cache_override.get("successor_raw_attempt_id") != _COMPONENT_SUCCESSOR_ID
+        or cache_override.get("successor_raw_attempt_id") != _COMPONENT_BURNED_R07_ID
         or cache_override.get("requested_partition") != "ALL"
         or cache_override.get("requested_node") != "watgpu108"
         or cache_override.get("dedicated_cache_root")
@@ -993,6 +999,42 @@ def _load_component_amendment() -> dict[str, Any]:
         cache_identity["interpretation_order"]
     )
     amendment["cache_isolation_correction"] = cache_isolation
+    if (
+        _COMPONENT_SUPERVISOR_CACHE_CORRECTION_PATH.is_symlink()
+        or not _COMPONENT_SUPERVISOR_CACHE_CORRECTION_PATH.is_file()
+    ):
+        raise _component_error("the frozen amendment-016 correction is unavailable")
+    try:
+        supervisor_cache = _strict_json_object(
+            _COMPONENT_SUPERVISOR_CACHE_CORRECTION_PATH.read_text(encoding="utf-8"),
+            label="amendment 016",
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _component_error("amendment 016 is unavailable") from exc
+    supervisor_identity = supervisor_cache.get("effective_protocol_identity")
+    supervisor_override = supervisor_cache.get("explicit_override")
+    if (
+        supervisor_cache.get("amendment_id") != "protocol-v3-amendment-016"
+        or supervisor_cache.get("parent_amendment")
+        != "protocol-v3-amendment-015"
+        or not str(supervisor_cache.get("status", "")).startswith("frozen ")
+        or not isinstance(supervisor_identity, dict)
+        or not isinstance(supervisor_override, dict)
+        or supervisor_override.get("successor_raw_attempt_id")
+        != _COMPONENT_SUCCESSOR_ID
+        or supervisor_override.get("requested_partition") != "ALL"
+        or supervisor_override.get("requested_node") != "watgpu108"
+        or supervisor_override.get("effective_dedicated_cache_root")
+        != cache_override.get("dedicated_cache_root")
+    ):
+        raise _component_error("amendment 016 is not the frozen exact correction")
+    amendment["effective_protocol_identity"]["required_git_topology"] = (
+        supervisor_identity["required_git_topology"]
+    )
+    amendment["effective_protocol_identity"]["interpretation_order"] = (
+        supervisor_identity["interpretation_order"]
+    )
+    amendment["supervisor_cache_environment_correction"] = supervisor_cache
     return amendment
 
 
@@ -1583,6 +1625,168 @@ def r06_prepublication_failure_binding(
         "classification": "prepublication_runtime_lock_mismatch",
         "observed_error": str(observed.get("observed_error")),
         "cause": "unclassified_beyond_observed_preflight_mismatch",
+    }
+
+
+def r07_prepublication_failure_binding(
+    amendment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate and bind the immutable r07 supervisor-cache failure archive."""
+
+    amendment = amendment or _load_component_amendment()
+    correction = amendment.get("supervisor_cache_environment_correction")
+    observed = (
+        correction.get("observed_r07_terminal_boundary")
+        if isinstance(correction, dict)
+        else None
+    )
+    if not isinstance(observed, dict):
+        raise _component_error("amendment 016 r07 terminal boundary is absent")
+    archive_contract = observed.get("terminal_archive")
+    if not isinstance(archive_contract, dict):
+        raise _component_error("amendment 016 r07 archive contract is absent")
+    attempt_root = Path(str(observed.get("attempt_root", "")))
+    archive_root = Path(str(archive_contract.get("path", "")))
+    if (
+        observed.get("raw_attempt_id") != _COMPONENT_BURNED_R07_ID
+        or str(observed.get("slurm_job_id"))
+        != _COMPONENT_R07_PREPUBLICATION_JOB_ID
+        or observed.get("attempt_root_present") is not False
+        or observed.get("measurement_started") is not False
+        or observed.get("supervisor_quiescence_passed") is not True
+        or os.path.lexists(attempt_root)
+    ):
+        raise _component_error("r07 attempt-root absence or identity differs")
+    _reject_symlink_components(archive_root, label="r07 prepublication archive")
+    try:
+        root_stat = archive_root.lstat()
+    except OSError as exc:
+        raise _component_error("r07 prepublication archive is unavailable") from exc
+    effective_uid = getattr(os, "geteuid", lambda: root_stat.st_uid)()
+    if (
+        archive_root.is_symlink()
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_IMODE(root_stat.st_mode) != int(archive_contract["directory_mode"])
+        or root_stat.st_uid != effective_uid
+    ):
+        raise _component_error("r07 prepublication archive owner/type/mode differs")
+    children = list(archive_root.iterdir())
+    if {path.name for path in children} != _COMPONENT_R07_PREPUBLICATION_MEMBER_NAMES:
+        raise _component_error("r07 prepublication archive member set differs")
+    members: dict[str, dict[str, Any]] = {}
+    identities: set[tuple[int, int]] = set()
+    for path in children:
+        metadata = path.lstat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != int(archive_contract["member_mode"])
+            or metadata.st_uid != root_stat.st_uid
+            or identity in identities
+        ):
+            raise _component_error("r07 prepublication archive member metadata differs")
+        identities.add(identity)
+        members[path.name] = {
+            "mode": stat.S_IMODE(metadata.st_mode),
+            **_file_receipt(path),
+        }
+    manifest = archive_root / "evidence.sha256"
+    sidecar = archive_root / "evidence.sha256.sha256"
+    if (
+        members["evidence.sha256"]["bytes"] != archive_contract["manifest_bytes"]
+        or members["evidence.sha256"]["sha256"]
+        != archive_contract["manifest_sha256"]
+        or sidecar.read_text(encoding="utf-8")
+        != f"{archive_contract['manifest_sha256']}  evidence.sha256\n"
+    ):
+        raise _component_error("r07 prepublication manifest or sidecar differs")
+    manifest_entries: dict[str, str] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  \./([^/]+)", line)
+        if match is None or match.group(2) in manifest_entries:
+            raise _component_error("r07 prepublication manifest syntax differs")
+        manifest_entries[match.group(2)] = match.group(1)
+    expected_manifest_names = _COMPONENT_R07_PREPUBLICATION_MEMBER_NAMES - {
+        "evidence.sha256",
+        "evidence.sha256.sha256",
+    }
+    if set(manifest_entries) != expected_manifest_names or any(
+        members[name]["sha256"] != digest
+        for name, digest in manifest_entries.items()
+    ):
+        raise _component_error("r07 prepublication manifest rehash differs")
+    setup = _strict_json_object(
+        (archive_root / "setup-receipt.json").read_text(encoding="utf-8"),
+        label="r07 setup receipt",
+    )
+    supervisor_start = _strict_json_object(
+        (archive_root / "supervisor-start.json").read_text(encoding="utf-8"),
+        label="r07 supervisor start",
+    )
+    closeout = _strict_json_object(
+        (archive_root / "supervisor-closeout.json").read_text(encoding="utf-8"),
+        label="r07 supervisor closeout",
+    )
+    if (
+        setup.get("raw_attempt_id") != _COMPONENT_BURNED_R07_ID
+        or str(setup.get("slurm_job_id")) != _COMPONENT_R07_PREPUBLICATION_JOB_ID
+        or setup.get("study_mode") != "formal_protocol_v3_amendment_008"
+        or supervisor_start.get("raw_attempt_id") != _COMPONENT_BURNED_R07_ID
+        or str(supervisor_start.get("slurm_job_id"))
+        != _COMPONENT_R07_PREPUBLICATION_JOB_ID
+        or supervisor_start.get("slurm_partition") != "ALL"
+        or supervisor_start.get("attempt_root") != str(attempt_root)
+        or (supervisor_start.get("child_environment") or {}).get("PAW_CACHE_DIR")
+        != "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights"
+        or closeout.get("raw_attempt_id") != _COMPONENT_BURNED_R07_ID
+        or closeout.get("attempt_root_state") != "not_published"
+        or closeout.get("disposition") != "prepublication_or_unpublished_failure"
+        or closeout.get("final_supervisor_exit_code") != 5
+        or (closeout.get("observed_runner_exit") or {}).get("returncode") != 2
+        or (closeout.get("quiescence") or {}).get("passed") is not True
+        or closeout.get("supervisor_diagnostics") != []
+        or (archive_root / "repo-head.stdout.bin").read_text(encoding="utf-8").strip()
+        != correction.get("parent_runtime_lock_commit")
+    ):
+        raise _component_error("r07 prepublication setup or closeout identity differs")
+    fields = (archive_root / "terminal-sacct.stdout.bin").read_text(
+        encoding="utf-8"
+    ).rstrip("\n").split("|")
+    bound_files = {
+        "setup-receipt.json": ("setup_receipt_bytes", "setup_receipt_sha256"),
+        "supervisor-start.json": ("supervisor_start_bytes", "supervisor_start_sha256"),
+        "supervisor-closeout.json": (
+            "supervisor_closeout_bytes",
+            "supervisor_closeout_sha256",
+        ),
+        "supervisor-child.stderr.bin": ("child_stderr_bytes", "child_stderr_sha256"),
+    }
+    if (
+        len(fields) < 5
+        or fields[0] != _COMPONENT_R07_PREPUBLICATION_JOB_ID
+        or fields[2:5] != ["ALL", "FAILED", "5:0"]
+        or any(
+            members[name]["bytes"] != archive_contract[bytes_field]
+            or members[name]["sha256"] != archive_contract[hash_field]
+            for name, (bytes_field, hash_field) in bound_files.items()
+        )
+    ):
+        raise _component_error("r07 prepublication terminal evidence differs")
+    return {
+        "schema_version": 1,
+        "kind": "retained_prepublication_supervisor_cache_environment_failure",
+        "raw_attempt_id": _COMPONENT_BURNED_R07_ID,
+        "slurm_job_id": _COMPONENT_R07_PREPUBLICATION_JOB_ID,
+        "attempt_root": str(attempt_root),
+        "attempt_root_absent": True,
+        "measurement_started": False,
+        "terminal_archive_root": str(archive_root),
+        "terminal_archive_mode": stat.S_IMODE(root_stat.st_mode),
+        "terminal_archive_members": dict(sorted(members.items())),
+        "classification": "prepublication_supervisor_cache_environment_mismatch",
+        "observed_error": str(observed.get("observed_error")),
+        "cause": "supervisor_used_historical_shared_cache_root",
     }
 
 
@@ -2825,7 +3029,7 @@ def component_successor_source_binding(
         parent != p4.get("parent_must_equal")
         or i4.get("parent_must_equal_p4") is not True
         or h4.get("parent_must_equal_i4") is not True
-        or topology.get("head_must_equal_h4_before_r07_setup") is not True
+        or topology.get("head_must_equal_h4_before_r08_setup") is not True
         or observed_paths != expected_paths
     ):
         raise _component_error("P4/I4/H4 topology differs from amendment 008")
@@ -6469,7 +6673,7 @@ def replacement_launch_binding(
         successor_id == _COMPONENT_SUCCESSOR_ID
         and receipt.get("predecessor_raw_attempt_id") == _COMPONENT_PREDECESSOR_ID
     )
-    expected_schema_version = 6 if component_edge else 1
+    expected_schema_version = 7 if component_edge else 1
     if receipt.get("schema_version") != expected_schema_version:
         raise SystemsHarnessError(
             f"replacement receipt schema_version must equal {expected_schema_version}"
@@ -6495,6 +6699,7 @@ def replacement_launch_binding(
                 "r04_prepublication_failure",
                 "r05_prepublication_failure",
                 "r06_prepublication_failure",
+                "r07_prepublication_failure",
                 "successor_source",
                 "whole_attempt_protocol_correction",
             }
@@ -6797,6 +7002,11 @@ def replacement_launch_binding(
             raise SystemsHarnessError(
                 "replacement receipt r06 prepublication failure binding differs"
             )
+        expected_r07_prepublication = r07_prepublication_failure_binding()
+        if receipt.get("r07_prepublication_failure") != expected_r07_prepublication:
+            raise SystemsHarnessError(
+                "replacement receipt r07 prepublication failure binding differs"
+            )
         terminal_forensics = _validate_whole_attempt_protocol_correction(
             receipt=receipt,
             predecessor_root=predecessor_root,
@@ -6836,6 +7046,9 @@ def replacement_launch_binding(
         ]
         binding["r06_prepublication_failure"] = receipt[
             "r06_prepublication_failure"
+        ]
+        binding["r07_prepublication_failure"] = receipt[
+            "r07_prepublication_failure"
         ]
         binding["successor_source"] = receipt["successor_source"]
         binding["whole_attempt_protocol_correction"] = receipt[
