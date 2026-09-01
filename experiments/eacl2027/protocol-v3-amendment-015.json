@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-015",
+  "parent_amendment": "protocol-v3-amendment-014",
+  "created_utc": "2026-09-01T17:36:49Z",
+  "frozen_utc": "2026-09-01T17:36:49Z",
+  "status": "frozen prelaunch isolated formal-cache correction",
+  "parent_runtime_lock_commit": "9f1e655a573c75f9b3c6ec5c8eff7afe8e2da990",
+  "reason": "Exact r06 passed the frozen 128-logical-CPU process profile on ALL/watgpu108 but observed a PAW-cache receipt different from H10 before attempt publication. The shared cache later recomputed exactly equal to H10, so no persistence mechanism or deeper cause is inferred. Fresh r07 changes only the PAW cache root to a dedicated, byte-validated formal copy that no other workflow may use.",
+  "observed_r06_terminal_boundary": {
+    "raw_attempt_id": "formal-v3-20260831t051023z-r06",
+    "slurm_job_id": "1525703",
+    "partition": "ALL",
+    "node": "watgpu108",
+    "state": "FAILED",
+    "exit_code": "5:0",
+    "elapsed_seconds": 70,
+    "attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r06",
+    "attempt_root_present": false,
+    "measurement_started": false,
+    "observed_child_exit_code": 2,
+    "supervisor_quiescence_passed": true,
+    "observed_error": "systems harness preflight error: formal runtime lock mismatch: {\"paw_cache\": {\"locked_sha256\": \"c2145d32c2c19744ac9b5b4bdc8bbac8a8fbc2ff9ad9340cc46c712cb9b7c395\", \"observed_sha256\": \"d949defc55f3d8fbe1f531ff5e9e7363ccd542fdebc7a7552f90a40965e00210\"}}",
+    "terminal_archive": {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/prepublication-failures/1525703-v1",
+      "directory_mode": 320,
+      "member_mode": 292,
+      "manifest_bytes": 2684,
+      "manifest_sha256": "3406b7e26d241da77f91aa6a6cdb044bb4abf79ba5cae93d70c9dd5ff708eb9d",
+      "setup_receipt_bytes": 22219904,
+      "setup_receipt_sha256": "515b2f0fba9c30a8c175e46874676653fbc43bc7baa1d4fe6618c01c8bb3f86f",
+      "supervisor_start_bytes": 4784,
+      "supervisor_start_sha256": "264a545f416fd1a6f3e74a289abf1e3a1e9e9e4243c4c6b1dc19034ec34a4d54",
+      "supervisor_closeout_bytes": 1736,
+      "supervisor_closeout_sha256": "2766f29a7e28ea7b55a628eef6737c640c71ffee55dc32fbdbc7176d7ddbbc93",
+      "child_stderr_bytes": 251,
+      "child_stderr_sha256": "b2f65b023d4c53cdf1e4d1b3fc4dd69191fc1203a703d102307b3fe45c754aa5"
+    }
+  },
+  "explicit_override": {
+    "scope": "Only the exact burned-r06 to fresh-r07 edge, dedicated formal PAW cache root, r07 identities, and complete r06 archive retention.",
+    "burned_attempt": "formal-v3-20260831t051023z-r06 is terminal and may never be submitted again even though no attempt root was published.",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r07",
+    "requested_partition": "ALL",
+    "requested_node": "watgpu108",
+    "shared_cache_source": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+    "dedicated_cache_root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/formal-v3-r07-programasweights",
+    "cache_copy_rule": "Create the dedicated root once after P11 is public and before H11. Require the source to match H10, require no active formal runner, copy every regular byte without symlinks, bind the destination through a newly generated H11 lock, and reject any destination that pre-exists or differs. Only exact r07 may use the destination.",
+    "primary_source_rule": "Exact r07 executes the complete unchanged 430-row plan once and is the sole primary numeric source. r01 through r06 contribute no primary row. An unfavorable, system-violating, failed, or incomplete r07 outcome may not be replaced based on favorability.",
+    "retention_rule": "The fresh r07 replacement receipt rehashes and binds the complete sealed r03, r04, r05, and r06 prepublication archives, the complete immutable r01/r02 evidence, and proves exact r03/r04/r05/r06/r07 attempt-root absence before r07 setup.",
+    "unchanged": [
+      "the complete Amendment 008 430-row workload, ordering, repetitions, endpoints, uniform-primary-source rule, censoring, and claim limits",
+      "host_logical_cpu_count=128, multiprocessing_cpu_count=128, llama_cpp_n_threads=64, llama_cpp_n_threads_batch=128, eight allocated CPUs, 16 GiB memory, CPU-only execution, and the existing oversubscription limitation",
+      "every model, program, runtime-manifest, wheelhouse, package, n_ctx, and direct-cache semantic byte; only the cache root is isolated",
+      "Amendment 013 post-Popen wait, drain, quiescence, closeout, and contract-derived membership semantics",
+      "r02 exit 5 remains unclassified; r02 is sensitivity-only; r03/r04/r05/r06 are prepublication-only"
+    ]
+  },
+  "implementation_and_test_gate": {
+    "required_behaviors": [
+      "exact r07 identity propagates through launcher, runner, replacement, analyzer, and reducer",
+      "the sbatch requested node remains exactly watgpu108 and partition remains exactly ALL",
+      "the formal PAW cache path is exactly the dedicated Amendment 015 root and no fallback to the shared source is allowed",
+      "H11 binds the complete dedicated destination and proves content-byte equality with the H10 shared-cache source at copy time",
+      "fresh r07 receipt rehashes every sealed r03/r04/r05/r06 archive member and proves all five prepublication attempt roots absent",
+      "no r06 archive byte or earlier attempt byte is modified"
+    ],
+    "static_gates": [
+      "focused pytest suite",
+      "Ruff",
+      "Python bytecode compilation",
+      "bash -n",
+      "git diff --check"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json",
+      "experiments/eacl2027/protocol-v3-amendment-011.json",
+      "experiments/eacl2027/protocol-v3-amendment-012.json",
+      "experiments/eacl2027/protocol-v3-amendment-013.json",
+      "experiments/eacl2027/protocol-v3-amendment-014.json",
+      "experiments/eacl2027/protocol-v3-amendment-015.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "9f1e655a573c75f9b3c6ec5c8eff7afe8e2da990",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-015.json"
+        ],
+        "semantic_role": "P11 prelaunch dedicated formal-cache correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I11 exact r07 identity, dedicated cache root, r06 retention, and Amendment 015 propagation"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v11.json"
+        ],
+        "semantic_role": "H11 live runtime lock generated from the dedicated r07 cache"
+      },
+      "head_must_equal_h4_before_r07_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v11.json",
+    "chronology_rule": "Commit this file alone as P11 directly on H10 and push it. Create the dedicated cache only after P11 is public. Commit exactly the declared I11 paths after tests pass. Generate and commit only formal-runtime-lock-v11.json as H11, push H11, then create a fresh receipt candidate; every earlier cache receipt and replacement receipt remains immutable."
+  },
+  "claim_limits": [
+    "This amendment supplies no system-performance measurement.",
+    "It does not change any cache content byte, model, program, runtime, host, workload, or inference setting; it isolates only the cache root.",
+    "It does not authorize r07 launch until exact P11/I11/H11, dedicated-cache provenance, complete r06 retention, and fresh-receipt gates pass."
+  ]
+}
