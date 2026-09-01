@@ -1,0 +1,1695 @@
+{
+  "paw_cache": {
+    "base_models": {
+      "qwen3-0.6b-q6_k.gguf": {
+        "declared": {
+          "file": "qwen3-0.6b-q6_k.gguf",
+          "provider": "huggingface",
+          "repo": "programasweights/Qwen3-0.6B-GGUF-Q6_K",
+          "sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c",
+          "size_bytes": 622733120,
+          "url": "https://huggingface.co/programasweights/Qwen3-0.6B-GGUF-Q6_K/resolve/main/qwen3-0.6b-q6_k.gguf"
+        },
+        "local": {
+          "bytes": 622733120,
+          "path": "base_models/qwen3-0.6b-q6_k.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/base_models/qwen3-0.6b-q6_k.gguf",
+          "sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c"
+        }
+      }
+    },
+    "complete_tree": {
+      "file_count": 51,
+      "files": [
+        {
+          "bytes": 622733120,
+          "path": "base_models/qwen3-0.6b-q6_k.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/base_models/qwen3-0.6b-q6_k.gguf",
+          "sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c"
+        },
+        {
+          "bytes": 22741214,
+          "path": "programs/16a7a75554b8006ca240/16a7a75554b8006ca240.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/16a7a75554b8006ca240.paw",
+          "sha256": "df420ed9e039712b6e056f895ad3571cfd3674bd7a69f73a1d11ab3a9cc71b92"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/16a7a75554b8006ca240/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/adapter.gguf",
+          "sha256": "5c1f8ded7ae1cf6687d17c8dfdc1a36baba8f4e34529fcb744724d898415bff0"
+        },
+        {
+          "bytes": 3376,
+          "path": "programs/16a7a75554b8006ca240/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/meta.json",
+          "sha256": "7f027c7b2d3f4a919c87bff2d4a7f03498ab5637aeeff36abef2c0e00d20eeab"
+        },
+        {
+          "bytes": 34297196,
+          "path": "programs/16a7a75554b8006ca240/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/prefix_kv_cache.bin",
+          "sha256": "944b543f3c4c1fa7777e3df542b9e750ba6af3a111b1da448d22a913b69c4bcc"
+        },
+        {
+          "bytes": 1233,
+          "path": "programs/16a7a75554b8006ca240/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/prompt_template.txt",
+          "sha256": "7cd59e82cc08dab9350a78d448db4776fca6596ec50d69175a11b15b8138868f"
+        },
+        {
+          "bytes": 1123,
+          "path": "programs/16a7a75554b8006ca240/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/pseudo_program.txt",
+          "sha256": "adbe82f81890bc42e6facb69a861ac88ed25e8d833978bbd08893a988ee6aa93"
+        },
+        {
+          "bytes": 22740697,
+          "path": "programs/762d0837bbc06f75dc23/762d0837bbc06f75dc23.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/762d0837bbc06f75dc23.paw",
+          "sha256": "1b83ebf0630a56e1a7f5d02dde280c818661a16c71269f63eea5cd3ef7cf29d8"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/762d0837bbc06f75dc23/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/adapter.gguf",
+          "sha256": "39543fb0b6ec85a09a0d74e8f5cc7069c9633168410d726deb7f280c7b8b1869"
+        },
+        {
+          "bytes": 3219,
+          "path": "programs/762d0837bbc06f75dc23/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/meta.json",
+          "sha256": "809b5c703e51f38dd494b51ab07e79928a412c2830d87e2dcd219a9ecc101333"
+        },
+        {
+          "bytes": 26382620,
+          "path": "programs/762d0837bbc06f75dc23/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/prefix_kv_cache.bin",
+          "sha256": "58a59699408d225e78eb80b41b60be291718b807e277c78166f4c61d6b214b2d"
+        },
+        {
+          "bytes": 1053,
+          "path": "programs/762d0837bbc06f75dc23/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/prompt_template.txt",
+          "sha256": "7db237f7b53aceceb332b0f9989aa93782986d765d8fcc1bf7b6e51410f8a61d"
+        },
+        {
+          "bytes": 943,
+          "path": "programs/762d0837bbc06f75dc23/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/pseudo_program.txt",
+          "sha256": "a228b7c0a48576415a55a11bbc57d5bca355e7ba3286b93d5e36aa0803bc851a"
+        },
+        {
+          "bytes": 22740369,
+          "path": "programs/81888657ac4f92ce39a8/81888657ac4f92ce39a8.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/81888657ac4f92ce39a8.paw",
+          "sha256": "d722a216c8f22014528328a541984e4d51c64629f08d736eeb31987af94ad1af"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/81888657ac4f92ce39a8/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/adapter.gguf",
+          "sha256": "bde3e85eeb05accff952c0aaec6c0d830cdf67529b33688ee82aa2403dec63fe"
+        },
+        {
+          "bytes": 2997,
+          "path": "programs/81888657ac4f92ce39a8/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/meta.json",
+          "sha256": "6c32850f5ea7f8dab40016c5463ab4df0f0849824cc0dbce9092ec5d5aa4b5b0"
+        },
+        {
+          "bytes": 26956140,
+          "path": "programs/81888657ac4f92ce39a8/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/prefix_kv_cache.bin",
+          "sha256": "8fe0bbd2dfb0ff4d12f4e479dc26b8a155fa64abb58f23978708e6969ed5a706"
+        },
+        {
+          "bytes": 1000,
+          "path": "programs/81888657ac4f92ce39a8/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/prompt_template.txt",
+          "sha256": "8c1f42d1760916469fed60c670493ad750c5d2716f1007cf873fb913c9732708"
+        },
+        {
+          "bytes": 890,
+          "path": "programs/81888657ac4f92ce39a8/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/pseudo_program.txt",
+          "sha256": "fefd51ce1f6025f20c88ec7bc33a5a0da820d8b9f106a5473fc25a6672d83421"
+        },
+        {
+          "bytes": 22740568,
+          "path": "programs/8c96ca80eea5aff5147f/8c96ca80eea5aff5147f.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/8c96ca80eea5aff5147f.paw",
+          "sha256": "4b67964a093bac15347198e5a56f3cf6599fefa4ffc929430f52f3d2650e1e77"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/8c96ca80eea5aff5147f/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/adapter.gguf",
+          "sha256": "d15a845e7e4b54fb4bc7933a9b6ed7b03e528dac815122d162d03d7028ffcc07"
+        },
+        {
+          "bytes": 3198,
+          "path": "programs/8c96ca80eea5aff5147f/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/meta.json",
+          "sha256": "ef76c6d1d17c97765abe2c93bd750d71180a7417cc028b7a40cb0c1ab04aab2a"
+        },
+        {
+          "bytes": 26956140,
+          "path": "programs/8c96ca80eea5aff5147f/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/prefix_kv_cache.bin",
+          "sha256": "8b8b2effbaf7713442fc46ec43089ef6d0d1616bc2180ebdefd0957b9050b91c"
+        },
+        {
+          "bytes": 999,
+          "path": "programs/8c96ca80eea5aff5147f/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/prompt_template.txt",
+          "sha256": "597395ddd69407368ea9d5ec9aa3c5de5d82ab34aadab8a5353556ddea000992"
+        },
+        {
+          "bytes": 889,
+          "path": "programs/8c96ca80eea5aff5147f/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/pseudo_program.txt",
+          "sha256": "cb84629cc51087a9d0bca8a7a84309defa0482362eea838f6d2b53e4b9827446"
+        },
+        {
+          "bytes": 22741195,
+          "path": "programs/a78ddf95882555e71250/a78ddf95882555e71250.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/a78ddf95882555e71250.paw",
+          "sha256": "51d381dea054dbde7606d235e5032412dfdacd685271205f83758806067da485"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/a78ddf95882555e71250/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/adapter.gguf",
+          "sha256": "7a6e14f85e25d00acfb0d98589b9e74e7036614de02dbad52d6f833d8907a39f"
+        },
+        {
+          "bytes": 3511,
+          "path": "programs/a78ddf95882555e71250/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/meta.json",
+          "sha256": "1853af4828ae814d2c99b4fa606317299f4352dbb12ffe41ae7b901b330179af"
+        },
+        {
+          "bytes": 31085484,
+          "path": "programs/a78ddf95882555e71250/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/prefix_kv_cache.bin",
+          "sha256": "6162e3821fb44f12b39a765c866cecba2d168eadf9ffcb5437fdd6bd338ab47a"
+        },
+        {
+          "bytes": 1156,
+          "path": "programs/a78ddf95882555e71250/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/prompt_template.txt",
+          "sha256": "033221beb9061a01a33a00d20753d9f729fbe749699e6fce3e15f85d4aee5f50"
+        },
+        {
+          "bytes": 1046,
+          "path": "programs/a78ddf95882555e71250/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/pseudo_program.txt",
+          "sha256": "7699e91b2c2f7438747b05dd82b4f10743cf4373b44a23d98446a16feba0a2c3"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/b735dff5093dd49bd27d/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/adapter.gguf",
+          "sha256": "26323be64b115e24f9568fef33b25357243541e68debdc0f9e6810a1cca25648"
+        },
+        {
+          "bytes": 22739924,
+          "path": "programs/b735dff5093dd49bd27d/b735dff5093dd49bd27d.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/b735dff5093dd49bd27d.paw",
+          "sha256": "41a447f1d761e3557c231e2e07f031a30c0e2bfc0e78b8c5103aefd67e6c6509"
+        },
+        {
+          "bytes": 2954,
+          "path": "programs/b735dff5093dd49bd27d/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/meta.json",
+          "sha256": "1865803816370d51d1f20814d74225206abe22609744f484ee3ddc668d15d4ca"
+        },
+        {
+          "bytes": 22597388,
+          "path": "programs/b735dff5093dd49bd27d/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/prefix_kv_cache.bin",
+          "sha256": "8c21a37ad4a8311f7b2e36a163546990d7ebef53d3038e605248c6289c9e4c41"
+        },
+        {
+          "bytes": 799,
+          "path": "programs/b735dff5093dd49bd27d/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/prompt_template.txt",
+          "sha256": "51ab7dac228b4cf09c47ca8af6a6b927ee059aa7a59c197291c936b5a029b1dc"
+        },
+        {
+          "bytes": 689,
+          "path": "programs/b735dff5093dd49bd27d/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/pseudo_program.txt",
+          "sha256": "435ef1e07262f12fc01cd10e412980703b08908f1392c7a51950697f40b911cd"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/cf411837cd27dd43604a/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/adapter.gguf",
+          "sha256": "9ae987a23bde78fbdf550bfba660959432bb654db0d94527536fe872ad23e26b"
+        },
+        {
+          "bytes": 22740853,
+          "path": "programs/cf411837cd27dd43604a/cf411837cd27dd43604a.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/cf411837cd27dd43604a.paw",
+          "sha256": "f0215995fdbff2e3f8d8b5f75822c95ae405278fef0463be2ba7b3173ceb8c0c"
+        },
+        {
+          "bytes": 3191,
+          "path": "programs/cf411837cd27dd43604a/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/meta.json",
+          "sha256": "b0f752b66764aea99febdf25b47fd8975c4d863cf4ead3a19245bbb2fe4a3b7a"
+        },
+        {
+          "bytes": 32920748,
+          "path": "programs/cf411837cd27dd43604a/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/prefix_kv_cache.bin",
+          "sha256": "0aef546062a5017d4896c6bb168862bd617cd94b846f6f5f54a2272083569fd8"
+        },
+        {
+          "bytes": 1145,
+          "path": "programs/cf411837cd27dd43604a/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/prompt_template.txt",
+          "sha256": "a6b7e6fef488bcc4e4a66d1b37a01399c6b7c45b77751367b72f0c73a9f3d752"
+        },
+        {
+          "bytes": 1035,
+          "path": "programs/cf411837cd27dd43604a/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/pseudo_program.txt",
+          "sha256": "eb2aa2a8c6d3fe990618c9907f03eff58fb60c8de8cb58d02f81fcd9e6c62a2a"
+        },
+        {
+          "bytes": 22735040,
+          "path": "programs/d53e0b93521bc075170c/adapter.gguf",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/adapter.gguf",
+          "sha256": "8951d01dc7da9f5c45cc34301052600e2319070bfa661067c86692389e82831d"
+        },
+        {
+          "bytes": 22740604,
+          "path": "programs/d53e0b93521bc075170c/d53e0b93521bc075170c.paw",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/d53e0b93521bc075170c.paw",
+          "sha256": "84b42319e4f459ee8ded43c47459522eb91c171c606960dc1556a7568fc5e906"
+        },
+        {
+          "bytes": 3062,
+          "path": "programs/d53e0b93521bc075170c/meta.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/meta.json",
+          "sha256": "7c026702c7e14980af4a49792e6f159381d84ea05732134586e9195bada6975f"
+        },
+        {
+          "bytes": 28906108,
+          "path": "programs/d53e0b93521bc075170c/prefix_kv_cache.bin",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/prefix_kv_cache.bin",
+          "sha256": "31f9e390ceb44dfa22496c7dd53b8b1367506b2d2f6442279baaf493cb56a711"
+        },
+        {
+          "bytes": 1085,
+          "path": "programs/d53e0b93521bc075170c/prompt_template.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/prompt_template.txt",
+          "sha256": "5c732d825e1e880d99fc842a47ef255a15040a739e97728cc3b7b3f1cca06dab"
+        },
+        {
+          "bytes": 975,
+          "path": "programs/d53e0b93521bc075170c/pseudo_program.txt",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/pseudo_program.txt",
+          "sha256": "e3947afcb6e2f842159c318ff31c306d3dffbd8ecfc5f0e0e0b5c852c20a9f37"
+        },
+        {
+          "bytes": 1115,
+          "path": "runtimes/qwen3-0.6b-q6_k.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/runtimes/qwen3-0.6b-q6_k.json",
+          "sha256": "04d92c8428037a0c5bc8310a7c95432f6b0e6baf52229304764c6949549d679d"
+        },
+        {
+          "bytes": 1357,
+          "path": "runtimes/qwen3-0.6b-q6_k.v1.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/runtimes/qwen3-0.6b-q6_k.v1.json",
+          "sha256": "8051301de7f178b62dbf603d79e0d1ab0de733e6922c2f3868ac7fa2130d61e5"
+        }
+      ],
+      "inventory_sha256": "6764a77f942f8a2699babb0801fcf4beb94b6511040e5b5f95b56e06e64c8977",
+      "root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+      "total_bytes": 1216684728
+    },
+    "declared_root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+    "direct_children": [
+      "base_models",
+      "programs",
+      "runtimes"
+    ],
+    "programs": {
+      "16a7a75554b8006ca240": {
+        "files": [
+          {
+            "bytes": 22741214,
+            "path": "programs/16a7a75554b8006ca240/16a7a75554b8006ca240.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/16a7a75554b8006ca240.paw",
+            "sha256": "df420ed9e039712b6e056f895ad3571cfd3674bd7a69f73a1d11ab3a9cc71b92"
+          },
+          {
+            "bytes": 22735040,
+            "path": "programs/16a7a75554b8006ca240/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/adapter.gguf",
+            "sha256": "5c1f8ded7ae1cf6687d17c8dfdc1a36baba8f4e34529fcb744724d898415bff0"
+          },
+          {
+            "bytes": 3376,
+            "path": "programs/16a7a75554b8006ca240/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/meta.json",
+            "sha256": "7f027c7b2d3f4a919c87bff2d4a7f03498ab5637aeeff36abef2c0e00d20eeab"
+          },
+          {
+            "bytes": 34297196,
+            "path": "programs/16a7a75554b8006ca240/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/prefix_kv_cache.bin",
+            "sha256": "944b543f3c4c1fa7777e3df542b9e750ba6af3a111b1da448d22a913b69c4bcc"
+          },
+          {
+            "bytes": 1233,
+            "path": "programs/16a7a75554b8006ca240/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/prompt_template.txt",
+            "sha256": "7cd59e82cc08dab9350a78d448db4776fca6596ec50d69175a11b15b8138868f"
+          },
+          {
+            "bytes": 1123,
+            "path": "programs/16a7a75554b8006ca240/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/16a7a75554b8006ca240/pseudo_program.txt",
+            "sha256": "adbe82f81890bc42e6facb69a861ac88ed25e8d833978bbd08893a988ee6aa93"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "762d0837bbc06f75dc23": {
+        "files": [
+          {
+            "bytes": 22740697,
+            "path": "programs/762d0837bbc06f75dc23/762d0837bbc06f75dc23.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/762d0837bbc06f75dc23.paw",
+            "sha256": "1b83ebf0630a56e1a7f5d02dde280c818661a16c71269f63eea5cd3ef7cf29d8"
+          },
+          {
+            "bytes": 22735040,
+            "path": "programs/762d0837bbc06f75dc23/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/adapter.gguf",
+            "sha256": "39543fb0b6ec85a09a0d74e8f5cc7069c9633168410d726deb7f280c7b8b1869"
+          },
+          {
+            "bytes": 3219,
+            "path": "programs/762d0837bbc06f75dc23/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/meta.json",
+            "sha256": "809b5c703e51f38dd494b51ab07e79928a412c2830d87e2dcd219a9ecc101333"
+          },
+          {
+            "bytes": 26382620,
+            "path": "programs/762d0837bbc06f75dc23/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/prefix_kv_cache.bin",
+            "sha256": "58a59699408d225e78eb80b41b60be291718b807e277c78166f4c61d6b214b2d"
+          },
+          {
+            "bytes": 1053,
+            "path": "programs/762d0837bbc06f75dc23/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/prompt_template.txt",
+            "sha256": "7db237f7b53aceceb332b0f9989aa93782986d765d8fcc1bf7b6e51410f8a61d"
+          },
+          {
+            "bytes": 943,
+            "path": "programs/762d0837bbc06f75dc23/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/762d0837bbc06f75dc23/pseudo_program.txt",
+            "sha256": "a228b7c0a48576415a55a11bbc57d5bca355e7ba3286b93d5e36aa0803bc851a"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "81888657ac4f92ce39a8": {
+        "files": [
+          {
+            "bytes": 22740369,
+            "path": "programs/81888657ac4f92ce39a8/81888657ac4f92ce39a8.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/81888657ac4f92ce39a8.paw",
+            "sha256": "d722a216c8f22014528328a541984e4d51c64629f08d736eeb31987af94ad1af"
+          },
+          {
+            "bytes": 22735040,
+            "path": "programs/81888657ac4f92ce39a8/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/adapter.gguf",
+            "sha256": "bde3e85eeb05accff952c0aaec6c0d830cdf67529b33688ee82aa2403dec63fe"
+          },
+          {
+            "bytes": 2997,
+            "path": "programs/81888657ac4f92ce39a8/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/meta.json",
+            "sha256": "6c32850f5ea7f8dab40016c5463ab4df0f0849824cc0dbce9092ec5d5aa4b5b0"
+          },
+          {
+            "bytes": 26956140,
+            "path": "programs/81888657ac4f92ce39a8/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/prefix_kv_cache.bin",
+            "sha256": "8fe0bbd2dfb0ff4d12f4e479dc26b8a155fa64abb58f23978708e6969ed5a706"
+          },
+          {
+            "bytes": 1000,
+            "path": "programs/81888657ac4f92ce39a8/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/prompt_template.txt",
+            "sha256": "8c1f42d1760916469fed60c670493ad750c5d2716f1007cf873fb913c9732708"
+          },
+          {
+            "bytes": 890,
+            "path": "programs/81888657ac4f92ce39a8/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/81888657ac4f92ce39a8/pseudo_program.txt",
+            "sha256": "fefd51ce1f6025f20c88ec7bc33a5a0da820d8b9f106a5473fc25a6672d83421"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "8c96ca80eea5aff5147f": {
+        "files": [
+          {
+            "bytes": 22740568,
+            "path": "programs/8c96ca80eea5aff5147f/8c96ca80eea5aff5147f.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/8c96ca80eea5aff5147f.paw",
+            "sha256": "4b67964a093bac15347198e5a56f3cf6599fefa4ffc929430f52f3d2650e1e77"
+          },
+          {
+            "bytes": 22735040,
+            "path": "programs/8c96ca80eea5aff5147f/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/adapter.gguf",
+            "sha256": "d15a845e7e4b54fb4bc7933a9b6ed7b03e528dac815122d162d03d7028ffcc07"
+          },
+          {
+            "bytes": 3198,
+            "path": "programs/8c96ca80eea5aff5147f/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/meta.json",
+            "sha256": "ef76c6d1d17c97765abe2c93bd750d71180a7417cc028b7a40cb0c1ab04aab2a"
+          },
+          {
+            "bytes": 26956140,
+            "path": "programs/8c96ca80eea5aff5147f/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/prefix_kv_cache.bin",
+            "sha256": "8b8b2effbaf7713442fc46ec43089ef6d0d1616bc2180ebdefd0957b9050b91c"
+          },
+          {
+            "bytes": 999,
+            "path": "programs/8c96ca80eea5aff5147f/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/prompt_template.txt",
+            "sha256": "597395ddd69407368ea9d5ec9aa3c5de5d82ab34aadab8a5353556ddea000992"
+          },
+          {
+            "bytes": 889,
+            "path": "programs/8c96ca80eea5aff5147f/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/8c96ca80eea5aff5147f/pseudo_program.txt",
+            "sha256": "cb84629cc51087a9d0bca8a7a84309defa0482362eea838f6d2b53e4b9827446"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "a78ddf95882555e71250": {
+        "files": [
+          {
+            "bytes": 22741195,
+            "path": "programs/a78ddf95882555e71250/a78ddf95882555e71250.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/a78ddf95882555e71250.paw",
+            "sha256": "51d381dea054dbde7606d235e5032412dfdacd685271205f83758806067da485"
+          },
+          {
+            "bytes": 22735040,
+            "path": "programs/a78ddf95882555e71250/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/adapter.gguf",
+            "sha256": "7a6e14f85e25d00acfb0d98589b9e74e7036614de02dbad52d6f833d8907a39f"
+          },
+          {
+            "bytes": 3511,
+            "path": "programs/a78ddf95882555e71250/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/meta.json",
+            "sha256": "1853af4828ae814d2c99b4fa606317299f4352dbb12ffe41ae7b901b330179af"
+          },
+          {
+            "bytes": 31085484,
+            "path": "programs/a78ddf95882555e71250/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/prefix_kv_cache.bin",
+            "sha256": "6162e3821fb44f12b39a765c866cecba2d168eadf9ffcb5437fdd6bd338ab47a"
+          },
+          {
+            "bytes": 1156,
+            "path": "programs/a78ddf95882555e71250/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/prompt_template.txt",
+            "sha256": "033221beb9061a01a33a00d20753d9f729fbe749699e6fce3e15f85d4aee5f50"
+          },
+          {
+            "bytes": 1046,
+            "path": "programs/a78ddf95882555e71250/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/a78ddf95882555e71250/pseudo_program.txt",
+            "sha256": "7699e91b2c2f7438747b05dd82b4f10743cf4373b44a23d98446a16feba0a2c3"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "b735dff5093dd49bd27d": {
+        "files": [
+          {
+            "bytes": 22735040,
+            "path": "programs/b735dff5093dd49bd27d/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/adapter.gguf",
+            "sha256": "26323be64b115e24f9568fef33b25357243541e68debdc0f9e6810a1cca25648"
+          },
+          {
+            "bytes": 22739924,
+            "path": "programs/b735dff5093dd49bd27d/b735dff5093dd49bd27d.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/b735dff5093dd49bd27d.paw",
+            "sha256": "41a447f1d761e3557c231e2e07f031a30c0e2bfc0e78b8c5103aefd67e6c6509"
+          },
+          {
+            "bytes": 2954,
+            "path": "programs/b735dff5093dd49bd27d/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/meta.json",
+            "sha256": "1865803816370d51d1f20814d74225206abe22609744f484ee3ddc668d15d4ca"
+          },
+          {
+            "bytes": 22597388,
+            "path": "programs/b735dff5093dd49bd27d/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/prefix_kv_cache.bin",
+            "sha256": "8c21a37ad4a8311f7b2e36a163546990d7ebef53d3038e605248c6289c9e4c41"
+          },
+          {
+            "bytes": 799,
+            "path": "programs/b735dff5093dd49bd27d/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/prompt_template.txt",
+            "sha256": "51ab7dac228b4cf09c47ca8af6a6b927ee059aa7a59c197291c936b5a029b1dc"
+          },
+          {
+            "bytes": 689,
+            "path": "programs/b735dff5093dd49bd27d/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/b735dff5093dd49bd27d/pseudo_program.txt",
+            "sha256": "435ef1e07262f12fc01cd10e412980703b08908f1392c7a51950697f40b911cd"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "cf411837cd27dd43604a": {
+        "files": [
+          {
+            "bytes": 22735040,
+            "path": "programs/cf411837cd27dd43604a/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/adapter.gguf",
+            "sha256": "9ae987a23bde78fbdf550bfba660959432bb654db0d94527536fe872ad23e26b"
+          },
+          {
+            "bytes": 22740853,
+            "path": "programs/cf411837cd27dd43604a/cf411837cd27dd43604a.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/cf411837cd27dd43604a.paw",
+            "sha256": "f0215995fdbff2e3f8d8b5f75822c95ae405278fef0463be2ba7b3173ceb8c0c"
+          },
+          {
+            "bytes": 3191,
+            "path": "programs/cf411837cd27dd43604a/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/meta.json",
+            "sha256": "b0f752b66764aea99febdf25b47fd8975c4d863cf4ead3a19245bbb2fe4a3b7a"
+          },
+          {
+            "bytes": 32920748,
+            "path": "programs/cf411837cd27dd43604a/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/prefix_kv_cache.bin",
+            "sha256": "0aef546062a5017d4896c6bb168862bd617cd94b846f6f5f54a2272083569fd8"
+          },
+          {
+            "bytes": 1145,
+            "path": "programs/cf411837cd27dd43604a/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/prompt_template.txt",
+            "sha256": "a6b7e6fef488bcc4e4a66d1b37a01399c6b7c45b77751367b72f0c73a9f3d752"
+          },
+          {
+            "bytes": 1035,
+            "path": "programs/cf411837cd27dd43604a/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/cf411837cd27dd43604a/pseudo_program.txt",
+            "sha256": "eb2aa2a8c6d3fe990618c9907f03eff58fb60c8de8cb58d02f81fcd9e6c62a2a"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      },
+      "d53e0b93521bc075170c": {
+        "files": [
+          {
+            "bytes": 22735040,
+            "path": "programs/d53e0b93521bc075170c/adapter.gguf",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/adapter.gguf",
+            "sha256": "8951d01dc7da9f5c45cc34301052600e2319070bfa661067c86692389e82831d"
+          },
+          {
+            "bytes": 22740604,
+            "path": "programs/d53e0b93521bc075170c/d53e0b93521bc075170c.paw",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/d53e0b93521bc075170c.paw",
+            "sha256": "84b42319e4f459ee8ded43c47459522eb91c171c606960dc1556a7568fc5e906"
+          },
+          {
+            "bytes": 3062,
+            "path": "programs/d53e0b93521bc075170c/meta.json",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/meta.json",
+            "sha256": "7c026702c7e14980af4a49792e6f159381d84ea05732134586e9195bada6975f"
+          },
+          {
+            "bytes": 28906108,
+            "path": "programs/d53e0b93521bc075170c/prefix_kv_cache.bin",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/prefix_kv_cache.bin",
+            "sha256": "31f9e390ceb44dfa22496c7dd53b8b1367506b2d2f6442279baaf493cb56a711"
+          },
+          {
+            "bytes": 1085,
+            "path": "programs/d53e0b93521bc075170c/prompt_template.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/prompt_template.txt",
+            "sha256": "5c732d825e1e880d99fc842a47ef255a15040a739e97728cc3b7b3f1cca06dab"
+          },
+          {
+            "bytes": 975,
+            "path": "programs/d53e0b93521bc075170c/pseudo_program.txt",
+            "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/programs/d53e0b93521bc075170c/pseudo_program.txt",
+            "sha256": "e3947afcb6e2f842159c318ff31c306d3dffbd8ecfc5f0e0e0b5c852c20a9f37"
+          }
+        ],
+        "runtime_id": "qwen3-0.6b-q6_k"
+      }
+    },
+    "raw_tree": {
+      "declared_root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+      "entries": [
+        {
+          "ctime_ns": 1788119704226810604,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758664,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108465661954174,
+          "path": "base_models",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 622733120,
+          "ctime_ns": 1788119704225810632,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758665,
+          "link_count": 1,
+          "mode": 384,
+          "mtime_ns": 1784751418856806740,
+          "path": "base_models/qwen3-0.6b-q6_k.gguf",
+          "sha256": "9a16ed5cacba959e63b62e2b6840c3eca2b51c3c3e51d31367ef8e4aafeae33c",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704927791120,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756921,
+          "link_count": 10,
+          "mode": 493,
+          "mtime_ns": 1788108466861920879,
+          "path": "programs",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704397805851,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758667,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108549180635823,
+          "path": "programs/16a7a75554b8006ca240",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22741214,
+          "ctime_ns": 1788119704331807686,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758668,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086567000000000,
+          "path": "programs/16a7a75554b8006ca240/16a7a75554b8006ca240.paw",
+          "sha256": "df420ed9e039712b6e056f895ad3571cfd3674bd7a69f73a1d11ab3a9cc71b92",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704346807269,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756924,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086567000000000,
+          "path": "programs/16a7a75554b8006ca240/adapter.gguf",
+          "sha256": "5c1f8ded7ae1cf6687d17c8dfdc1a36baba8f4e34529fcb744724d898415bff0",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 3376,
+          "ctime_ns": 1788119704347807241,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755379,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086567000000000,
+          "path": "programs/16a7a75554b8006ca240/meta.json",
+          "sha256": "7f027c7b2d3f4a919c87bff2d4a7f03498ab5637aeeff36abef2c0e00d20eeab",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 34297196,
+          "ctime_ns": 1788119704396805879,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755382,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108549195635407,
+          "path": "programs/16a7a75554b8006ca240/prefix_kv_cache.bin",
+          "sha256": "944b543f3c4c1fa7777e3df542b9e750ba6af3a111b1da448d22a913b69c4bcc",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1233,
+          "ctime_ns": 1788119704347807241,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755380,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086567000000000,
+          "path": "programs/16a7a75554b8006ca240/prompt_template.txt",
+          "sha256": "7cd59e82cc08dab9350a78d448db4776fca6596ec50d69175a11b15b8138868f",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1123,
+          "ctime_ns": 1788119704348807213,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755381,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086567000000000,
+          "path": "programs/16a7a75554b8006ca240/pseudo_program.txt",
+          "sha256": "adbe82f81890bc42e6facb69a861ac88ed25e8d833978bbd08893a988ee6aa93",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704312808214,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756922,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108523559347236,
+          "path": "programs/762d0837bbc06f75dc23",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22740697,
+          "ctime_ns": 1788119704250809937,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756923,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086548000000000,
+          "path": "programs/762d0837bbc06f75dc23/762d0837bbc06f75dc23.paw",
+          "sha256": "1b83ebf0630a56e1a7f5d02dde280c818661a16c71269f63eea5cd3ef7cf29d8",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704311808242,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758666,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086548000000000,
+          "path": "programs/762d0837bbc06f75dc23/adapter.gguf",
+          "sha256": "39543fb0b6ec85a09a0d74e8f5cc7069c9633168410d726deb7f280c7b8b1869",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 3219,
+          "ctime_ns": 1788119704251809909,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713687,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086548000000000,
+          "path": "programs/762d0837bbc06f75dc23/meta.json",
+          "sha256": "809b5c703e51f38dd494b51ab07e79928a412c2830d87e2dcd219a9ecc101333",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 26382620,
+          "ctime_ns": 1788119704294808714,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713690,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108523571346903,
+          "path": "programs/762d0837bbc06f75dc23/prefix_kv_cache.bin",
+          "sha256": "58a59699408d225e78eb80b41b60be291718b807e277c78166f4c61d6b214b2d",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1053,
+          "ctime_ns": 1788119704252809881,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713688,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086548000000000,
+          "path": "programs/762d0837bbc06f75dc23/prompt_template.txt",
+          "sha256": "7db237f7b53aceceb332b0f9989aa93782986d765d8fcc1bf7b6e51410f8a61d",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 943,
+          "ctime_ns": 1788119704252809881,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713689,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086548000000000,
+          "path": "programs/762d0837bbc06f75dc23/pseudo_program.txt",
+          "sha256": "a228b7c0a48576415a55a11bbc57d5bca355e7ba3286b93d5e36aa0803bc851a",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704835793677,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755390,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108567541125912,
+          "path": "programs/81888657ac4f92ce39a8",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22740369,
+          "ctime_ns": 1788119704834793705,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747046,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086576000000000,
+          "path": "programs/81888657ac4f92ce39a8/81888657ac4f92ce39a8.paw",
+          "sha256": "d722a216c8f22014528328a541984e4d51c64629f08d736eeb31987af94ad1af",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704771795456,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755391,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086576000000000,
+          "path": "programs/81888657ac4f92ce39a8/adapter.gguf",
+          "sha256": "bde3e85eeb05accff952c0aaec6c0d830cdf67529b33688ee82aa2403dec63fe",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 2997,
+          "ctime_ns": 1788119704772795428,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755392,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086576000000000,
+          "path": "programs/81888657ac4f92ce39a8/meta.json",
+          "sha256": "6c32850f5ea7f8dab40016c5463ab4df0f0849824cc0dbce9092ec5d5aa4b5b0",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 26956140,
+          "ctime_ns": 1788119704819794122,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755395,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108567554125551,
+          "path": "programs/81888657ac4f92ce39a8/prefix_kv_cache.bin",
+          "sha256": "8fe0bbd2dfb0ff4d12f4e479dc26b8a155fa64abb58f23978708e6969ed5a706",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1000,
+          "ctime_ns": 1788119704772795428,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755393,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086576000000000,
+          "path": "programs/81888657ac4f92ce39a8/prompt_template.txt",
+          "sha256": "8c1f42d1760916469fed60c670493ad750c5d2716f1007cf873fb913c9732708",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 890,
+          "ctime_ns": 1788119704773795401,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755394,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086576000000000,
+          "path": "programs/81888657ac4f92ce39a8/pseudo_program.txt",
+          "sha256": "fefd51ce1f6025f20c88ec7bc33a5a0da820d8b9f106a5473fc25a6672d83421",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704664798430,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747043,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108555182469148,
+          "path": "programs/8c96ca80eea5aff5147f",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22740568,
+          "ctime_ns": 1788119704592800431,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713693,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086570000000000,
+          "path": "programs/8c96ca80eea5aff5147f/8c96ca80eea5aff5147f.paw",
+          "sha256": "4b67964a093bac15347198e5a56f3cf6599fefa4ffc929430f52f3d2650e1e77",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704617799736,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713694,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086570000000000,
+          "path": "programs/8c96ca80eea5aff5147f/adapter.gguf",
+          "sha256": "d15a845e7e4b54fb4bc7933a9b6ed7b03e528dac815122d162d03d7028ffcc07",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 3198,
+          "ctime_ns": 1788119704594800376,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 626410,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086570000000000,
+          "path": "programs/8c96ca80eea5aff5147f/meta.json",
+          "sha256": "ef76c6d1d17c97765abe2c93bd750d71180a7417cc028b7a40cb0c1ab04aab2a",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 26956140,
+          "ctime_ns": 1788119704664798430,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 757658,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108555195468787,
+          "path": "programs/8c96ca80eea5aff5147f/prefix_kv_cache.bin",
+          "sha256": "8b8b2effbaf7713442fc46ec43089ef6d0d1616bc2180ebdefd0957b9050b91c",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 999,
+          "ctime_ns": 1788119704595800348,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 626411,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086570000000000,
+          "path": "programs/8c96ca80eea5aff5147f/prompt_template.txt",
+          "sha256": "597395ddd69407368ea9d5ec9aa3c5de5d82ab34aadab8a5353556ddea000992",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 889,
+          "ctime_ns": 1788119704595800348,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 626415,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086570000000000,
+          "path": "programs/8c96ca80eea5aff5147f/pseudo_program.txt",
+          "sha256": "cb84629cc51087a9d0bca8a7a84309defa0482362eea838f6d2b53e4b9827446",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704753795957,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747044,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108561657289328,
+          "path": "programs/a78ddf95882555e71250",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22741195,
+          "ctime_ns": 1788119704686797819,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747045,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086573000000000,
+          "path": "programs/a78ddf95882555e71250/a78ddf95882555e71250.paw",
+          "sha256": "51d381dea054dbde7606d235e5032412dfdacd685271205f83758806067da485",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704750796040,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755386,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086573000000000,
+          "path": "programs/a78ddf95882555e71250/adapter.gguf",
+          "sha256": "7a6e14f85e25d00acfb0d98589b9e74e7036614de02dbad52d6f833d8907a39f",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 3511,
+          "ctime_ns": 1788119704751796012,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755387,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086573000000000,
+          "path": "programs/a78ddf95882555e71250/meta.json",
+          "sha256": "1853af4828ae814d2c99b4fa606317299f4352dbb12ffe41ae7b901b330179af",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 31085484,
+          "ctime_ns": 1788119704732796540,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 626416,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108561671288940,
+          "path": "programs/a78ddf95882555e71250/prefix_kv_cache.bin",
+          "sha256": "6162e3821fb44f12b39a765c866cecba2d168eadf9ffcb5437fdd6bd338ab47a",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1156,
+          "ctime_ns": 1788119704752795984,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755388,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086573000000000,
+          "path": "programs/a78ddf95882555e71250/prompt_template.txt",
+          "sha256": "033221beb9061a01a33a00d20753d9f729fbe749699e6fce3e15f85d4aee5f50",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1046,
+          "ctime_ns": 1788119704752795984,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755389,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086573000000000,
+          "path": "programs/a78ddf95882555e71250/pseudo_program.txt",
+          "sha256": "7699e91b2c2f7438747b05dd82b4f10743cf4373b44a23d98446a16feba0a2c3",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704477803628,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755383,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108529282188348,
+          "path": "programs/b735dff5093dd49bd27d",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704418805268,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755384,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086556000000000,
+          "path": "programs/b735dff5093dd49bd27d/adapter.gguf",
+          "sha256": "26323be64b115e24f9568fef33b25357243541e68debdc0f9e6810a1cca25648",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22739924,
+          "ctime_ns": 1788119704477803628,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755385,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086556000000000,
+          "path": "programs/b735dff5093dd49bd27d/b735dff5093dd49bd27d.paw",
+          "sha256": "41a447f1d761e3557c231e2e07f031a30c0e2bfc0e78b8c5103aefd67e6c6509",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 2954,
+          "ctime_ns": 1788119704419805240,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747039,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086556000000000,
+          "path": "programs/b735dff5093dd49bd27d/meta.json",
+          "sha256": "1865803816370d51d1f20814d74225206abe22609744f484ee3ddc668d15d4ca",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22597388,
+          "ctime_ns": 1788119704459804128,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758542,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108529293188043,
+          "path": "programs/b735dff5093dd49bd27d/prefix_kv_cache.bin",
+          "sha256": "8c21a37ad4a8311f7b2e36a163546990d7ebef53d3038e605248c6289c9e4c41",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 799,
+          "ctime_ns": 1788119704420805212,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758540,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086556000000000,
+          "path": "programs/b735dff5093dd49bd27d/prompt_template.txt",
+          "sha256": "51ab7dac228b4cf09c47ca8af6a6b927ee059aa7a59c197291c936b5a029b1dc",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 689,
+          "ctime_ns": 1788119704421805184,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 758541,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086556000000000,
+          "path": "programs/b735dff5093dd49bd27d/pseudo_program.txt",
+          "sha256": "435ef1e07262f12fc01cd10e412980703b08908f1392c7a51950697f40b911cd",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704576800876,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713691,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108535888004934,
+          "path": "programs/cf411837cd27dd43604a",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704499803016,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 713692,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086561000000000,
+          "path": "programs/cf411837cd27dd43604a/adapter.gguf",
+          "sha256": "9ae987a23bde78fbdf550bfba660959432bb654db0d94527536fe872ad23e26b",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22740853,
+          "ctime_ns": 1788119704573800959,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 757657,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086561000000000,
+          "path": "programs/cf411837cd27dd43604a/cf411837cd27dd43604a.paw",
+          "sha256": "f0215995fdbff2e3f8d8b5f75822c95ae405278fef0463be2ba7b3173ceb8c0c",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 3191,
+          "ctime_ns": 1788119704574800932,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747040,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086561000000000,
+          "path": "programs/cf411837cd27dd43604a/meta.json",
+          "sha256": "b0f752b66764aea99febdf25b47fd8975c4d863cf4ead3a19245bbb2fe4a3b7a",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 32920748,
+          "ctime_ns": 1788119704552801543,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756718,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108535903004518,
+          "path": "programs/cf411837cd27dd43604a/prefix_kv_cache.bin",
+          "sha256": "0aef546062a5017d4896c6bb168862bd617cd94b846f6f5f54a2272083569fd8",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1145,
+          "ctime_ns": 1788119704575800904,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747041,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086561000000000,
+          "path": "programs/cf411837cd27dd43604a/prompt_template.txt",
+          "sha256": "a6b7e6fef488bcc4e4a66d1b37a01399c6b7c45b77751367b72f0c73a9f3d752",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1035,
+          "ctime_ns": 1788119704576800876,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 747042,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086561000000000,
+          "path": "programs/cf411837cd27dd43604a/pseudo_program.txt",
+          "sha256": "eb2aa2a8c6d3fe990618c9907f03eff58fb60c8de8cb58d02f81fcd9e6c62a2a",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704926791148,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756719,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108542289827174,
+          "path": "programs/d53e0b93521bc075170c",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 22735040,
+          "ctime_ns": 1788119704926791148,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 724805,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086564000000000,
+          "path": "programs/d53e0b93521bc075170c/adapter.gguf",
+          "sha256": "8951d01dc7da9f5c45cc34301052600e2319070bfa661067c86692389e82831d",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 22740604,
+          "ctime_ns": 1788119704860792982,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755399,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086564000000000,
+          "path": "programs/d53e0b93521bc075170c/d53e0b93521bc075170c.paw",
+          "sha256": "84b42319e4f459ee8ded43c47459522eb91c171c606960dc1556a7568fc5e906",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 3062,
+          "ctime_ns": 1788119704836793650,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755396,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086564000000000,
+          "path": "programs/d53e0b93521bc075170c/meta.json",
+          "sha256": "7c026702c7e14980af4a49792e6f159381d84ea05732134586e9195bada6975f",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 28906108,
+          "ctime_ns": 1788119704903791787,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 724804,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788108542333825952,
+          "path": "programs/d53e0b93521bc075170c/prefix_kv_cache.bin",
+          "sha256": "31f9e390ceb44dfa22496c7dd53b8b1367506b2d2f6442279baaf493cb56a711",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1085,
+          "ctime_ns": 1788119704837793622,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755397,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086564000000000,
+          "path": "programs/d53e0b93521bc075170c/prompt_template.txt",
+          "sha256": "5c732d825e1e880d99fc842a47ef255a15040a739e97728cc3b7b3f1cca06dab",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 975,
+          "ctime_ns": 1788119704837793622,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 755398,
+          "link_count": 1,
+          "mode": 420,
+          "mtime_ns": 1788086564000000000,
+          "path": "programs/d53e0b93521bc075170c/pseudo_program.txt",
+          "sha256": "e3947afcb6e2f842159c318ff31c306d3dffbd8ecfc5f0e0e0b5c852c20a9f37",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "ctime_ns": 1788119704228810548,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756918,
+          "link_count": 2,
+          "mode": 493,
+          "mtime_ns": 1788108466107941800,
+          "path": "runtimes",
+          "type": "directory",
+          "uid": 11295
+        },
+        {
+          "bytes": 1115,
+          "ctime_ns": 1788119704228810548,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756920,
+          "link_count": 1,
+          "mode": 384,
+          "mtime_ns": 1788108563638234311,
+          "path": "runtimes/qwen3-0.6b-q6_k.json",
+          "sha256": "04d92c8428037a0c5bc8310a7c95432f6b0e6baf52229304764c6949549d679d",
+          "type": "regular",
+          "uid": 11295
+        },
+        {
+          "bytes": 1357,
+          "ctime_ns": 1788119704227810576,
+          "device": 1048675,
+          "gid": 11296,
+          "inode": 756919,
+          "link_count": 1,
+          "mode": 384,
+          "mtime_ns": 1788108223604659925,
+          "path": "runtimes/qwen3-0.6b-q6_k.v1.json",
+          "sha256": "8051301de7f178b62dbf603d79e0d1ab0de733e6922c2f3868ac7fa2130d61e5",
+          "type": "regular",
+          "uid": 11295
+        }
+      ],
+      "errors": [],
+      "inventory_sha256": "17a8ee0fc9a29d249558f06e68b70e5a58504139420280d9694f5a91f2cec871",
+      "root_entry": {
+        "ctime_ns": 1788119704927791120,
+        "device": 1048675,
+        "gid": 11296,
+        "inode": 758663,
+        "link_count": 5,
+        "mode": 493,
+        "mtime_ns": 1788108465658954257,
+        "path": ".",
+        "type": "directory",
+        "uid": 11295
+      },
+      "root_type": "directory"
+    },
+    "required_direct_children": [
+      "base_models",
+      "programs",
+      "runtimes"
+    ],
+    "root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights",
+    "root_symlink_chain": [
+      "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights"
+    ],
+    "runtime_manifests": {
+      "qwen3-0.6b-q6_k": {
+        "cached": {
+          "bytes": 1115,
+          "path": "runtimes/qwen3-0.6b-q6_k.json",
+          "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights/runtimes/qwen3-0.6b-q6_k.json",
+          "sha256": "04d92c8428037a0c5bc8310a7c95432f6b0e6baf52229304764c6949549d679d"
+        },
+        "cached_canonical_sha256": "b2c47b598db90e4b195ea7437098453a8117d29693b383f1cefa5a2952a6949b",
+        "canonical_json_equal": true,
+        "embedded_canonical_sha256": "b2c47b598db90e4b195ea7437098453a8117d29693b383f1cefa5a2952a6949b"
+      }
+    }
+  },
+  "schema_version": 1,
+  "wheelhouse": {
+    "file_count": 21,
+    "files": [
+      {
+        "bytes": 125813,
+        "path": "anyio-4.14.2-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/anyio-4.14.2-py3-none-any.whl",
+        "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494"
+      },
+      {
+        "bytes": 136983,
+        "path": "certifi-2026.7.22-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/certifi-2026.7.22-py3-none-any.whl",
+        "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"
+      },
+      {
+        "bytes": 45550,
+        "path": "diskcache-5.6.3-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/diskcache-5.6.3-py3-none-any.whl",
+        "sha256": "5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19"
+      },
+      {
+        "bytes": 16740,
+        "path": "exceptiongroup-1.3.1-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/exceptiongroup-1.3.1-py3-none-any.whl",
+        "sha256": "a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598"
+      },
+      {
+        "bytes": 37515,
+        "path": "h11-0.16.0-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/h11-0.16.0-py3-none-any.whl",
+        "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"
+      },
+      {
+        "bytes": 78784,
+        "path": "httpcore-1.0.9-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/httpcore-1.0.9-py3-none-any.whl",
+        "sha256": "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55"
+      },
+      {
+        "bytes": 73517,
+        "path": "httpx-0.28.1-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/httpx-0.28.1-py3-none-any.whl",
+        "sha256": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad"
+      },
+      {
+        "bytes": 68550,
+        "path": "idna-3.19-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/idna-3.19-py3-none-any.whl",
+        "sha256": "815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4"
+      },
+      {
+        "bytes": 134899,
+        "path": "jinja2-3.1.6-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/jinja2-3.1.6-py3-none-any.whl",
+        "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+      },
+      {
+        "bytes": 13000807,
+        "path": "llama_cpp_python-0.3.19-cp310-cp310-linux_x86_64.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/llama_cpp_python-0.3.19-cp310-cp310-linux_x86_64.whl",
+        "sha256": "738f5c7f36248c4275d5d1df061ea0a343282b12c78699d43586d563630356d4"
+      },
+      {
+        "bytes": 20681,
+        "path": "markupsafe-3.0.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/markupsafe-3.0.3-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "f42d0984e947b8adf7dd6dde396e720934d12c506ce84eea8476409563607591"
+      },
+      {
+        "bytes": 16801050,
+        "path": "numpy-2.2.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/numpy-2.2.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "fc7b73d02efb0e18c000e9ad8b83480dfcd5dfd11065997ed4c6747470ae8915"
+      },
+      {
+        "bytes": 6925605,
+        "path": "pillow-12.3.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/pillow-12.3.0-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "f0606c8bf2cdefea14a43530f7657cbbb7ecf1c4222512492ef4a4434a9501ec"
+      },
+      {
+        "bytes": 1813144,
+        "path": "pip-26.1.2-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/pip-26.1.2-py3-none-any.whl",
+        "sha256": "382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab"
+      },
+      {
+        "bytes": 42104,
+        "path": "programasweights-0.4.2-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/programasweights-0.4.2-py3-none-any.whl",
+        "sha256": "139237bc2187ea6db53572c6189a499adf01b5e98ec8e0d400453f3368578a07"
+      },
+      {
+        "bytes": 155560,
+        "path": "psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9"
+      },
+      {
+        "bytes": 49068,
+        "path": "pystray-0.19.5-py2.py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/pystray-0.19.5-py2.py3-none-any.whl",
+        "sha256": "a0c2229d02cf87207297c22d86ffc57c86c227517b038c0d3c59df79295ac617"
+      },
+      {
+        "bytes": 182185,
+        "path": "python_xlib-0.33-py2.py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/python_xlib-0.33-py2.py3-none-any.whl",
+        "sha256": "c3534038d42e0df2f1392a1b30a15a4ff5fdc2b86cfa94f072bf11b10a164398"
+      },
+      {
+        "bytes": 232749,
+        "path": "rules_as_programs-0.1.0-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/rules_as_programs-0.1.0-py3-none-any.whl",
+        "sha256": "be3100c4a9a587b1d858d748f7921dc08969e15b87c7dbea16105b2c1f824773"
+      },
+      {
+        "bytes": 11050,
+        "path": "six-1.17.0-py2.py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/six-1.17.0-py2.py3-none-any.whl",
+        "sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"
+      },
+      {
+        "bytes": 45571,
+        "path": "typing_extensions-4.16.0-py3-none-any.whl",
+        "resolved_path": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse/typing_extensions-4.16.0-py3-none-any.whl",
+        "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+      }
+    ],
+    "inventory_sha256": "6bf0c4ec5f7db8bc1603b63464cc5ad58248a5abafe032a937eaf1f22e7645a5",
+    "root": "/u4/yuntian/rap-eacl-systems-formal-v3/runtime/wheelhouse",
+    "total_bytes": 39997925
+  }
+}
