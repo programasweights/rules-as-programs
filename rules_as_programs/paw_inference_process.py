@@ -7,7 +7,49 @@ import multiprocessing
 import os
 import threading
 from multiprocessing.connection import Connection
-from typing import Any
+from typing import Any, Mapping
+
+
+def _llama_thread_kwargs(environment: Mapping[str, str]) -> dict[str, int]:
+    """Return explicit llama.cpp thread settings requested for this worker."""
+    names = {
+        "n_threads": "RAP_PAW_N_THREADS",
+        "n_threads_batch": "RAP_PAW_N_THREADS_BATCH",
+    }
+    configured: dict[str, int] = {}
+    for argument, variable in names.items():
+        raw = str(environment.get(variable, "")).strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{variable} must be a positive integer") from exc
+        if value < 1:
+            raise ValueError(f"{variable} must be a positive integer")
+        configured[argument] = value
+    return configured
+
+
+def _configure_llama_threads(runtime: Any, environment: Mapping[str, str]) -> None:
+    """Pin llama.cpp threads before ProgramAsWeights creates a function."""
+    configured = _llama_thread_kwargs(environment)
+    if not configured:
+        return
+    original = runtime.Llama
+
+    def configured_llama(*args: Any, **kwargs: Any) -> Any:
+        for name, value in configured.items():
+            observed = kwargs.get(name)
+            if observed is not None and int(observed) != value:
+                raise RuntimeError(
+                    f"ProgramAsWeights supplied {name}={observed}, conflicting "
+                    f"with the RAP worker setting {value}"
+                )
+            kwargs[name] = value
+        return original(*args, **kwargs)
+
+    runtime.Llama = configured_llama
 
 
 def _worker_main(connection: Connection) -> None:
@@ -15,6 +57,9 @@ def _worker_main(connection: Connection) -> None:
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     import programasweights as paw
+    from programasweights import runtime_llamacpp
+
+    _configure_llama_threads(runtime_llamacpp, os.environ)
 
     functions: dict[str, Any] = {}
     while True:

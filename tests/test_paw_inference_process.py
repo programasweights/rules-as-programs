@@ -1,4 +1,12 @@
-from rules_as_programs.paw_inference_process import PawInferenceProcess
+from types import SimpleNamespace
+
+import pytest
+
+from rules_as_programs.paw_inference_process import (
+    PawInferenceProcess,
+    _configure_llama_threads,
+    _llama_thread_kwargs,
+)
 
 
 class FakeConnection:
@@ -65,3 +73,41 @@ def test_timeout_kills_poisoned_native_worker():
     assert context.process.terminated
     assert context.parent.closed
     assert worker.pid is None
+
+
+def test_llama_thread_settings_are_explicit_and_positive():
+    assert _llama_thread_kwargs({}) == {}
+    assert _llama_thread_kwargs(
+        {"RAP_PAW_N_THREADS": "8", "RAP_PAW_N_THREADS_BATCH": "8"}
+    ) == {"n_threads": 8, "n_threads_batch": 8}
+    with pytest.raises(ValueError, match="positive integer"):
+        _llama_thread_kwargs({"RAP_PAW_N_THREADS": "0"})
+    with pytest.raises(ValueError, match="positive integer"):
+        _llama_thread_kwargs({"RAP_PAW_N_THREADS_BATCH": "many"})
+
+
+def test_configure_llama_threads_pins_both_constructor_arguments():
+    calls = []
+
+    def llama(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "loaded"
+
+    runtime = SimpleNamespace(Llama=llama)
+    _configure_llama_threads(
+        runtime,
+        {"RAP_PAW_N_THREADS": "8", "RAP_PAW_N_THREADS_BATCH": "8"},
+    )
+
+    assert runtime.Llama(model_path="model.gguf") == "loaded"
+    assert calls == [
+        ((), {"model_path": "model.gguf", "n_threads": 8, "n_threads_batch": 8})
+    ]
+
+
+def test_configure_llama_threads_rejects_conflicting_runtime_value():
+    runtime = SimpleNamespace(Llama=lambda **_kwargs: None)
+    _configure_llama_threads(runtime, {"RAP_PAW_N_THREADS": "8"})
+
+    with pytest.raises(RuntimeError, match="conflicting"):
+        runtime.Llama(n_threads=4)
