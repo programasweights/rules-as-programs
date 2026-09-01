@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-013",
+  "parent_amendment": "protocol-v3-amendment-012",
+  "parent_runtime_lock_commit": "4056d469af01852b8ef5e618fb777c5f69bc17d1",
+  "created_utc": "2026-09-01T15:16:07Z",
+  "frozen_utc": "2026-09-01T15:16:07Z",
+  "status": "frozen prelaunch supervisor wait correction",
+  "reason": "Exact r04 started a supervised child after successful setup and closeout-root preclaim, but the outer supervisor abandoned its normal wait path after a post-Popen process-registration exception. Its one-second fallback timed out, left returncode unset, and raised 'started supervisor child was not waited' before any attempt publication.",
+  "observed_r04_terminal_boundary": {
+    "raw_attempt_id": "formal-v3-20260831t051023z-r04",
+    "slurm_job_id": "1525449",
+    "partition": "ALL",
+    "node": "watgpu808",
+    "state": "FAILED",
+    "exit_code": "2:0",
+    "elapsed_seconds": 74,
+    "attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r04",
+    "attempt_root_present": false,
+    "measurement_started": false,
+    "failure_phase": "outer supervisor after child spawn and before child wait, closeout publication, or attempt publication",
+    "observed_error": "started supervisor child was not waited",
+    "terminal_archive": {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/prepublication-failures/1525449-v1",
+      "directory_mode": 320,
+      "member_mode": 292,
+      "manifest_sha256": "cc9781832fc600d4fb78ac96b087787303c85599a3b7eeca9df1b1747eb5ead2",
+      "setup_receipt_bytes": 22199228,
+      "setup_receipt_sha256": "e5d261b65c6eedace64d2e3f85c46cc6c9ed75c343c2fb591e6b0bd920ad86ac",
+      "slurm_stderr_bytes": 73,
+      "slurm_stderr_sha256": "b4cb6e412be502534ce5b7ba52c48f6fb81096d5cfcdd1be5645103146516bc8",
+      "supervisor_start_bytes": 4788,
+      "supervisor_start_sha256": "2e8b4736d85a47fe045ed697ea1ff591566196e74a3e56931c94677e6e0dcb3d"
+    }
+  },
+  "explicit_override": {
+    "scope": "Only the exact burned-r04 to fresh-r05 edge, post-Popen registration/wait behavior, supervisor closeout membership validation, and r04 archive retention.",
+    "burned_attempt": "formal-v3-20260831t051023z-r04 is terminal and may never be submitted again even though no attempt root was published.",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r05",
+    "primary_source_rule": "Exact r05 executes the complete unchanged 430-row plan once and is the sole primary numeric source. r01, r02, r03, and r04 contribute no primary row. An unfavorable, system-violating, failed, or incomplete r05 outcome may not be replaced based on favorability.",
+    "post_popen_wait_rule": "After subprocess.Popen returns a child, the supervisor must start lossless stream drains before optional process-identity registration. Initial child identity capture and registry-thread startup are diagnostic best-effort operations: exact exceptions are retained in closeout diagnostics but never divert a viable child from the ordinary blocking wait. Any later synchronous supervisor exception after Popen is retained and the already-started child is still waited without a one-second timeout. The supervisor may report state not_started only when Popen itself fails.",
+    "drain_and_quiescence_rule": "Stream drain, process-group registry, descendant quiescence, attempt-writer checks, ordinary/fatal product selection, and exit agreement remain fail closed. This amendment does not permit suppressing a child error, fabricating a return code, skipping quiescence, or accepting a partial result.",
+    "closeout_membership_rule": "The sealed per-attempt supervisor root membership is derived from the exact frozen start, child stdout, child stderr, and closeout paths after confirming that all share the exact supervisor root and have four distinct basenames. No stale hard-coded filename may override those exact contract paths.",
+    "retention_rule": "The fresh r05 replacement receipt retains the complete sealed r03 and r04 prepublication archives, the complete immutable r01/r02 evidence, both failed Amendment 011 receipt archives, and the passing Amendment 012 receipt. It proves exact r03 and r04 attempt-root absence before r05 setup.",
+    "unchanged": [
+      "all Amendment 008 experimental design, complete-430, uniform-primary-source, censoring, and claim-limit rules after substituting exact r05 for the prospective successor",
+      "Amendments 011 and 012 supervisor-parent, historical-r03 validation, and derived-successor semantics",
+      "partition ALL, watgpu808, CPU-only execution, eight CPUs, 16 GiB memory, corrected direct PAW cache, wheelhouse, and seven-day allocation",
+      "the unclassified r02 exit-5 cause and the prepublication-only status of r03 and r04"
+    ]
+  },
+  "implementation_and_test_gate": {
+    "required_behaviors": [
+      "Popen failure remains not_started with its exact traceback",
+      "initial process-identity failure is retained while a viable child is drained and waited to terminal",
+      "registry-thread startup failure is retained while a viable child is drained and waited to terminal",
+      "a post-Popen synchronous exception never uses a bounded fallback that can leave returncode unset",
+      "slow children are waited without premature supervisor abandonment",
+      "child stdout and stderr are drained losslessly before closeout",
+      "contract-derived supervisor membership accepts only the exact four frozen paths",
+      "fresh r05 receipt rehashes and binds every sealed r03 and r04 archive member and proves both attempt roots absent",
+      "exact r05 identities and sole-primary-source rows propagate through launch, result, analyzer, and reducer"
+    ],
+    "static_gates": [
+      "focused pytest suite",
+      "Ruff",
+      "Python bytecode compilation",
+      "bash -n",
+      "git diff --check"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json",
+      "experiments/eacl2027/protocol-v3-amendment-011.json",
+      "experiments/eacl2027/protocol-v3-amendment-012.json",
+      "experiments/eacl2027/protocol-v3-amendment-013.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "4056d469af01852b8ef5e618fb777c5f69bc17d1",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-013.json"
+        ],
+        "semantic_role": "P9 prelaunch post-Popen wait correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I9 exact r05 identity, post-Popen wait, closeout membership, r04 retention, and Amendment 013 routing"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v9.json"
+        ],
+        "semantic_role": "H9 live runtime lock generated from I9"
+      },
+      "head_must_equal_h4_before_r05_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v9.json",
+    "chronology_rule": "Commit this file alone as P9 directly on H8. Commit exactly the declared I9 paths after tests pass. Generate and commit only formal-runtime-lock-v9.json as H9, push H9, then create a new receipt candidate; r04 and every earlier receipt candidate remain immutable."
+  },
+  "claim_limits": [
+    "This amendment supplies no system-performance measurement.",
+    "It does not infer the initiating post-Popen exception from the terminal supervisor message.",
+    "It does not authorize r05 launch until the exact P9/I9/H9 and fresh-receipt gates pass."
+  ]
+}
