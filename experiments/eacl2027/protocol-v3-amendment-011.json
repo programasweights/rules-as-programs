@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-011",
+  "created_utc": "2026-09-01T12:56:01Z",
+  "frozen_utc": "2026-09-01T12:56:01Z",
+  "status": "frozen post-terminal prepublication supervisor-parent correction; r03 produced no attempt tree or measurement and exact r04 is the sole prospective primary source",
+  "parent_amendment": "protocol-v3-amendment-010",
+  "parent_runtime_lock_commit": "4eeca65d42cde8e0a892e7ce6578aa2ae13b96e0",
+  "reason": "Exact r03 job 1524823 completed its offline setup on partition ALL and watgpu808, then the outer supervisor raised FileNotFoundError before attempt publication because supervisor_closeout_root_exact was created with os.mkdir while its required scheduler/supervisor-closeouts parent did not exist. Slurm ended FAILED 5:0 after 78 seconds. No r03 attempt directory, plan, lifecycle record, daemon, hook invocation, unit start, or measurement exists. The complete external setup, stream, source, and terminal scheduler boundary is sealed. This amendment burns r03, fixes only the missing parent preclaim contract, and assigns the unchanged complete 430-row plan to fresh exact r04 as its sole primary source.",
+  "observed_r03_terminal_boundary": {
+    "raw_attempt_id": "formal-v3-20260831t051023z-r03",
+    "slurm_job_id": "1524823",
+    "partition": "ALL",
+    "node": "watgpu808",
+    "state": "FAILED",
+    "exit_code": "5:0",
+    "elapsed_seconds": 78,
+    "started_utc": "2026-09-01T02:18:31Z",
+    "ended_utc": "2026-09-01T02:19:49Z",
+    "attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r03",
+    "attempt_root_present": false,
+    "measurement_started": false,
+    "failure_phase": "outer supervisor before exclusive closeout-root preclaim and before child spawn",
+    "observed_exception_type": "builtins.FileNotFoundError",
+    "observed_exception_message": "[Errno 2] No such file or directory: '/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r03'",
+    "terminal_archive": {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/prepublication-failures/1524823-v1",
+      "directory_mode": 320,
+      "member_mode": 292,
+      "manifest_bytes": 1142,
+      "manifest_sha256": "de2f51cb2fb817bbf3896255dd534ee36dcc339029f3e4bd649c1bc0a4b9a5c0",
+      "setup_receipt_bytes": 21221838,
+      "setup_receipt_sha256": "615a10bc62365dde0820b6612cbe4f4880af906242bbf83a019d9c7011205867",
+      "stderr_bytes": 678,
+      "stderr_sha256": "8b2da49faa667f6247a0c95dd9f29ceaefa569725f85960e2a7e584d15458e4c",
+      "terminal_sacct_bytes": 186,
+      "terminal_sacct_sha256": "6e630eba4b17eb58a5498d19e826984df126ac29d032a4085baed38027f575d0"
+    },
+    "validation": {
+      "manifest_and_sidecar_passed": true,
+      "all_manifest_members_rehashed": true,
+      "setup_receipt_strict_json_passed": true,
+      "setup_receipt_raw_attempt_id": "formal-v3-20260831t051023z-r03",
+      "setup_receipt_slurm_job_id": "1524823",
+      "setup_receipt_study_mode": "formal_protocol_v3_amendment_008",
+      "clean_repo_head": "4eeca65d42cde8e0a892e7ce6578aa2ae13b96e0",
+      "claim": "The archive proves only this exact prepublication boundary. It supplies no system-performance result and does not infer a broader cause from exit 5."
+    }
+  },
+  "explicit_override": {
+    "scope": "Only the exact r03 prepublication failure to fresh r04 successor edge and the external supervisor-closeout parent preclaim contract.",
+    "burned_attempt": "formal-v3-20260831t051023z-r03 is terminal and may never be submitted again even though no attempt root was published.",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r04",
+    "primary_source_rule": "Exact r04 executes the complete unchanged 430-row plan once and is the sole primary numeric source for all rows. r01, r02, and r03 contribute no primary row. An unfavorable, system-violating, failed, or incomplete r04 outcome may not be replaced.",
+    "supervisor_parent_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts",
+    "supervisor_root_exact": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/formal-v3-20260831t051023z-r04",
+    "parent_preclaim_rule": "Before any r04 child spawn, daemon, hook, or measurement, the live outer supervisor validates the existing scheduler root by lstat as the exact non-symlink directory owned by the effective uid with mode 0700. It then attempts one mode-0700 mkdir of supervisor_parent_exact. Success requires fsync of the scheduler root followed by lstat validation. EEXIST is accepted only when lstat independently proves the same exact owner, directory type, non-symlink state, and mode; every other collision, race outcome, ownership, type, mode, lstat, mkdir, or fsync failure blocks child spawn. No chmod, deletion, replacement, symlink following, or permissive recursive creation is allowed.",
+    "per_attempt_preclaim_rule": "After the validated parent exists, exclusively mkdir supervisor_root_exact mode 0700, fsync the parent, lstat and verify exact owner/type/non-symlink/mode, then exclusively create and fsync the start and child-stream files exactly as inherited. A pre-existing r04 root burns the start and blocks launch; it is never opened, removed, or reused.",
+    "retention_rule": "The r04 replacement receipt and final archive retain the complete sealed r03 terminal archive as a typed prepublication predecessor boundary, including every member, manifest, sidecar, mode, length, and digest. They also retain the complete immutable r01/r02 evidence already required by Amendment 008. No r03 attempt-tree placeholder may be created.",
+    "replacement_rule": "A fresh H7-bound replacement receipt must bind immutable r02 as the measured partial predecessor, the sealed r03 prepublication archive as the immediately intervening failed launch, and r04 as the sole successor. It must prove r03 attempt-root absence and exact archive validity before r04 setup. The earlier H6 receipt naming r03 cannot authorize r04.",
+    "plan_rule": "r04 plan.json, if published, is byte-for-byte equal to immutable r02 plan.json: 430 rows, 122245 bytes, stored SHA-256 cab6e22893cea6a41f3140ce57a39d34b7a463ba5e7453aa3970d39ff67f5434, canonical SHA-256 4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c, and ordered membership SHA-256 cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162.",
+    "canary_rule": "The passing cache canary remains valid because the direct PAW cache, wheelhouse, programs, model, network guard, CPU inference path, partition, and node are unchanged. This amendment changes only external scheduler-directory preclaim behavior before child spawn. No canary rerun is authorized or required.",
+    "unchanged": [
+      "all Amendment 008 experimental design, r02 terminal forensics, cache provenance, passing canary, nine evidence items, complete-430, uniform-primary-source, fatal-result, retention, censoring, and claim-limit rules after substituting exact r04 for prospective exact r03",
+      "Amendments 009 and 010 parser and runtime-lock routing semantics",
+      "partition ALL, watgpu808, CPU-only execution, eight CPUs, 16 GiB memory, corrected direct PAW cache root, locked wheelhouse and programs, and seven-day allocation",
+      "the complete immutable r01/r02 trees, every failed canary and replacement archive, job 1524821 preallocation receipt, and job 1524823 terminal archive",
+      "the unclassified r02 exit-5 cause"
+    ]
+  },
+  "implementation_and_test_gate": {
+    "required_behaviors": [
+      "exact scheduler-root lstat owner/type/non-symlink/mode validation",
+      "absent parent creation with mode 0700 and scheduler-root fsync before child spawn",
+      "race-safe EEXIST acceptance only after exact lstat validation",
+      "rejection of parent symlink, regular file, special file, wrong owner, wrong mode, mkdir errors, lstat errors, and fsync errors without child spawn",
+      "exclusive r04 per-attempt root creation, parent fsync, exact lstat validation, and collision refusal without mutation",
+      "r03 attempt-root absence plus complete sealed terminal-archive validation in the fresh r04 replacement gate",
+      "exact r04 identities throughout launch, setup, lifecycle, result, analyzer, reducer, and archive",
+      "complete unchanged 430-row plan and sole-r04 primary-source enforcement",
+      "no regression in the inherited supervisor spawn, stream, quiescence, ordinary/fatal product, cache, or retention gates"
+    ],
+    "static_gates": [
+      "focused pytest suite",
+      "Ruff",
+      "Python bytecode compilation",
+      "bash -n",
+      "git diff --check"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json",
+      "experiments/eacl2027/protocol-v3-amendment-011.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "4eeca65d42cde8e0a892e7ce6578aa2ae13b96e0",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-011.json"
+        ],
+        "semantic_role": "P7 post-terminal prepublication correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I7 exact r04 identity, replacement retention, supervisor-parent preclaim, and analysis gates"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v7.json"
+        ],
+        "semantic_role": "H7 live runtime lock generated from I7"
+      },
+      "head_must_equal_h4_before_r04_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v7.json",
+    "chronology_rule": "Commit this file alone as P7 directly on H6. Commit exactly the declared I7 paths as its child after all tests pass. Generate formal-runtime-lock-v7.json from the live I7 wheelhouse and corrected cache and commit only it as H7. Push H7, generate and independently validate a fresh r04 replacement receipt binding the r03 terminal archive, and only then permit r04 setup."
+  },
+  "claim_limits": [
+    "r03 supplies no measurement or system-performance claim.",
+    "This correction does not classify either r02 or r03 exit code 5 beyond the exact retained structural phase and traceback evidence.",
+    "The parent-directory fix supplies no evidence about RAP latency, scaling, soak stability, offline agreement, or fault recovery.",
+    "No successor after r04 is authorized by this amendment, regardless of r04 outcome.",
+    "Any implementation, evidence-schema, runtime, plan, measurement, or source-selection change outside this exact override requires another frozen amendment."
+  ]
+}
