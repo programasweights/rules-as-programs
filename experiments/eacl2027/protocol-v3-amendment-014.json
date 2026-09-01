@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-014",
+  "parent_amendment": "protocol-v3-amendment-013",
+  "created_utc": "2026-09-01T16:46:30Z",
+  "frozen_utc": "2026-09-01T16:46:30Z",
+  "status": "frozen prelaunch host-profile routing correction",
+  "parent_runtime_lock_commit": "a8744e2b3cb999f33a5b05b7f8afb233de09c78b",
+  "reason": "Exact r05 reached the frozen process-profile preflight on ALL/watgpu808 and observed os.cpu_count()==multiprocessing.cpu_count()==288, while the unchanged preregistered profile requires 128. No attempt root or measurement was published. ALL/watgpu108 is scheduler-reported with 128 logical CPUs, so fresh r06 changes only the requested node and retains every workload, runtime, thread-derivation, cache, and claim rule.",
+  "observed_r05_terminal_boundary": {
+    "raw_attempt_id": "formal-v3-20260831t051023z-r05",
+    "slurm_job_id": "1525595",
+    "partition": "ALL",
+    "node": "watgpu808",
+    "state": "FAILED",
+    "exit_code": "5:0",
+    "elapsed_seconds": 138,
+    "attempt_root": "/u4/yuntian/rap-eacl-systems-formal-v3/attempts/formal-v3-20260831t051023z-r05",
+    "attempt_root_present": false,
+    "measurement_started": false,
+    "observed_child_exit_code": 2,
+    "supervisor_quiescence_passed": true,
+    "observed_error": "systems harness preflight error: formal process environment mismatch: {\"multiprocessing.cpu_count\": 288, \"os.cpu_count\": 288}",
+    "terminal_archive": {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/prepublication-failures/1525595-v1",
+      "directory_mode": 320,
+      "member_mode": 292,
+      "manifest_bytes": 2684,
+      "manifest_sha256": "0529bf81fb30fb82b82c1cfc9733ba815f84ada4e2793df430d4cc744f8b00d6",
+      "setup_receipt_bytes": 22209363,
+      "setup_receipt_sha256": "ce53f500fd56f9593d7f7b2b54400e87c31875d0243cd65eaa980377e5946b94",
+      "supervisor_start_bytes": 4788,
+      "supervisor_start_sha256": "5ce95373459201602797a008a476ca950bf998ae6fe68cd3b843bd3a2f7a6c06",
+      "supervisor_closeout_bytes": 1736,
+      "supervisor_closeout_sha256": "ce5f4bc1cab476757c2bb2f7a3ea8d17ca170fcde17a5d2dc69242b907630280",
+      "child_stderr_bytes": 126,
+      "child_stderr_sha256": "5f554d4817467b06a2daa30864d9433dc592b1f119b1f54c0a2751d9ae1816a9"
+    }
+  },
+  "explicit_override": {
+    "scope": "Only the exact burned-r05 to fresh-r06 edge, requested node, r06 supervisor paths, and r05 archive retention.",
+    "burned_attempt": "formal-v3-20260831t051023z-r05 is terminal and may never be submitted again even though no attempt root was published.",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r06",
+    "requested_partition": "ALL",
+    "requested_node": "watgpu108",
+    "host_profile_rule": "Exact watgpu108 must report os.cpu_count()==multiprocessing.cpu_count()==128 and the existing eight-CPU affinity, memory, Python, wheelhouse, cache, and package gates must all pass. Any mismatch is retained fail closed.",
+    "primary_source_rule": "Exact r06 executes the complete unchanged 430-row plan once and is the sole primary numeric source. r01 through r05 contribute no primary row. An unfavorable, system-violating, failed, or incomplete r06 outcome may not be replaced based on favorability.",
+    "retention_rule": "The fresh r06 replacement receipt rehashes and binds the complete sealed r03, r04, and r05 prepublication archives, the complete immutable r01/r02 evidence, and proves exact r03/r04/r05/r06 attempt-root absence before r06 setup.",
+    "unchanged": [
+      "the complete Amendment 008 430-row workload, ordering, repetitions, endpoints, uniform-primary-source rule, censoring, and claim limits",
+      "host_logical_cpu_count=128, multiprocessing_cpu_count=128, llama_cpp_n_threads=64, llama_cpp_n_threads_batch=128, eight allocated CPUs, 16 GiB memory, CPU-only execution, and the existing oversubscription limitation",
+      "corrected direct PAW cache, wheelhouse, runtime inventory, process environment, and seven-day allocation",
+      "Amendment 013 post-Popen wait, drain, quiescence, closeout, and contract-derived membership semantics",
+      "r02 exit 5 remains unclassified; r02 is sensitivity-only; r03/r04/r05 are prepublication-only"
+    ]
+  },
+  "implementation_and_test_gate": {
+    "required_behaviors": [
+      "exact r06 identity propagates through launcher, runner, replacement, analyzer, and reducer",
+      "the sbatch requested node is exactly watgpu108 while partition remains exactly ALL",
+      "the frozen process profile remains 128 logical CPUs and its prior thread derivation is byte-for-byte unchanged",
+      "fresh r06 receipt rehashes every sealed r03/r04/r05 archive member and proves all four prepublication attempt roots absent",
+      "no r05 archive byte or earlier attempt byte is modified"
+    ],
+    "static_gates": [
+      "focused pytest suite",
+      "Ruff",
+      "Python bytecode compilation",
+      "bash -n",
+      "git diff --check"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json",
+      "experiments/eacl2027/protocol-v3-amendment-011.json",
+      "experiments/eacl2027/protocol-v3-amendment-012.json",
+      "experiments/eacl2027/protocol-v3-amendment-013.json",
+      "experiments/eacl2027/protocol-v3-amendment-014.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "a8744e2b3cb999f33a5b05b7f8afb233de09c78b",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-014.json"
+        ],
+        "semantic_role": "P10 prelaunch 128-logical-CPU host routing correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I10 exact r06 identity, watgpu108 routing, r05 retention, and Amendment 014 propagation"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v10.json"
+        ],
+        "semantic_role": "H10 live runtime lock generated from I10"
+      },
+      "head_must_equal_h4_before_r06_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v10.json",
+    "chronology_rule": "Commit this file alone as P10 directly on H9. Commit exactly the declared I10 paths after tests pass. Generate and commit only formal-runtime-lock-v10.json as H10, push H10, then create a fresh receipt candidate; every earlier receipt remains immutable."
+  },
+  "claim_limits": [
+    "This amendment supplies no system-performance measurement.",
+    "It does not change the frozen host CPU-count or llama thread derivation; it only routes to a node reported to satisfy them.",
+    "It does not authorize r06 launch until exact P10/I10/H10 and fresh-receipt gates pass."
+  ]
+}
