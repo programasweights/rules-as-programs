@@ -1809,6 +1809,13 @@ def _key_json(key: tuple[str, str, str]) -> dict[str, str]:
     return {"project_root": key[0], "input_sha256": key[1], "rule_id": key[2]}
 
 
+def _sorted_key_json(
+    keys: Iterable[tuple[str, str, str]],
+) -> list[dict[str, str]]:
+    """Sort comparable tuple identities before rendering them as dictionaries."""
+    return [_key_json(key) for key in sorted(keys)]
+
+
 def account_evaluations(
     rows_by_project: dict[str, list[dict[str, Any]]],
     expected: Sequence[ExpectedEvaluation],
@@ -4119,8 +4126,8 @@ def run_soak(
                 final_accounting_source = (
                     "cumulative_bounded_batch_checkpoints_plus_persistent_terminal_keys"
                 )
-            final_journal_missing = sorted(
-                _key_json(key) for key in expected_union - final_journal_terminal
+            final_journal_missing = _sorted_key_json(
+                expected_union - final_journal_terminal
             )
             journal_union_complete = not final_journal_missing
             final_drain_wait["full_journal_accounting"] = {

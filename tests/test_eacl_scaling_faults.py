@@ -1369,6 +1369,32 @@ def test_soak_post_settle_snapshot_precedes_global_journal_scan():
     assert '"post_scan_diagnostic_not_used_for_claims": post_scan_resources' in source
 
 
+def test_soak_missing_terminal_keys_sort_before_dictionary_rendering():
+    keys = {
+        ("/project-b", "hash-a", "rule-a"),
+        ("/project-a", "hash-b", "rule-b"),
+        ("/project-a", "hash-a", "rule-c"),
+    }
+
+    assert systems._sorted_key_json(keys) == [
+        {
+            "project_root": "/project-a",
+            "input_sha256": "hash-a",
+            "rule_id": "rule-c",
+        },
+        {
+            "project_root": "/project-a",
+            "input_sha256": "hash-b",
+            "rule_id": "rule-b",
+        },
+        {
+            "project_root": "/project-b",
+            "input_sha256": "hash-a",
+            "rule_id": "rule-a",
+        },
+    ]
+
+
 def test_soak_rss_per_event_denominator_is_actual_submissions():
     source = inspect.getsource(systems.run_soak)
     metric = source.split('"rss_change_bytes_per_event":', 1)[1].split(
