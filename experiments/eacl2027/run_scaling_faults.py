@@ -97,6 +97,9 @@ FORMAL_BASE_AMENDMENT_SHA256 = (
 FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-008.json"
 FORMAL_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-009.json"
 FORMAL_ROUTING_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-010.json"
+FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT = (
+    ROOT / "protocol-v3-amendment-011.json"
+)
 FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
 FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
     "For exact raw r03, study_mode is exactly "
@@ -172,9 +175,9 @@ SOCKET_CLEANUP_TIMEOUT_SECONDS = 2.0
 FORMAL_RAW_ATTEMPT_ROOT = Path("/u4/yuntian/rap-eacl-systems-formal-v3/attempts")
 FORMAL_SUPERVISOR_ROOT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/"
-    "formal-v3-20260831t051023z-r03"
+    "formal-v3-20260831t051023z-r04"
 )
-FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r03"
+FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r04"
 _SUPERVISOR_SENSITIVE_ENV_MARKERS = (
     "API_KEY",
     "TOKEN",
@@ -434,6 +437,119 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _validate_private_directory(path: Path, *, label: str) -> os.stat_result:
+    """Validate a preclaimed directory without following a symlink."""
+
+    try:
+        observed = path.lstat()
+    except OSError as exc:
+        raise SystemsHarnessError(f"{label} lstat failed: {path}: {exc}") from exc
+    if (
+        stat.S_ISLNK(observed.st_mode)
+        or not stat.S_ISDIR(observed.st_mode)
+        or int(observed.st_uid) != os.geteuid()
+        or stat.S_IMODE(observed.st_mode) != 0o700
+    ):
+        raise SystemsHarnessError(
+            f"{label} must be a non-symlink directory owned by the effective "
+            "user with mode 0700"
+        )
+    return observed
+
+
+def _open_private_directory(path: Path, *, label: str) -> tuple[int, os.stat_result]:
+    """Open a directory without symlink following and bind its path identity."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise SystemsHarnessError(f"{label} open failed: {path}: {exc}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        observed = _validate_private_directory(path, label=label)
+        if (opened.st_dev, opened.st_ino) != (observed.st_dev, observed.st_ino):
+            raise SystemsHarnessError(f"{label} changed during preclaim")
+        return descriptor, opened
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _validate_private_child(
+    parent_descriptor: int, name: str, path: Path, *, label: str
+) -> os.stat_result:
+    """Validate a child through its anchored parent and its absolute path."""
+
+    try:
+        anchored = os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except OSError as exc:
+        raise SystemsHarnessError(f"{label} lstatat failed: {path}: {exc}") from exc
+    observed = _validate_private_directory(path, label=label)
+    if (anchored.st_dev, anchored.st_ino) != (observed.st_dev, observed.st_ino):
+        raise SystemsHarnessError(f"{label} changed during preclaim")
+    return anchored
+
+
+def _ensure_formal_supervisor_parent(parent: Path) -> None:
+    """Race-safely create and validate Amendment 011's closeout parent."""
+
+    scheduler_root = parent.parent
+    scheduler_descriptor, _ = _open_private_directory(
+        scheduler_root, label="formal scheduler root"
+    )
+    try:
+        try:
+            os.mkdir(parent.name, 0o700, dir_fd=scheduler_descriptor)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            raise SystemsHarnessError(
+                f"formal supervisor parent mkdir failed: {parent}: {exc}"
+            ) from exc
+        else:
+            try:
+                os.fsync(scheduler_descriptor)
+            except OSError as exc:
+                raise SystemsHarnessError(
+                    f"formal scheduler root fsync failed: {scheduler_root}: {exc}"
+                ) from exc
+        _validate_private_child(
+            scheduler_descriptor,
+            parent.name,
+            parent,
+            label="formal supervisor parent",
+        )
+    finally:
+        os.close(scheduler_descriptor)
+
+
+def _preclaim_formal_supervisor_root(supervisor_root: Path) -> None:
+    """Exclusively create the per-attempt root through an anchored parent."""
+
+    parent = supervisor_root.parent
+    _ensure_formal_supervisor_parent(parent)
+    parent_descriptor, _ = _open_private_directory(
+        parent, label="formal supervisor parent"
+    )
+    try:
+        try:
+            os.mkdir(supervisor_root.name, 0o700, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+        except OSError as exc:
+            raise SystemsHarnessError(
+                f"formal supervisor root exclusive preclaim failed: {supervisor_root}: {exc}"
+            ) from exc
+        _validate_private_child(
+            parent_descriptor,
+            supervisor_root.name,
+            supervisor_root,
+            label="formal supervisor root",
+        )
+    finally:
+        os.close(parent_descriptor)
 
 
 def _formal_attempt_root(retained_runtime_root: Path) -> Path:
@@ -998,7 +1114,7 @@ def build_full_attempt_plan(config: MatrixConfig) -> dict[str, Any]:
         "unit_count": len(full_plan),
         "canonical_sha256": _sha256_bytes(_canonical_json_bytes(full_plan)),
         "ordered_membership_sha256": _sha256_bytes(_canonical_json_bytes(plan_keys)),
-        "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+        "primary_source_attempt_id": "formal-v3-20260831t051023z-r04",
         "execution_roles": {
             "provenance_rerun": {"start": 0, "stop": 279, "count": 279},
             "direct_first_completion": {"start": 279, "stop": 350, "count": 71},
@@ -7144,6 +7260,11 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         or not FORMAL_ROUTING_CORRECTION_AMENDMENT.is_file()
     ):
         raise SystemsHarnessError("protocol-v3 amendment 010 is absent or a symlink")
+    if (
+        FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT.is_symlink()
+        or not FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT.is_file()
+    ):
+        raise SystemsHarnessError("protocol-v3 amendment 011 is absent or a symlink")
 
     def reject_constant(value: str) -> None:
         raise ValueError(f"non-finite JSON number {value}")
@@ -7262,6 +7383,57 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         contract["effective_protocol_identity"]["interpretation_order"] = (
             routing_identity["interpretation_order"]
         )
+        try:
+            prepublication = json.loads(
+                FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT.read_text(encoding="utf-8"),
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemsHarnessError(f"invalid strict amendment 011: {exc}") from exc
+        prepublication_identity = (
+            prepublication.get("effective_protocol_identity")
+            if isinstance(prepublication, dict)
+            else None
+        )
+        override = (
+            prepublication.get("explicit_override")
+            if isinstance(prepublication, dict)
+            else None
+        )
+        if (
+            not isinstance(prepublication, dict)
+            or prepublication.get("amendment_id") != "protocol-v3-amendment-011"
+            or prepublication.get("parent_amendment")
+            != "protocol-v3-amendment-010"
+            or not str(prepublication.get("status", "")).startswith("frozen ")
+            or not isinstance(prepublication_identity, dict)
+            or not isinstance(override, dict)
+        ):
+            raise SystemsHarnessError("protocol-v3 amendment 011 is not frozen")
+        contract["effective_protocol_identity"]["required_git_topology"] = (
+            prepublication_identity["required_git_topology"]
+        )
+        contract["effective_protocol_identity"]["interpretation_order"] = (
+            prepublication_identity["interpretation_order"]
+        )
+        fatal = contract["fatal_result_contract"]
+        successor = str(override["successor_raw_attempt_id"])
+        supervisor_root = Path(str(override["supervisor_root_exact"]))
+        if successor != FORMAL_RAW_ATTEMPT_ID or supervisor_root != FORMAL_SUPERVISOR_ROOT:
+            raise SystemsHarnessError("amendment-011 successor identity differs")
+        fatal["supervisor_parent_exact"] = str(override["supervisor_parent_exact"])
+        fatal["supervisor_closeout_root_exact"] = str(supervisor_root)
+        fatal["supervisor_start_path_exact"] = str(supervisor_root / "start.json")
+        fatal["supervisor_child_stdout_path_exact"] = str(
+            supervisor_root / "child.stdout.bin"
+        )
+        fatal["supervisor_child_stderr_path_exact"] = str(
+            supervisor_root / "child.stderr.bin"
+        )
+        fatal["supervisor_closeout_path_exact"] = str(
+            supervisor_root / "closeout.json"
+        )
     interpretation_order = list(
         (contract.get("effective_protocol_identity") or {}).get("interpretation_order")
         or []
@@ -7270,7 +7442,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         "experiments/eacl2027/protocol-v3.json",
         *[
             f"experiments/eacl2027/protocol-v3-amendment-{index:03d}.json"
-            for index in range(1, 11)
+            for index in range(1, 12)
         ],
     ]
     if interpretation_order != expected_order:
@@ -7311,7 +7483,7 @@ def _formal_runtime_profile() -> dict[str, Any]:
         _formal_contract().get("corrected_direct_paw_cache_contract") or {}
     )
     dependency["formal_cache_dir"] = corrected.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v6.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v7.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -7368,7 +7540,7 @@ def _required_git_state(contract: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "runtime_lock_commit_diff_paths_exactly": h4.get("diff_paths_exactly"),
         "head_must_equal_runtime_lock_commit": topology.get(
-            "head_must_equal_h4_before_r03_setup"
+            "head_must_equal_h4_before_r04_setup"
         ),
         "dirty_must_equal": topology.get("dirty_must_equal"),
         "dirty_scope": topology.get("dirty_scope"),
@@ -7660,7 +7832,7 @@ def _validate_formal_config(
         "unit_count": 430,
         "canonical_sha256": FORMAL_FULL_PLAN_SHA256,
         "ordered_membership_sha256": FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
-        "primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+        "primary_source_attempt_id": "formal-v3-20260831t051023z-r04",
     }
     for name, expected_value in full_expected.items():
         if full_attempt[name] != expected_value:
@@ -9400,13 +9572,15 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
     child_args.append("--supervised-child")
     attempt_root = _formal_attempt_dir_from_argv(child_args)
     if attempt_root is None or attempt_root.name != FORMAL_RAW_ATTEMPT_ID:
-        raise SystemsHarnessError("supervisor requires exact r03 --attempt-dir")
+        raise SystemsHarnessError("supervisor requires exact r04 --attempt-dir")
     contract = _formal_contract()["fatal_result_contract"]
     supervisor_root = Path(str(contract["supervisor_closeout_root_exact"]))
     if supervisor_root != FORMAL_SUPERVISOR_ROOT:
         raise SystemsHarnessError("fatal supervisor root differs from frozen contract")
-    os.mkdir(supervisor_root, 0o700)
-    _fsync_directory(supervisor_root.parent)
+    supervisor_parent = Path(str(contract["supervisor_parent_exact"]))
+    if supervisor_parent != supervisor_root.parent:
+        raise SystemsHarnessError("fatal supervisor parent differs from frozen contract")
+    _preclaim_formal_supervisor_root(supervisor_root)
     stream_paths = {
         "stdout": Path(str(contract["supervisor_child_stdout_path_exact"])),
         "stderr": Path(str(contract["supervisor_child_stderr_path_exact"])),

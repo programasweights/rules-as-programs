@@ -1569,7 +1569,7 @@ def test_component_successor_binding_requires_pushed_exact_h4_bytes(
                     "parent_must_equal_i4": True,
                     "diff_paths_exactly": paths["runtime_lock"],
                 },
-                "head_must_equal_h4_before_r03_setup": True,
+                "head_must_equal_h4_before_r04_setup": True,
             }
         }
     }
@@ -1642,7 +1642,8 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     )
     receipt.update(
         {
-            "schema_version": 2,
+            "schema_version": 3,
+            "prepublication_failure": {"retained": "r03-terminal-archive"},
             "successor_source": {"external": "p4-i4-h4"},
             "whole_attempt_protocol_correction": {"source": "r03-full-430"},
         }
@@ -1659,19 +1660,25 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     monkeypatch.setattr(
         attempts, "_validate_whole_attempt_protocol_correction", validate_component
     )
+    monkeypatch.setattr(
+        attempts,
+        "r03_prepublication_failure_binding",
+        lambda: receipt["prepublication_failure"],
+    )
 
     binding = attempts.replacement_launch_binding(successor, str(receipt_path))
 
     assert binding["classification"] == attempts._COMPONENT_CLASSIFICATION
     assert binding["original_status"] == "missing"
     assert binding["successor_source"] == receipt["successor_source"]
+    assert binding["prepublication_failure"] == receipt["prepublication_failure"]
     assert observed["predecessor_root"] == exact_predecessor
     assert binding["r02_partial_terminal_forensics"] == {
         "raw_partial_preserved": True
     }
     assert attempts._predecessor_tree_receipts(exact_predecessor) == before
 
-    wrong_edge = successor.with_name("formal-v3-20260831t051023z-r04")
+    wrong_edge = successor.with_name("formal-v3-20260831t051023z-r05")
     wrong_receipt = dict(receipt)
     wrong_receipt.update(
         {
@@ -1682,9 +1689,104 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     )
     wrong_receipt.pop("successor_source")
     wrong_receipt.pop("whole_attempt_protocol_correction")
+    wrong_receipt.pop("prepublication_failure")
     _write_json(receipt_path, wrong_receipt)
     with pytest.raises(attempts.SystemsHarnessError, match="not permitted"):
         attempts.replacement_launch_binding(wrong_edge, str(receipt_path))
+
+
+def _prepublication_archive_fixture(tmp_path: Path) -> tuple[dict[str, Any], Path]:
+    archive = tmp_path / "1524823-v1"
+    archive.mkdir(mode=0o700)
+    setup = {
+        "raw_attempt_id": attempts._COMPONENT_BURNED_PREPUBLICATION_ID,
+        "slurm_job_id": attempts._COMPONENT_PREPUBLICATION_JOB_ID,
+        "study_mode": "formal_protocol_v3_amendment_008",
+    }
+    contents = {
+        "repo-head.txt": b"4eeca65d42cde8e0a892e7ce6578aa2ae13b96e0\n",
+        "repo-status.txt": b"",
+        "setup-receipt.json": json.dumps(setup).encode() + b"\n",
+        "setup.log": b"setup complete\n",
+        "source-files.sha256": b"source inventory\n",
+        "stderr.log": b"FileNotFoundError\n",
+        "stdout.log": b"",
+        "terminal-sacct.command.txt": b"sacct command\n",
+        "terminal-sacct.stderr.txt": b"",
+        "terminal-sacct.txt": (
+            b"1524823|rap-eacl-systems-v3|ALL|FAILED|5:0|start|end\n"
+        ),
+        "terminal-scontrol.exit-status.txt": b"0\n",
+        "terminal-scontrol.stderr.txt": b"job no longer exists\n",
+        "terminal-scontrol.txt": b"",
+    }
+    for name, content in contents.items():
+        (archive / name).write_bytes(content)
+    manifest = b"".join(
+        f"{hashlib.sha256(content).hexdigest()}  ./{name}\n".encode()
+        for name, content in sorted(contents.items())
+    )
+    manifest_sha = hashlib.sha256(manifest).hexdigest()
+    (archive / "evidence.sha256").write_bytes(manifest)
+    (archive / "evidence.sha256.sha256").write_text(
+        f"{manifest_sha}  evidence.sha256\n", encoding="utf-8"
+    )
+    for path in archive.iterdir():
+        path.chmod(0o444)
+    archive.chmod(0o500)
+    missing_attempt = tmp_path / attempts._COMPONENT_BURNED_PREPUBLICATION_ID
+    amendment = {
+        "prepublication_correction": {
+            "parent_runtime_lock_commit": (
+                "4eeca65d42cde8e0a892e7ce6578aa2ae13b96e0"
+            ),
+            "observed_r03_terminal_boundary": {
+                "raw_attempt_id": attempts._COMPONENT_BURNED_PREPUBLICATION_ID,
+                "slurm_job_id": attempts._COMPONENT_PREPUBLICATION_JOB_ID,
+                "attempt_root": str(missing_attempt),
+                "attempt_root_present": False,
+                "terminal_archive": {
+                    "path": str(archive),
+                    "directory_mode": 0o500,
+                    "member_mode": 0o444,
+                    "manifest_bytes": len(manifest),
+                    "manifest_sha256": manifest_sha,
+                    "setup_receipt_sha256": hashlib.sha256(
+                        contents["setup-receipt.json"]
+                    ).hexdigest(),
+                    "stderr_sha256": hashlib.sha256(
+                        contents["stderr.log"]
+                    ).hexdigest(),
+                    "terminal_sacct_sha256": hashlib.sha256(
+                        contents["terminal-sacct.txt"]
+                    ).hexdigest(),
+                },
+            },
+        }
+    }
+    return amendment, archive
+
+
+def test_r03_prepublication_archive_binding_rehashes_every_sealed_member(tmp_path):
+    amendment, archive = _prepublication_archive_fixture(tmp_path)
+
+    binding = attempts.r03_prepublication_failure_binding(amendment)
+
+    assert binding["attempt_root_absent"] is True
+    assert binding["terminal_archive_mode"] == 0o500
+    assert set(binding["terminal_archive_members"]) == set(
+        attempts._COMPONENT_PREPUBLICATION_MEMBER_NAMES
+    )
+    assert binding["terminal_archive_members"]["stderr.log"]["bytes"] == 18
+
+    archive.chmod(0o700)
+    stderr = archive / "stderr.log"
+    stderr.chmod(0o644)
+    stderr.write_text("mutated\n", encoding="utf-8")
+    stderr.chmod(0o444)
+    archive.chmod(0o500)
+    with pytest.raises(attempts.SystemsHarnessError, match="manifest rehash"):
+        attempts.r03_prepublication_failure_binding(amendment)
 
 
 def test_canary_validator_accepts_extra_import_activations_but_requires_worker(

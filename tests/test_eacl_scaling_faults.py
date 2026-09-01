@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import os
+import stat
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -410,7 +411,7 @@ def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
         planned["ordered_membership_sha256"]
         == systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
     )
-    assert planned["primary_source_attempt_id"].endswith("-r03")
+    assert planned["primary_source_attempt_id"].endswith("-r04")
     assert planned["full_plan"] == systems.build_study_plan(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),
         fault_names=systems.FORMAL_FAULTS,
@@ -2538,6 +2539,122 @@ def test_supervisor_observed_exit_preserves_exit_signal_and_spawn_traceback():
     assert observed["spawn_error"]["type"] == "builtins.RuntimeError"
     assert observed["spawn_error"]["message"] == "synthetic spawn failure"
     assert "raise RuntimeError" in observed["spawn_error"]["traceback_utf8"]
+
+
+def test_supervisor_parent_preclaim_creates_private_directory_and_fsyncs(
+    tmp_path, monkeypatch
+):
+    scheduler = tmp_path / "scheduler"
+    scheduler.mkdir(mode=0o700)
+    parent = scheduler / "supervisor-closeouts"
+    fsynced = []
+    monkeypatch.setattr(systems.os, "fsync", fsynced.append)
+
+    systems._ensure_formal_supervisor_parent(parent)
+
+    assert parent.is_dir() and not parent.is_symlink()
+    assert stat.S_IMODE(parent.lstat().st_mode) == 0o700
+    assert len(fsynced) == 1
+
+
+def test_supervisor_parent_preclaim_accepts_only_exact_existing_directory(tmp_path):
+    scheduler = tmp_path / "scheduler"
+    scheduler.mkdir(mode=0o700)
+    parent = scheduler / "supervisor-closeouts"
+    parent.mkdir(mode=0o700)
+    before = parent.lstat()
+
+    systems._ensure_formal_supervisor_parent(parent)
+
+    after = parent.lstat()
+    assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
+
+
+@pytest.mark.parametrize("collision", ["wrong_mode", "file", "fifo", "symlink"])
+def test_supervisor_parent_preclaim_rejects_unsafe_collision(tmp_path, collision):
+    scheduler = tmp_path / "scheduler"
+    scheduler.mkdir(mode=0o700)
+    parent = scheduler / "supervisor-closeouts"
+    if collision == "wrong_mode":
+        parent.mkdir(mode=0o755)
+    elif collision == "file":
+        parent.write_text("collision", encoding="utf-8")
+    elif collision == "fifo":
+        os.mkfifo(parent, mode=0o600)
+    else:
+        target = tmp_path / "target"
+        target.mkdir(mode=0o700)
+        parent.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(systems.SystemsHarnessError):
+        systems._ensure_formal_supervisor_parent(parent)
+
+
+def test_supervisor_parent_preclaim_rejects_owner_mkdir_and_lstat_failures(
+    tmp_path, monkeypatch
+):
+    scheduler = tmp_path / "scheduler"
+    scheduler.mkdir(mode=0o700)
+    parent = scheduler / "supervisor-closeouts"
+    effective_uid = os.geteuid()
+    monkeypatch.setattr(systems.os, "geteuid", lambda: effective_uid + 1)
+    with pytest.raises(systems.SystemsHarnessError, match="owned"):
+        systems._ensure_formal_supervisor_parent(parent)
+    monkeypatch.setattr(systems.os, "geteuid", lambda: effective_uid)
+
+    def fail_mkdir(*args, **kwargs):
+        raise PermissionError("synthetic mkdir failure")
+
+    monkeypatch.setattr(systems.os, "mkdir", fail_mkdir)
+    with pytest.raises(systems.SystemsHarnessError, match="mkdir failed"):
+        systems._ensure_formal_supervisor_parent(parent)
+    monkeypatch.undo()
+
+    original_lstat = Path.lstat
+
+    def fail_parent_lstat(path):
+        if path == parent:
+            raise OSError("synthetic lstat failure")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_parent_lstat)
+    with pytest.raises(systems.SystemsHarnessError, match="lstat failed"):
+        systems._ensure_formal_supervisor_parent(parent)
+
+
+def test_supervisor_parent_preclaim_blocks_scheduler_fsync_failure(
+    tmp_path, monkeypatch
+):
+    scheduler = tmp_path / "scheduler"
+    scheduler.mkdir(mode=0o700)
+    parent = scheduler / "supervisor-closeouts"
+
+    def fail_fsync(path):
+        raise OSError("synthetic fsync failure")
+
+    monkeypatch.setattr(systems.os, "fsync", fail_fsync)
+    with pytest.raises(systems.SystemsHarnessError, match="scheduler root fsync"):
+        systems._ensure_formal_supervisor_parent(parent)
+    assert parent.is_dir()
+
+
+def test_supervisor_attempt_root_preclaim_is_exclusive_and_non_mutating(tmp_path):
+    scheduler = tmp_path / "scheduler"
+    scheduler.mkdir(mode=0o700)
+    root = scheduler / "supervisor-closeouts" / "formal-r04"
+
+    systems._preclaim_formal_supervisor_root(root)
+    before = root.lstat()
+
+    assert stat.S_IMODE(before.st_mode) == 0o700
+    with pytest.raises(systems.SystemsHarnessError, match="exclusive preclaim"):
+        systems._preclaim_formal_supervisor_root(root)
+    after = root.lstat()
+    assert (after.st_dev, after.st_ino, stat.S_IMODE(after.st_mode)) == (
+        before.st_dev,
+        before.st_ino,
+        0o700,
+    )
 
 
 def test_supervisor_environment_is_complete_sanitized_and_all_partition(

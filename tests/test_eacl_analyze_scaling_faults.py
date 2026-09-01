@@ -1834,13 +1834,13 @@ def test_symlinked_attempt_entry_is_a_ledger_blocker(tmp_path):
     assert report["primary_numeric"]["selection_blocked_by"] == "formal-v3-r01"
 
 
-def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
+def test_whole_attempt_uses_all_r04_rows_and_retains_r02_partial_sensitivity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     r01_id = "formal-v3-20260831t051023z-r01"
     r02_id = analyzer.attempts_contract._COMPONENT_PREDECESSOR_ID
-    r03_id = analyzer.attempts_contract._COMPONENT_SUCCESSOR_ID
-    for attempt_id in (r01_id, r02_id, r03_id):
+    r04_id = analyzer.attempts_contract._COMPONENT_SUCCESSOR_ID
+    for attempt_id in (r01_id, r02_id, r04_id):
         (tmp_path / attempt_id).mkdir()
 
     full_plan = [
@@ -1860,27 +1860,37 @@ def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
             "value": {"source": source, "position": position},
         }
 
-    r03_units = [unit(item, position, source="r03") for position, item in enumerate(full_plan)]
+    r04_units = [unit(item, position, source="r04") for position, item in enumerate(full_plan)]
     ordered_partial = [
         {
             "plan_index": position,
             "component": item["component"],
             "unit_id": item["unit_id"],
-            "primary_source_attempt_id": r03_id,
+            "primary_source_attempt_id": r04_id,
             "r02_raw_state": "terminal" if position < 279 else "never_started",
         }
         for position, item in enumerate(full_plan)
     ]
-    r03_report = {
-        "component_r03": True,
+    r04_report = {
+        "component_r04": True,
         "identity": {
-            "attempt_id": r03_id,
+            "attempt_id": r04_id,
             "attempt_replacement": {
                 "classification": analyzer.attempts_contract._COMPONENT_CLASSIFICATION,
                 "predecessor_raw_attempt_id": r02_id,
-                "successor_raw_attempt_id": r03_id,
+                "successor_raw_attempt_id": r04_id,
+                "prepublication_failure": {
+                    "raw_attempt_id": (
+                        analyzer.attempts_contract._COMPONENT_BURNED_PREPUBLICATION_ID
+                    ),
+                    "attempt_root_absent": True,
+                    "terminal_archive_members": {
+                        name: {"sha256": "f" * 64}
+                        for name in analyzer.attempts_contract._COMPONENT_PREPUBLICATION_MEMBER_NAMES
+                    },
+                },
                 "whole_attempt_protocol_correction": {
-                    "primary_source_attempt_id": r03_id
+                    "primary_source_attempt_id": r04_id
                 },
                 "r02_partial_terminal_forensics": {
                     "receipt_type": "r02_partial_terminal_forensics",
@@ -1896,7 +1906,7 @@ def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
         "result_sha256": "3" * 64,
         "input_receipts": {},
         "plan": full_plan,
-        "units": r03_units,
+        "units": r04_units,
         "source_unchanged": True,
         "eligible": True,
     }
@@ -1904,7 +1914,7 @@ def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
     monkeypatch.setattr(
         analyzer,
         "validate_attempt",
-        lambda path: r03_report if path.name == r03_id else None,
+        lambda path: r04_report if path.name == r04_id else None,
     )
     monkeypatch.setattr(
         analyzer,
@@ -1923,15 +1933,15 @@ def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
         tmp_path, analyzer.COMPONENT_ANALYSIS_ID
     )
 
-    assert report["primary_r03"] == {
+    assert report["primary_r04"] == {
         "promoted": True,
         "unit_count": 430,
-        "source_attempt_id": r03_id,
+        "source_attempt_id": r04_id,
         "reason": "all exact whole-attempt promotion gates passed",
     }
     assert len(report["primary_unit_ledger"]) == 430
     assert {row["source_attempt_id"] for row in report["primary_unit_ledger"]} == {
-        r03_id
+        r04_id
     }
     sensitivity = report["r02_partial_sensitivity"]
     assert sensitivity["primary_selection_effect"] == "none"
@@ -1943,5 +1953,12 @@ def test_whole_attempt_uses_all_r03_rows_and_retains_r02_partial_sensitivity(
         match="role ledger differs",
     ):
         analyzer.analyze_whole_attempt(
+            tmp_path, analyzer.COMPONENT_ANALYSIS_ID
+        )
+
+
+def test_withdrawn_partial_composite_reducer_fails_closed(tmp_path):
+    with pytest.raises(analyzer.AnalysisValidationError, match="withdrawn"):
+        analyzer.analyze_component_composite(
             tmp_path, analyzer.COMPONENT_ANALYSIS_ID
         )

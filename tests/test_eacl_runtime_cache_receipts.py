@@ -257,7 +257,7 @@ def test_r03_allows_only_current_manifest_mtime_ctime_drift(tmp_path):
         program_id,
         launch,
         tmp_path / "retained",
-        runtime_lock_path="experiments/eacl2027/formal-runtime-lock-v6.json",
+        runtime_lock_path="experiments/eacl2027/formal-runtime-lock-v7.json",
     )
 
     assert end["status"] == "completed"
