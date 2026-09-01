@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "amendment_id": "protocol-v3-amendment-012",
+  "parent_amendment": "protocol-v3-amendment-011",
+  "parent_runtime_lock_commit": "29aa4713f1373bd6fa409af728d968d053f1f665",
+  "created_utc": "2026-09-01T13:42:07Z",
+  "frozen_utc": "2026-09-01T13:42:07Z",
+  "status": "frozen prelaunch historical-role translation correction",
+  "reason": "Two immutable Amendment 011 replacement candidates failed the production validator before r04 existed. The second failure showed that the historical r02 terminal-forensics payload correctly and immutably names its then-prospective successor r03, whereas the H7 validator incorrectly required those historical bytes already to name fresh successor r04.",
+  "observed_failed_validator_archives": [
+    {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-011-r04-20260901T134002Z",
+      "directory_mode": 320,
+      "failure": "whole-attempt replacement edge fields differ"
+    },
+    {
+      "path": "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/replacements/formal-v3-20260831t051023z-r02/amendment-011-r04-20260901T134111Z",
+      "directory_mode": 320,
+      "failure": "whole-attempt uniform primary-source rows differ"
+    }
+  ],
+  "explicit_override": {
+    "scope": "Only validation and derived binding of the immutable historical r02 ordered-unit role ledger when authorizing exact fresh r04.",
+    "historical_rule": "The immutable whole-attempt validation receipt remains byte-for-byte unchanged and its 430 ordered_units rows must each retain primary_source_attempt_id formal-v3-20260831t051023z-r03. This is a historical prospective-role statement recorded before r03 failed prepublication; it is not a primary selection and may not be rewritten on disk.",
+    "derived_binding_rule": "After the complete historical receipt, payload hash, row order, counts, digests, validation checks, and uniform historical-r03 field have passed, the live validator constructs a new in-memory r04 launch binding by deep-copying the validated payload, retaining a canonical SHA-256 of the unchanged historical ordered_units and historical_primary_source_attempt_id r03, and changing only each derived ordered row's primary_source_attempt_id to exact r04. The replacement receipt separately retains the complete sealed r03 prepublication archive, so the translation cannot conceal r03.",
+    "successor_raw_attempt_id": "formal-v3-20260831t051023z-r04",
+    "historical_primary_source_attempt_id": "formal-v3-20260831t051023z-r03",
+    "failed_receipt_rule": "Both failed Amendment 011 receipt directories remain immutable and visible. They authorize no launch and may never be edited, deleted, or presented as passing receipts.",
+    "unchanged": [
+      "the r02 tree and every historical receipt byte, including all 430 historical ordered-unit rows",
+      "the complete sealed r03 prepublication archive and absent r03 attempt root",
+      "the unchanged 430-row plan and exact r04 sole-primary-source rule",
+      "all Amendment 011 supervisor preclaim, replacement, retention, cache, runtime, partition ALL, and claim-limit rules",
+      "the unclassified r02 exit-5 cause"
+    ]
+  },
+  "implementation_and_test_gate": {
+    "required_behaviors": [
+      "fail unless all 430 immutable historical rows uniformly name exact r03",
+      "retain the canonical digest and exact historical source identity in the derived binding",
+      "translate only the in-memory derived rows to exact r04 after historical validation passes",
+      "reject mixed, missing, reordered, mutated, r02, or already-r04 historical rows",
+      "preserve both failed validator archives and prove r04 remains absent",
+      "retain all Amendment 011 prepublication archive and supervisor-preclaim tests"
+    ],
+    "static_gates": [
+      "focused pytest suite",
+      "Ruff",
+      "Python bytecode compilation",
+      "bash -n",
+      "git diff --check"
+    ]
+  },
+  "effective_protocol_identity": {
+    "interpretation_order": [
+      "experiments/eacl2027/protocol-v3.json",
+      "experiments/eacl2027/protocol-v3-amendment-001.json",
+      "experiments/eacl2027/protocol-v3-amendment-002.json",
+      "experiments/eacl2027/protocol-v3-amendment-003.json",
+      "experiments/eacl2027/protocol-v3-amendment-004.json",
+      "experiments/eacl2027/protocol-v3-amendment-005.json",
+      "experiments/eacl2027/protocol-v3-amendment-006.json",
+      "experiments/eacl2027/protocol-v3-amendment-007.json",
+      "experiments/eacl2027/protocol-v3-amendment-008.json",
+      "experiments/eacl2027/protocol-v3-amendment-009.json",
+      "experiments/eacl2027/protocol-v3-amendment-010.json",
+      "experiments/eacl2027/protocol-v3-amendment-011.json",
+      "experiments/eacl2027/protocol-v3-amendment-012.json"
+    ],
+    "required_git_topology": {
+      "p4": {
+        "parent_must_equal": "29aa4713f1373bd6fa409af728d968d053f1f665",
+        "diff_paths_exactly": [
+          "experiments/eacl2027/protocol-v3-amendment-012.json"
+        ],
+        "semantic_role": "P8 prelaunch historical-role translation correction"
+      },
+      "i4": {
+        "parent_must_equal_p4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/analyze_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults.py",
+          "experiments/eacl2027/run_scaling_faults_watgpu.sbatch",
+          "experiments/eacl2027/scaling_faults_attempts.py",
+          "experiments/eacl2027/scaling_faults_runtime.py",
+          "tests/test_eacl_analyze_scaling_faults.py",
+          "tests/test_eacl_replacement_semantics.py",
+          "tests/test_eacl_runtime_cache_receipts.py",
+          "tests/test_eacl_scaling_faults.py",
+          "tests/test_eacl_scaling_faults_watgpu_sbatch.py"
+        ],
+        "semantic_role": "I8 exact historical-r03 validation, derived-r04 binding, and Amendment 012 routing"
+      },
+      "h4": {
+        "parent_must_equal_i4": true,
+        "diff_paths_exactly": [
+          "experiments/eacl2027/formal-runtime-lock-v8.json"
+        ],
+        "semantic_role": "H8 live runtime lock generated from I8"
+      },
+      "head_must_equal_h4_before_r04_setup": true,
+      "dirty_must_equal": false,
+      "dirty_scope": [
+        "rules_as_programs",
+        "experiments/eacl2027",
+        "pyproject.toml"
+      ]
+    },
+    "runtime_lock_path": "experiments/eacl2027/formal-runtime-lock-v8.json",
+    "chronology_rule": "Commit this file alone as P8 directly on H7. Commit exactly the declared I8 paths as its child after tests pass. Generate and commit only formal-runtime-lock-v8.json as H8, push H8, then create a new receipt candidate; neither failed Amendment 011 candidate may be reused."
+  },
+  "claim_limits": [
+    "This amendment supplies no system-performance measurement.",
+    "It does not reclassify either failed receipt candidate, r03, or r02 exit 5.",
+    "It does not authorize launch until the exact P8/I8/H8 and fresh-receipt gates pass."
+  ]
+}
