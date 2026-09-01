@@ -5251,6 +5251,11 @@ def _fault_fixture_observations(fixture: RunningFixture) -> dict[str, Any]:
     }
 
 
+def _proc_owner_uid(pid: int) -> int:
+    """Return the kernel-visible owner of a Linux process directory."""
+    return int((Path("/proc") / str(pid)).stat().st_uid)
+
+
 def _orphan_processes(retained_root: Path | None) -> dict[str, Any]:
     if retained_root is None:
         return {"processes": None, "scan_errors": [], "race_diagnostics": []}
@@ -5283,9 +5288,30 @@ def _orphan_processes(retained_root: Path | None) -> dict[str, Any]:
                 }
             )
         except (psutil.AccessDenied, OSError) as exc:
+            pid = int(getattr(process, "pid", -1))
+            # GCE and other hardened Linux hosts may deny psutil's uids or
+            # environ query for unrelated root-owned processes.  Those
+            # processes cannot belong to this unprivileged experiment and
+            # therefore are outside the retained-runtime cleanup boundary.
+            # Fail closed only when ownership is ours or cannot be determined.
+            try:
+                owner_uid = _proc_owner_uid(pid)
+            except (FileNotFoundError, ProcessLookupError):
+                race_diagnostics.append(
+                    {
+                        "pid": pid,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                )
+                continue
+            except OSError:
+                owner_uid = os.geteuid()
+            if owner_uid != os.geteuid():
+                continue
             scan_errors.append(
                 {
-                    "pid": int(getattr(process, "pid", -1)),
+                    "pid": pid,
                     "type": type(exc).__name__,
                     "message": str(exc),
                 }

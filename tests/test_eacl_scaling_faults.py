@@ -1579,6 +1579,9 @@ def test_fault_cleanup_access_denied_is_measurement_unknown(monkeypatch, tmp_pat
     monkeypatch.setattr(
         systems.psutil, "process_iter", lambda _attrs: [UnreadableProcess()]
     )
+    monkeypatch.setattr(
+        systems, "_proc_owner_uid", lambda _pid: systems.os.geteuid()
+    )
     scan = systems._orphan_processes(tmp_path)
     assert scan["processes"] == []
     assert scan["scan_errors"][0]["pid"] == 77
@@ -1609,6 +1612,31 @@ def test_fault_cleanup_access_denied_is_measurement_unknown(monkeypatch, tmp_pat
     )
     foreign_scan = systems._orphan_processes(tmp_path)
     assert foreign_scan == {
+        "processes": [],
+        "scan_errors": [],
+        "race_diagnostics": [],
+    }
+
+
+def test_fault_cleanup_ignores_access_denied_for_proc_owned_by_other_user(
+    monkeypatch, tmp_path
+):
+    class ForeignUnreadableProcess:
+        pid = 99
+        info = {"pid": 99, "uids": None}
+
+        @staticmethod
+        def uids():
+            raise systems.psutil.AccessDenied(pid=99)
+
+    monkeypatch.setattr(
+        systems.psutil, "process_iter", lambda _attrs: [ForeignUnreadableProcess()]
+    )
+    monkeypatch.setattr(
+        systems, "_proc_owner_uid", lambda _pid: systems.os.geteuid() + 1
+    )
+
+    assert systems._orphan_processes(tmp_path) == {
         "processes": [],
         "scan_errors": [],
         "race_diagnostics": [],
