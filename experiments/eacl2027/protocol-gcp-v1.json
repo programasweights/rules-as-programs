@@ -1,0 +1,56 @@
+{
+  "protocol_id": "rap-eacl-systems-gcp-v1",
+  "status": "frozen before the primary GCP attempt",
+  "purpose": "Run the complete systems workload on a controlled CPU-only GCP host after retaining all watgpu attempts as non-primary engineering history.",
+  "primary_source_rule": "One complete attempt launched by run_scaling_faults_gcp.sh is the sole primary numeric source. Earlier watgpu attempts and GCP smoke attempts are excluded from primary analysis.",
+  "platform": {
+    "project": "interactive-training-2026",
+    "zone": "us-east4-c",
+    "instance": "rap-eacl-gcp-r01-20260901",
+    "machine_type": "n2-standard-8",
+    "visible_vcpus": 8,
+    "memory_gib": 32,
+    "provisioning_model": "STANDARD",
+    "data_disk": "rap-eacl-gcp-r01-data-20260901",
+    "data_disk_type": "pd-balanced",
+    "data_disk_size_gb": 250,
+    "execution_user": "rapexp"
+  },
+  "inference": {
+    "device": "CPU only",
+    "paw_gpu_layers": 0,
+    "llama_cpp_n_threads": 8,
+    "llama_cpp_n_threads_batch": 8,
+    "thread_source": "Explicit RAP_PAW_N_THREADS and RAP_PAW_N_THREADS_BATCH environment variables consumed by the supervised inference worker.",
+    "cache_tree_aggregate_sha256": "672f38f736a707d17a146d77cd3f29a8b1b25efeda0b8a98dcb2f1b97aa991af",
+    "cache_regular_files": 51,
+    "cache_regular_file_bytes": 1216684728
+  },
+  "workload": {
+    "top_level_units": 430,
+    "formal_plan_canonical_sha256": "4cdf827bf1c07a7bea9cd9d1af5c5ab37086af294583c8a5775643209b3c917c",
+    "formal_plan_ordered_membership_sha256": "cd5885dba0bfe7584f4b44efe18e3f1b827a9de0bfef6abcb0127adab1b6b162",
+    "soak_events": 10000,
+    "soak_expected_evaluations": 80000,
+    "fault_repetitions_per_fault": 20,
+    "faults": [
+      "daemon_crash",
+      "worker_exit",
+      "worker_timeout",
+      "sqlite_lock",
+      "malformed_payload",
+      "duplicate_delivery",
+      "deployment_failure"
+    ]
+  },
+  "rehearsal_evidence": {
+    "gcp-smoke-004": "All five units terminal under the isolated experiment user; four matrix units completed.",
+    "gcp-smoke-005": "All twelve units terminal; every fault type and exact online/offline replay executed; offline predictions exactly equaled online predictions.",
+    "gcp-smoke-006": "All five units completed with explicit 8/8 llama.cpp thread settings and exit code 0."
+  },
+  "interpretation": {
+    "fault_probe_failures": "Measured system outcomes, not infrastructure failures, when their unit terminal record is valid and cleanup isolation passes.",
+    "attempt_eligibility": "Requires every planned unit terminal, a valid result.json, unchanged scoped Git source, complete runtime artifacts, and primary_numeric_eligible=true.",
+    "non_censoring": "The first launched complete primary GCP attempt is retained and reported regardless of favorability."
+  }
+}
