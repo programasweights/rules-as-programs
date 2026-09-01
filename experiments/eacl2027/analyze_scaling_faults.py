@@ -64,6 +64,10 @@ PROTOCOL_PATHS_013 = (
     *PROTOCOL_PATHS_012,
     "experiments/eacl2027/protocol-v3-amendment-013.json",
 )
+PROTOCOL_PATHS_014 = (
+    *PROTOCOL_PATHS_013,
+    "experiments/eacl2027/protocol-v3-amendment-014.json",
+)
 # Backward-compatible name for the amendment-007 single-attempt reducer.
 PROTOCOL_PATHS = PROTOCOL_PATHS_007
 TERMINAL_STATUSES = frozenset(
@@ -101,15 +105,15 @@ COMPONENT_REDUCER_CONFIG = {
     "base_reducer_version": ANALYSIS_VERSION,
     "component_order": ["matrix", "soak", "offline", "faults"],
     "full_plan_unit_count": 430,
-    "r05_primary_unit_count": 430,
+    "r06_primary_unit_count": 430,
     "r02_partial_sensitivity_terminal_count": 279,
-    "primary_source_attempt_id": "formal-v3-20260831t051023z-r05",
+    "primary_source_attempt_id": "formal-v3-20260831t051023z-r06",
     "ordered_membership_sha256": systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
     "primary_eligible_unit_statuses": sorted(PRIMARY_ELIGIBLE_STATUSES),
     "terminal_statuses": sorted(TERMINAL_STATUSES),
-    "numeric_promotion": "only_complete_exact_r05_whole_attempt",
+    "numeric_promotion": "only_complete_exact_r06_whole_attempt",
     "sensitivity": "all_raw_r02_partial_rows_without_source_selection",
-    "raw_status_policy": "preserve_r01_r02_r03_r04_r05_without_relabeling",
+    "raw_status_policy": "preserve_r01_r02_r03_r04_r05_r06_without_relabeling",
 }
 
 _FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_007"
@@ -1086,7 +1090,7 @@ def _load_amendment_008() -> dict[str, Any] | None:
         or wait_correction.get("parent_amendment") != "protocol-v3-amendment-012"
         or not str(wait_correction.get("status", "")).startswith("frozen ")
         or wait_override.get("successor_raw_attempt_id")
-        != attempts_contract._COMPONENT_SUCCESSOR_ID
+        != attempts_contract._COMPONENT_BURNED_R05_ID
     ):
         raise AnalysisValidationError("amendment 013 is not frozen")
     value["effective_protocol_identity"]["required_git_topology"] = (
@@ -1096,6 +1100,35 @@ def _load_amendment_008() -> dict[str, Any] | None:
         wait_identity["interpretation_order"]
     )
     value["supervisor_wait_correction"] = wait_correction
+    host_path = REPO_ROOT / PROTOCOL_PATHS_014[-1]
+    if host_path.is_symlink() or not host_path.is_file():
+        raise AnalysisValidationError("amendment 014 is unavailable")
+    host_routing = _require_dict(_load_json(host_path), "amendment 014")
+    host_identity = _require_dict(
+        host_routing.get("effective_protocol_identity"),
+        "amendment-014 effective identity",
+    )
+    host_override = _require_dict(
+        host_routing.get("explicit_override"),
+        "amendment-014 explicit override",
+    )
+    if (
+        host_routing.get("amendment_id") != "protocol-v3-amendment-014"
+        or host_routing.get("parent_amendment") != "protocol-v3-amendment-013"
+        or not str(host_routing.get("status", "")).startswith("frozen ")
+        or host_override.get("successor_raw_attempt_id")
+        != attempts_contract._COMPONENT_SUCCESSOR_ID
+        or host_override.get("requested_partition") != "ALL"
+        or host_override.get("requested_node") != "watgpu108"
+    ):
+        raise AnalysisValidationError("amendment 014 is not frozen")
+    value["effective_protocol_identity"]["required_git_topology"] = (
+        host_identity["required_git_topology"]
+    )
+    value["effective_protocol_identity"]["interpretation_order"] = (
+        host_identity["interpretation_order"]
+    )
+    value["host_routing_correction"] = host_routing
     return value
 
 
@@ -1583,6 +1616,7 @@ def _validate_retained_replacement_semantics(
             {
                 "prepublication_failure",
                 "r04_prepublication_failure",
+                "r05_prepublication_failure",
                 "successor_source",
                 "whole_attempt_protocol_correction",
                 "r02_partial_terminal_forensics",
@@ -1604,7 +1638,12 @@ def _validate_retained_replacement_semantics(
         or match is None
         or successor_id != root.name
         or int(match.group("ordinal")) < 2
-        or int(match.group("ordinal")) > attempts_contract._MAX_FORMAL_ATTEMPT_ORDINAL
+        or int(match.group("ordinal"))
+        > (
+            attempts_contract._COMPONENT_MAX_FORMAL_ATTEMPT_ORDINAL
+            if successor_id == attempts_contract._COMPONENT_SUCCESSOR_ID
+            else attempts_contract._MAX_FORMAL_ATTEMPT_ORDINAL
+        )
         or replacement.get("raw_attempt_ordinal") != int(match.group("ordinal"))
         or predecessor_id
         != f"{match.group('prefix')}-r{int(match.group('ordinal')) - 1:02d}"
@@ -1624,6 +1663,8 @@ def _validate_retained_replacement_semantics(
         != attempts_contract.r03_prepublication_failure_binding()
         or replacement.get("r04_prepublication_failure")
         != attempts_contract.r04_prepublication_failure_binding()
+        or replacement.get("r05_prepublication_failure")
+        != attempts_contract.r05_prepublication_failure_binding()
         or replacement.get("successor_source")
         != attempts_contract.component_successor_source_binding()
         or replacement.get("whole_attempt_protocol_correction")
@@ -2208,7 +2249,7 @@ def _effective_formal_runtime_profile(
         "amendment-008 cache correction",
     )
     dependency["formal_cache_dir"] = correction.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v9.json"
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v10.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -2709,7 +2750,7 @@ def _component_static_analysis_binding(analysis_id: str) -> dict[str, Any]:
     binding["analysis_version"] = COMPONENT_ANALYSIS_ID
     binding["protocol_documents"] = [
         {"path": relative, "sha256": _sha256(REPO_ROOT / relative)}
-        for relative in PROTOCOL_PATHS_013
+        for relative in PROTOCOL_PATHS_014
     ]
     binding["reducer_config"] = COMPONENT_REDUCER_CONFIG
     binding["reducer_config_sha256"] = _sha256_bytes(
@@ -6057,16 +6098,16 @@ def validate_attempt(
     amendment_008 = _load_amendment_008()
     legacy_r01 = _is_anchored_r01(raw_attempt_id, amendment_007)
     anchored_r02 = _is_anchored_r02(raw_attempt_id, amendment_008)
-    component_r05 = identity.get("study_mode") == _COMPONENT_STUDY_MODE
-    if component_r05 and raw_attempt_id != attempts_contract._COMPONENT_SUCCESSOR_ID:
-        raise AnalysisValidationError("amendment-013 mode is restricted to exact r05")
+    component_r06 = identity.get("study_mode") == _COMPONENT_STUDY_MODE
+    if component_r06 and raw_attempt_id != attempts_contract._COMPONENT_SUCCESSOR_ID:
+        raise AnalysisValidationError("amendment-014 mode is restricted to exact r06")
     protocols = _validate_sources(
         identity,
         legacy_r01=legacy_r01,
         runner_anchor=anchored_r02,
         protocol_paths=(
-            PROTOCOL_PATHS_013
-            if component_r05
+            PROTOCOL_PATHS_014
+            if component_r06
             else PROTOCOL_PATHS_007[:-1]
             if legacy_r01 is not None
             else PROTOCOL_PATHS_007
@@ -6077,7 +6118,7 @@ def validate_attempt(
         _expected_component_counts
         if _expected_component_counts is not None
         else FORMAL_R03_COMPONENT_COUNTS
-        if component_r05
+        if component_r06
         else FORMAL_COMPONENT_COUNTS
     )
     if observed_counts != expected_component_counts:
@@ -6085,7 +6126,7 @@ def validate_attempt(
             "plan component counts mismatch: "
             f"expected {expected_component_counts}, observed {observed_counts}"
         )
-    if not component_r05 and expected_component_counts == FORMAL_COMPONENT_COUNTS:
+    if not component_r06 and expected_component_counts == FORMAL_COMPONENT_COUNTS:
         contract = amendment_007
         try:
             launched = datetime.fromisoformat(
@@ -6121,9 +6162,9 @@ def validate_attempt(
             _validate_formal_plan(root, identity, result, plan)
         else:
             _validate_formal_plan(root, identity, result, plan)
-    elif component_r05:
+    elif component_r06:
         if amendment_008 is None:
-            raise AnalysisValidationError("r05 requires frozen amendment 013")
+            raise AnalysisValidationError("r06 requires frozen amendment 014")
         try:
             launched = datetime.fromisoformat(
                 str(launch.get("created_utc", "")).replace("Z", "+00:00")
@@ -6133,20 +6174,20 @@ def validate_attempt(
             )
         except ValueError as exc:
             raise AnalysisValidationError(
-                "r05 launch/freeze timestamp is invalid"
+                "r06 launch/freeze timestamp is invalid"
             ) from exc
         if launched.tzinfo is None or frozen.tzinfo is None or launched < frozen:
-            raise AnalysisValidationError("r05 launch predates amendment-008 freeze")
+            raise AnalysisValidationError("r06 launch predates amendment-008 freeze")
         _validate_whole_attempt_plan(root, identity, result, plan, amendment_008)
     units, plan_accounting = _validate_units(
-        root, plan, result, exact_terminal_phase=component_r05
+        root, plan, result, exact_terminal_phase=component_r06
     )
-    if component_r05 and any(
+    if component_r06 and any(
         unit["terminal_record"] is not None
         and (unit.get("value") or {}).get("study_mode") != _COMPONENT_STUDY_MODE
         for unit in units
     ):
-        raise AnalysisValidationError("r05 terminal result study_mode differs")
+        raise AnalysisValidationError("r06 terminal result study_mode differs")
     _validate_unit_plan_bindings(units)
     if identity.get("study_mode") in {_FORMAL_STUDY_MODE, _COMPONENT_STUDY_MODE}:
         _validate_socket_endpoint_receipts(root, identity, units)
@@ -6301,7 +6342,7 @@ def validate_attempt(
         "protocol_documents": protocols,
         "anchored_r01": legacy_r01 is not None,
         "anchored_r02": anchored_r02 is not None,
-        "component_r05": component_r05,
+        "component_r06": component_r06,
         "units": units,
         "plan_accounting": plan_accounting,
         "eligible": eligible,
@@ -6367,7 +6408,7 @@ def analyze(
             "status": validated["result"].get("status"),
             "startup_only_numeric_aggregate_excluded": validated["anchored_r01"],
             "amendment_008_historical_anchor": validated["anchored_r02"],
-            "component_repair_attempt": validated["component_r05"],
+            "component_repair_attempt": validated["component_r06"],
             "plan_accounting": validated["plan_accounting"],
             "global_statuses": validated["global_statuses"],
             "source_unchanged_during_attempt": validated["source_unchanged"],
@@ -7037,6 +7078,7 @@ def analyze_component_composite(path: Path, analysis_id: str) -> dict[str, Any]:
         "amendment_011_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_011[-1]),
         "amendment_012_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_012[-1]),
         "amendment_013_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_013[-1]),
+        "amendment_014_sha256": _sha256(REPO_ROOT / PROTOCOL_PATHS_014[-1]),
     }
     return {
         "schema_version": 1,
@@ -7103,7 +7145,7 @@ def analyze_component_composite(path: Path, analysis_id: str) -> dict[str, Any]:
 
 
 def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
-    """Reduce exact r05 as the sole primary source and retain r02 as sensitivity."""
+    """Reduce exact r06 as the sole primary source and retain r02 as sensitivity."""
 
     if analysis_id != COMPONENT_ANALYSIS_ID:
         raise AnalysisValidationError(
@@ -7122,21 +7164,21 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
     ]
     if sorted(child.name for child in root.iterdir()) != sorted(expected_ids):
         raise AnalysisValidationError(
-            "whole-attempt root must contain exactly immutable r01/r02/r05"
+            "whole-attempt root must contain exactly immutable r01/r02/r06"
         )
-    r05 = validate_attempt(root / attempts_contract._COMPONENT_SUCCESSOR_ID)
-    if not r05.get("component_r05"):
-        raise AnalysisValidationError("r05 does not have amendment-013 identity")
+    r06 = validate_attempt(root / attempts_contract._COMPONENT_SUCCESSOR_ID)
+    if not r06.get("component_r06"):
+        raise AnalysisValidationError("r06 does not have amendment-014 identity")
     if (
-        len(r05.get("plan") or []) != 430
-        or len(r05.get("units") or []) != 430
-        or not r05.get("eligible")
-        or r05.get("source_unchanged") is not True
+        len(r06.get("plan") or []) != 430
+        or len(r06.get("units") or []) != 430
+        or not r06.get("eligible")
+        or r06.get("source_unchanged") is not True
     ):
-        raise AnalysisValidationError("r05 is not a complete eligible 430-row attempt")
-    identity = _require_dict(r05.get("identity"), "r05 identity")
+        raise AnalysisValidationError("r06 is not a complete eligible 430-row attempt")
+    identity = _require_dict(r06.get("identity"), "r06 identity")
     replacement = _require_dict(
-        identity.get("attempt_replacement"), "r05 replacement binding"
+        identity.get("attempt_replacement"), "r06 replacement binding"
     )
     if (
         replacement.get("classification") != attempts_contract._COMPONENT_CLASSIFICATION
@@ -7145,7 +7187,7 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
         or replacement.get("successor_raw_attempt_id")
         != attempts_contract._COMPONENT_SUCCESSOR_ID
     ):
-        raise AnalysisValidationError("r02/r03/r04-to-r05 whole-attempt edge differs")
+        raise AnalysisValidationError("r02/r03/r04/r05-to-r06 edge differs")
     prepublication = _require_dict(
         replacement.get("prepublication_failure"),
         "r03 prepublication failure binding",
@@ -7178,6 +7220,23 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
         != set(attempts_contract._COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES)
     ):
         raise AnalysisValidationError("r04 prepublication retention binding differs")
+    r05_prepublication = _require_dict(
+        replacement.get("r05_prepublication_failure"),
+        "r05 prepublication failure binding",
+    )
+    r05_members = _require_dict(
+        r05_prepublication.get("terminal_archive_members"),
+        "r05 prepublication archive members",
+    )
+    if (
+        r05_prepublication.get("raw_attempt_id")
+        != attempts_contract._COMPONENT_BURNED_R05_ID
+        or r05_prepublication.get("attempt_root_absent") is not True
+        or r05_prepublication.get("measurement_started") is not False
+        or set(r05_members)
+        != set(attempts_contract._COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES)
+    ):
+        raise AnalysisValidationError("r05 prepublication retention binding differs")
     correction = _require_dict(
         replacement.get("whole_attempt_protocol_correction"),
         "whole-attempt correction",
@@ -7186,7 +7245,7 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
         correction.get("primary_source_attempt_id")
         != attempts_contract._COMPONENT_SUCCESSOR_ID
     ):
-        raise AnalysisValidationError("whole-attempt primary source is not exact r05")
+        raise AnalysisValidationError("whole-attempt primary source is not exact r06")
     partial = _require_dict(
         replacement.get("r02_partial_terminal_forensics"),
         "r02 partial terminal forensics",
@@ -7202,7 +7261,7 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
             != attempts_contract._COMPONENT_SUCCESSOR_ID
         ):
             raise AnalysisValidationError("r02 partial role ledger differs")
-    endpoints = _reduce_endpoints(r05["plan"], r05["units"])
+    endpoints = _reduce_endpoints(r06["plan"], r06["units"])
     primary_ledger = [
         {
             "canonical_position": position,
@@ -7216,7 +7275,7 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
             "terminal_sha256": unit["terminal_sha256"],
             "raw_value": unit["value"],
         }
-        for position, unit in enumerate(r05["units"])
+        for position, unit in enumerate(r06["units"])
     ]
     binding = {
         **_component_static_analysis_binding(analysis_id),
@@ -7224,7 +7283,7 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
         "full_plan_sha256": systems.FORMAL_FULL_PLAN_SHA256,
         "full_plan_stored_sha256": systems.FORMAL_FULL_PLAN_STORED_SHA256,
         "ordered_membership_sha256": systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256,
-        "r05_input_receipts": r05["input_receipts"],
+        "r06_input_receipts": r06["input_receipts"],
         "r02_partial_forensics_receipt": {
             key: partial.get(key)
             for key in (
@@ -7242,7 +7301,7 @@ def analyze_whole_attempt(path: Path, analysis_id: str) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "analysis_binding": binding,
         "analysis_binding_sha256": _sha256_bytes(_canonical_json_bytes(binding)),
-        "primary_r05": {
+        "primary_r06": {
             "promoted": True,
             "unit_count": 430,
             "source_attempt_id": attempts_contract._COMPONENT_SUCCESSOR_ID,

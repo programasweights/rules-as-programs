@@ -1569,7 +1569,7 @@ def test_component_successor_binding_requires_pushed_exact_h4_bytes(
                     "parent_must_equal_i4": True,
                     "diff_paths_exactly": paths["runtime_lock"],
                 },
-                "head_must_equal_h4_before_r05_setup": True,
+                "head_must_equal_h4_before_r06_setup": True,
             }
         }
     }
@@ -1642,9 +1642,10 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     )
     receipt.update(
         {
-            "schema_version": 4,
+            "schema_version": 5,
             "prepublication_failure": {"retained": "r03-terminal-archive"},
             "r04_prepublication_failure": {"retained": "r04-terminal-archive"},
+            "r05_prepublication_failure": {"retained": "r05-terminal-archive"},
             "successor_source": {"external": "p4-i4-h4"},
             "whole_attempt_protocol_correction": {"source": "r03-full-430"},
         }
@@ -1670,6 +1671,11 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
         attempts,
         "r04_prepublication_failure_binding",
         lambda: receipt["r04_prepublication_failure"],
+    )
+    monkeypatch.setattr(
+        attempts,
+        "r05_prepublication_failure_binding",
+        lambda: receipt["r05_prepublication_failure"],
     )
 
     binding = attempts.replacement_launch_binding(successor, str(receipt_path))
@@ -1697,6 +1703,7 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     wrong_receipt.pop("whole_attempt_protocol_correction")
     wrong_receipt.pop("prepublication_failure")
     wrong_receipt.pop("r04_prepublication_failure")
+    wrong_receipt.pop("r05_prepublication_failure")
     _write_json(receipt_path, wrong_receipt)
     with pytest.raises(attempts.SystemsHarnessError, match="not permitted"):
         attempts.replacement_launch_binding(wrong_edge, str(receipt_path))
@@ -1886,6 +1893,117 @@ def test_r04_prepublication_archive_binding_rehashes_every_sealed_member(tmp_pat
     archive.chmod(0o500)
     with pytest.raises(attempts.SystemsHarnessError, match="manifest rehash"):
         attempts.r04_prepublication_failure_binding(amendment)
+
+
+def test_r05_prepublication_archive_binding_rehashes_closeout_and_every_member(
+    tmp_path,
+):
+    amendment = json.loads(json.dumps(attempts._load_component_amendment()))
+    correction = amendment["host_routing_correction"]
+    observed = correction["observed_r05_terminal_boundary"]
+    archive = tmp_path / "1525595-v1"
+    archive.mkdir(mode=0o700)
+    attempt_root = tmp_path / attempts._COMPONENT_BURNED_R05_ID
+    setup = {
+        "raw_attempt_id": attempts._COMPONENT_BURNED_R05_ID,
+        "slurm_job_id": attempts._COMPONENT_R05_PREPUBLICATION_JOB_ID,
+        "study_mode": "formal_protocol_v3_amendment_008",
+    }
+    supervisor_start = {
+        "raw_attempt_id": attempts._COMPONENT_BURNED_R05_ID,
+        "slurm_job_id": attempts._COMPONENT_R05_PREPUBLICATION_JOB_ID,
+        "slurm_partition": "ALL",
+        "attempt_root": str(attempt_root),
+    }
+    closeout = {
+        "raw_attempt_id": attempts._COMPONENT_BURNED_R05_ID,
+        "attempt_root_state": "not_published",
+        "disposition": "prepublication_or_unpublished_failure",
+        "final_supervisor_exit_code": 5,
+        "observed_runner_exit": {"returncode": 2},
+        "quiescence": {"passed": True},
+        "supervisor_diagnostics": [],
+    }
+    contents = {
+        name: b"" for name in attempts._COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES
+    }
+    contents.update(
+        {
+            "repo-head.stdout.bin": (
+                correction["parent_runtime_lock_commit"] + "\n"
+            ).encode(),
+            "setup-receipt.json": json.dumps(setup).encode() + b"\n",
+            "supervisor-start.json": json.dumps(supervisor_start).encode() + b"\n",
+            "supervisor-closeout.json": json.dumps(closeout).encode() + b"\n",
+            "supervisor-child.stderr.bin": observed["observed_error"].encode()
+            + b"\n",
+            "terminal-sacct.stdout.bin": (
+                b"1525595|rap-eacl-systems-v3|ALL|FAILED|5:0|start|end\n"
+            ),
+        }
+    )
+    manifest_names = sorted(
+        attempts._COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES
+        - {"evidence.sha256", "evidence.sha256.sha256"}
+    )
+    manifest = b"".join(
+        f"{hashlib.sha256(contents[name]).hexdigest()}  ./{name}\n".encode()
+        for name in manifest_names
+    )
+    contents["evidence.sha256"] = manifest
+    manifest_sha = hashlib.sha256(manifest).hexdigest()
+    contents["evidence.sha256.sha256"] = (
+        f"{manifest_sha}  evidence.sha256\n".encode()
+    )
+    for name, raw in contents.items():
+        path = archive / name
+        path.write_bytes(raw)
+        path.chmod(0o444)
+    archive.chmod(0o500)
+    observed.update(
+        {
+            "attempt_root": str(attempt_root),
+            "attempt_root_present": False,
+            "measurement_started": False,
+            "supervisor_quiescence_passed": True,
+        }
+    )
+    observed["terminal_archive"].update(
+        {
+            "path": str(archive),
+            "directory_mode": 0o500,
+            "member_mode": 0o444,
+            "manifest_bytes": len(manifest),
+            "manifest_sha256": manifest_sha,
+            **{
+                field: value
+                for name, prefix in (
+                    ("setup-receipt.json", "setup_receipt"),
+                    ("supervisor-start.json", "supervisor_start"),
+                    ("supervisor-closeout.json", "supervisor_closeout"),
+                    ("supervisor-child.stderr.bin", "child_stderr"),
+                )
+                for field, value in (
+                    (f"{prefix}_bytes", len(contents[name])),
+                    (f"{prefix}_sha256", hashlib.sha256(contents[name]).hexdigest()),
+                )
+            },
+        }
+    )
+
+    binding = attempts.r05_prepublication_failure_binding(amendment)
+    assert binding["attempt_root_absent"] is True
+    assert binding["measurement_started"] is False
+    assert set(binding["terminal_archive_members"]) == set(contents)
+
+    archive.chmod(0o700)
+    closeout_path = archive / "supervisor-closeout.json"
+    closeout_path.chmod(0o644)
+    closeout_path.write_text("mutated\n", encoding="utf-8")
+    closeout_path.chmod(0o444)
+    archive.chmod(0o500)
+    with pytest.raises(attempts.SystemsHarnessError, match="manifest rehash"):
+        attempts.r05_prepublication_failure_binding(amendment)
 
 
 def test_historical_r03_roles_are_retained_and_derived_only_to_successor():

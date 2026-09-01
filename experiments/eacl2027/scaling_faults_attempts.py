@@ -43,6 +43,7 @@ _FORMAL_ATTEMPT_RE = re.compile(
 _REPLACEMENT_CLASSIFICATIONS = frozenset({"harness_error", "infrastructure_error"})
 _EXTERNAL_SCHEDULER_STATES = frozenset({"PREEMPTED", "NODE_FAIL", "BOOT_FAIL"})
 _MAX_FORMAL_ATTEMPT_ORDINAL = 5
+_COMPONENT_MAX_FORMAL_ATTEMPT_ORDINAL = 6
 _MAX_PREDECESSOR_TREE_ENTRIES = 250_000
 _MAX_PREDECESSOR_TREE_REGULAR_BYTES = 8 * 1024**3
 _MIN_STAGING_FREE_RESERVE_BYTES = 1024**3
@@ -82,6 +83,9 @@ _COMPONENT_HISTORICAL_ROLE_CORRECTION_PATH = (
 _COMPONENT_SUPERVISOR_WAIT_CORRECTION_PATH = (
     _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-013.json"
 )
+_COMPONENT_HOST_ROUTING_CORRECTION_PATH = (
+    _REPO_ROOT / "experiments/eacl2027/protocol-v3-amendment-014.json"
+)
 _COMPONENT_CANARY_ARCHIVE_PARENT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/canary-v4"
 )
@@ -114,11 +118,13 @@ _COMPONENT_CANARY_ARCHIVE_MEMBER_TEMPLATES = (
     "srun.exit-status.txt",
 )
 _COMPONENT_PREDECESSOR_ID = "formal-v3-20260831t051023z-r02"
-_COMPONENT_SUCCESSOR_ID = "formal-v3-20260831t051023z-r05"
+_COMPONENT_SUCCESSOR_ID = "formal-v3-20260831t051023z-r06"
 _COMPONENT_BURNED_PREPUBLICATION_ID = "formal-v3-20260831t051023z-r03"
 _COMPONENT_PREPUBLICATION_JOB_ID = "1524823"
 _COMPONENT_BURNED_R04_ID = "formal-v3-20260831t051023z-r04"
 _COMPONENT_R04_PREPUBLICATION_JOB_ID = "1525449"
+_COMPONENT_BURNED_R05_ID = "formal-v3-20260831t051023z-r05"
+_COMPONENT_R05_PREPUBLICATION_JOB_ID = "1525595"
 _COMPONENT_PREPUBLICATION_MEMBER_NAMES = frozenset(
     {
         "evidence.sha256",
@@ -171,6 +177,9 @@ _COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES = frozenset(
         "terminal-squeue.stderr.bin",
         "terminal-squeue.stdout.bin",
     }
+)
+_COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES = frozenset(
+    {*_COMPONENT_R04_PREPUBLICATION_MEMBER_NAMES, "supervisor-closeout.json"}
 )
 _COMPONENT_CLASSIFICATION = (
     "outcome_aware_launch_wide_whole_attempt_protocol_correction"
@@ -902,7 +911,7 @@ def _load_component_amendment() -> dict[str, Any]:
         or not str(wait_correction.get("status", "")).startswith("frozen ")
         or not isinstance(wait_identity, dict)
         or not isinstance(wait_override, dict)
-        or wait_override.get("successor_raw_attempt_id") != _COMPONENT_SUCCESSOR_ID
+        or wait_override.get("successor_raw_attempt_id") != _COMPONENT_BURNED_R05_ID
     ):
         raise _component_error("amendment 013 is not the frozen exact correction")
     amendment["effective_protocol_identity"]["required_git_topology"] = (
@@ -912,6 +921,38 @@ def _load_component_amendment() -> dict[str, Any]:
         wait_identity["interpretation_order"]
     )
     amendment["supervisor_wait_correction"] = wait_correction
+    if (
+        _COMPONENT_HOST_ROUTING_CORRECTION_PATH.is_symlink()
+        or not _COMPONENT_HOST_ROUTING_CORRECTION_PATH.is_file()
+    ):
+        raise _component_error("the frozen amendment-014 correction is unavailable")
+    try:
+        host_routing = _strict_json_object(
+            _COMPONENT_HOST_ROUTING_CORRECTION_PATH.read_text(encoding="utf-8"),
+            label="amendment 014",
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _component_error("amendment 014 is unavailable") from exc
+    host_identity = host_routing.get("effective_protocol_identity")
+    host_override = host_routing.get("explicit_override")
+    if (
+        host_routing.get("amendment_id") != "protocol-v3-amendment-014"
+        or host_routing.get("parent_amendment") != "protocol-v3-amendment-013"
+        or not str(host_routing.get("status", "")).startswith("frozen ")
+        or not isinstance(host_identity, dict)
+        or not isinstance(host_override, dict)
+        or host_override.get("successor_raw_attempt_id") != _COMPONENT_SUCCESSOR_ID
+        or host_override.get("requested_partition") != "ALL"
+        or host_override.get("requested_node") != "watgpu108"
+    ):
+        raise _component_error("amendment 014 is not the frozen exact correction")
+    amendment["effective_protocol_identity"]["required_git_topology"] = (
+        host_identity["required_git_topology"]
+    )
+    amendment["effective_protocol_identity"]["interpretation_order"] = (
+        host_identity["interpretation_order"]
+    )
+    amendment["host_routing_correction"] = host_routing
     return amendment
 
 
@@ -1181,6 +1222,167 @@ def r04_prepublication_failure_binding(
         "classification": "prepublication_failure_after_child_spawn_before_wait",
         "observed_error": str(observed.get("observed_error")),
         "cause": "unclassified_beyond_observed_supervisor_message",
+    }
+
+
+def r05_prepublication_failure_binding(
+    amendment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Validate and bind the immutable r05 host-profile failure archive."""
+
+    amendment = amendment or _load_component_amendment()
+    correction = amendment.get("host_routing_correction")
+    observed = (
+        correction.get("observed_r05_terminal_boundary")
+        if isinstance(correction, dict)
+        else None
+    )
+    if not isinstance(observed, dict):
+        raise _component_error("amendment 014 r05 terminal boundary is absent")
+    archive_contract = observed.get("terminal_archive")
+    if not isinstance(archive_contract, dict):
+        raise _component_error("amendment 014 r05 archive contract is absent")
+    attempt_root = Path(str(observed.get("attempt_root", "")))
+    archive_root = Path(str(archive_contract.get("path", "")))
+    if (
+        observed.get("raw_attempt_id") != _COMPONENT_BURNED_R05_ID
+        or str(observed.get("slurm_job_id"))
+        != _COMPONENT_R05_PREPUBLICATION_JOB_ID
+        or observed.get("attempt_root_present") is not False
+        or observed.get("measurement_started") is not False
+        or observed.get("supervisor_quiescence_passed") is not True
+        or os.path.lexists(attempt_root)
+    ):
+        raise _component_error("r05 attempt-root absence or identity differs")
+    _reject_symlink_components(archive_root, label="r05 prepublication archive")
+    try:
+        root_stat = archive_root.lstat()
+    except OSError as exc:
+        raise _component_error("r05 prepublication archive is unavailable") from exc
+    effective_uid = getattr(os, "geteuid", lambda: root_stat.st_uid)()
+    if (
+        archive_root.is_symlink()
+        or not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_IMODE(root_stat.st_mode) != int(archive_contract["directory_mode"])
+        or root_stat.st_uid != effective_uid
+    ):
+        raise _component_error("r05 prepublication archive owner/type/mode differs")
+    children = list(archive_root.iterdir())
+    if {path.name for path in children} != _COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES:
+        raise _component_error("r05 prepublication archive member set differs")
+    members: dict[str, dict[str, Any]] = {}
+    identities: set[tuple[int, int]] = set()
+    for path in children:
+        metadata = path.lstat()
+        identity = (metadata.st_dev, metadata.st_ino)
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != int(archive_contract["member_mode"])
+            or metadata.st_uid != root_stat.st_uid
+            or identity in identities
+        ):
+            raise _component_error("r05 prepublication archive member metadata differs")
+        identities.add(identity)
+        members[path.name] = {
+            "mode": stat.S_IMODE(metadata.st_mode),
+            **_file_receipt(path),
+        }
+    manifest = archive_root / "evidence.sha256"
+    sidecar = archive_root / "evidence.sha256.sha256"
+    if (
+        members["evidence.sha256"]["bytes"] != archive_contract["manifest_bytes"]
+        or members["evidence.sha256"]["sha256"]
+        != archive_contract["manifest_sha256"]
+        or sidecar.read_text(encoding="utf-8")
+        != f"{archive_contract['manifest_sha256']}  evidence.sha256\n"
+    ):
+        raise _component_error("r05 prepublication manifest or sidecar differs")
+    manifest_entries: dict[str, str] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  \./([^/]+)", line)
+        if match is None or match.group(2) in manifest_entries:
+            raise _component_error("r05 prepublication manifest syntax differs")
+        manifest_entries[match.group(2)] = match.group(1)
+    expected_manifest_names = _COMPONENT_R05_PREPUBLICATION_MEMBER_NAMES - {
+        "evidence.sha256",
+        "evidence.sha256.sha256",
+    }
+    if set(manifest_entries) != expected_manifest_names or any(
+        members[name]["sha256"] != digest
+        for name, digest in manifest_entries.items()
+    ):
+        raise _component_error("r05 prepublication manifest rehash differs")
+    setup = _strict_json_object(
+        (archive_root / "setup-receipt.json").read_text(encoding="utf-8"),
+        label="r05 setup receipt",
+    )
+    supervisor_start = _strict_json_object(
+        (archive_root / "supervisor-start.json").read_text(encoding="utf-8"),
+        label="r05 supervisor start",
+    )
+    closeout = _strict_json_object(
+        (archive_root / "supervisor-closeout.json").read_text(encoding="utf-8"),
+        label="r05 supervisor closeout",
+    )
+    if (
+        setup.get("raw_attempt_id") != _COMPONENT_BURNED_R05_ID
+        or str(setup.get("slurm_job_id")) != _COMPONENT_R05_PREPUBLICATION_JOB_ID
+        or setup.get("study_mode") != "formal_protocol_v3_amendment_008"
+        or supervisor_start.get("raw_attempt_id") != _COMPONENT_BURNED_R05_ID
+        or str(supervisor_start.get("slurm_job_id"))
+        != _COMPONENT_R05_PREPUBLICATION_JOB_ID
+        or supervisor_start.get("slurm_partition") != "ALL"
+        or supervisor_start.get("attempt_root") != str(attempt_root)
+        or closeout.get("raw_attempt_id") != _COMPONENT_BURNED_R05_ID
+        or closeout.get("attempt_root_state") != "not_published"
+        or closeout.get("disposition") != "prepublication_or_unpublished_failure"
+        or closeout.get("final_supervisor_exit_code") != 5
+        or (closeout.get("observed_runner_exit") or {}).get("returncode") != 2
+        or (closeout.get("quiescence") or {}).get("passed") is not True
+        or closeout.get("supervisor_diagnostics") != []
+        or (archive_root / "repo-head.stdout.bin").read_text(encoding="utf-8").strip()
+        != correction.get("parent_runtime_lock_commit")
+    ):
+        raise _component_error("r05 prepublication setup or closeout identity differs")
+    terminal_sacct = (archive_root / "terminal-sacct.stdout.bin").read_text(
+        encoding="utf-8"
+    )
+    fields = terminal_sacct.rstrip("\n").split("|")
+    bound_files = {
+        "setup-receipt.json": ("setup_receipt_bytes", "setup_receipt_sha256"),
+        "supervisor-start.json": ("supervisor_start_bytes", "supervisor_start_sha256"),
+        "supervisor-closeout.json": (
+            "supervisor_closeout_bytes",
+            "supervisor_closeout_sha256",
+        ),
+        "supervisor-child.stderr.bin": ("child_stderr_bytes", "child_stderr_sha256"),
+    }
+    if (
+        len(fields) < 5
+        or fields[0] != _COMPONENT_R05_PREPUBLICATION_JOB_ID
+        or fields[2:5] != ["ALL", "FAILED", "5:0"]
+        or any(
+            members[name]["bytes"] != archive_contract[bytes_field]
+            or members[name]["sha256"] != archive_contract[hash_field]
+            for name, (bytes_field, hash_field) in bound_files.items()
+        )
+    ):
+        raise _component_error("r05 prepublication terminal evidence differs")
+    return {
+        "schema_version": 1,
+        "kind": "retained_prepublication_host_profile_failure",
+        "raw_attempt_id": _COMPONENT_BURNED_R05_ID,
+        "slurm_job_id": _COMPONENT_R05_PREPUBLICATION_JOB_ID,
+        "attempt_root": str(attempt_root),
+        "attempt_root_absent": True,
+        "measurement_started": False,
+        "terminal_archive_root": str(archive_root),
+        "terminal_archive_mode": stat.S_IMODE(root_stat.st_mode),
+        "terminal_archive_members": dict(sorted(members.items())),
+        "classification": "prepublication_process_profile_mismatch",
+        "observed_error": str(observed.get("observed_error")),
+        "cause": "unclassified_beyond_observed_preflight_mismatch",
     }
 
 
@@ -2423,7 +2625,7 @@ def component_successor_source_binding(
         parent != p4.get("parent_must_equal")
         or i4.get("parent_must_equal_p4") is not True
         or h4.get("parent_must_equal_i4") is not True
-        or topology.get("head_must_equal_h4_before_r05_setup") is not True
+        or topology.get("head_must_equal_h4_before_r06_setup") is not True
         or observed_paths != expected_paths
     ):
         raise _component_error("P4/I4/H4 topology differs from amendment 008")
@@ -5996,9 +6198,14 @@ def replacement_launch_binding(
     ordinal = int(match.group("ordinal"))
     if ordinal < 1:
         raise SystemsHarnessError("formal raw attempt ordinal must be at least r01")
-    if ordinal > _MAX_FORMAL_ATTEMPT_ORDINAL:
+    max_ordinal = (
+        _COMPONENT_MAX_FORMAL_ATTEMPT_ORDINAL
+        if successor_id == _COMPONENT_SUCCESSOR_ID
+        else _MAX_FORMAL_ATTEMPT_ORDINAL
+    )
+    if ordinal > max_ordinal:
         raise SystemsHarnessError(
-            f"formal raw attempt ordinal may not exceed r{_MAX_FORMAL_ATTEMPT_ORDINAL:02d}"
+            f"formal raw attempt ordinal may not exceed r{max_ordinal:02d}"
         )
     supplied = (receipt_value or "").strip()
     if ordinal == 1:
@@ -6062,7 +6269,7 @@ def replacement_launch_binding(
         successor_id == _COMPONENT_SUCCESSOR_ID
         and receipt.get("predecessor_raw_attempt_id") == _COMPONENT_PREDECESSOR_ID
     )
-    expected_schema_version = 4 if component_edge else 1
+    expected_schema_version = 5 if component_edge else 1
     if receipt.get("schema_version") != expected_schema_version:
         raise SystemsHarnessError(
             f"replacement receipt schema_version must equal {expected_schema_version}"
@@ -6086,6 +6293,7 @@ def replacement_launch_binding(
             {
                 "prepublication_failure",
                 "r04_prepublication_failure",
+                "r05_prepublication_failure",
                 "successor_source",
                 "whole_attempt_protocol_correction",
             }
@@ -6378,6 +6586,11 @@ def replacement_launch_binding(
             raise SystemsHarnessError(
                 "replacement receipt r04 prepublication failure binding differs"
             )
+        expected_r05_prepublication = r05_prepublication_failure_binding()
+        if receipt.get("r05_prepublication_failure") != expected_r05_prepublication:
+            raise SystemsHarnessError(
+                "replacement receipt r05 prepublication failure binding differs"
+            )
         terminal_forensics = _validate_whole_attempt_protocol_correction(
             receipt=receipt,
             predecessor_root=predecessor_root,
@@ -6411,6 +6624,9 @@ def replacement_launch_binding(
         binding["prepublication_failure"] = receipt["prepublication_failure"]
         binding["r04_prepublication_failure"] = receipt[
             "r04_prepublication_failure"
+        ]
+        binding["r05_prepublication_failure"] = receipt[
+            "r05_prepublication_failure"
         ]
         binding["successor_source"] = receipt["successor_source"]
         binding["whole_attempt_protocol_correction"] = receipt[

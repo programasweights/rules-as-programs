@@ -65,7 +65,7 @@ def test_launcher_has_exact_cpu_only_slurm_profile_and_valid_bash():
     assert _directives(source) == {
         "job-name": "rap-eacl-systems-v3",
         "partition": "ALL",
-        "nodelist": "watgpu808",
+        "nodelist": "watgpu108",
         "nodes": "1",
         "ntasks": "1",
         "cpus-per-task": "8",
@@ -107,7 +107,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     ) in source
     assert (
         'readonly RUNTIME_LOCK="${REPO_ROOT}/'
-            'experiments/eacl2027/formal-runtime-lock-v9.json"'
+            'experiments/eacl2027/formal-runtime-lock-v10.json"'
     ) in source
     assert '! -f "${RUNTIME_LOCK}"' in source
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=rap-eacl-systems-v3
 #SBATCH --partition=ALL
-#SBATCH --nodelist=watgpu808
+#SBATCH --nodelist=watgpu108
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -30,7 +30,7 @@ readonly WHEELHOUSE_ROOT="${FORMAL_ROOT}/runtime/wheelhouse"
 readonly RAW_ATTEMPTS_ROOT="${FORMAL_ROOT}/attempts"
 readonly SCHEDULER_ROOT="${FORMAL_ROOT}/scheduler"
 readonly RUNNER="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults.py"
-readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v9.json"
+readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v10.json"
 readonly LAUNCH_SCRIPT="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults_watgpu.sbatch"
 
 export PATH="/usr/local/bin:/usr/bin:/bin"
