@@ -412,9 +412,9 @@ def test_full_attempt_plan_has_exact_frozen_identity_and_roles():
         planned["ordered_membership_sha256"]
         == systems.FORMAL_FULL_PLAN_MEMBERSHIP_SHA256
     )
-    assert planned["primary_source_attempt_id"].endswith("-r06")
+    assert planned["primary_source_attempt_id"].endswith("-r07")
     assert contract["effective_protocol_identity"]["interpretation_order"][-1].endswith(
-        "protocol-v3-amendment-014.json"
+        "protocol-v3-amendment-015.json"
     )
     assert planned["full_plan"] == systems.build_study_plan(
         systems.MatrixConfig(soak_events=systems.DEFAULT_SOAK_EVENTS),

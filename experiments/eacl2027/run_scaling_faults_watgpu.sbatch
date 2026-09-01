@@ -30,13 +30,13 @@ readonly WHEELHOUSE_ROOT="${FORMAL_ROOT}/runtime/wheelhouse"
 readonly RAW_ATTEMPTS_ROOT="${FORMAL_ROOT}/attempts"
 readonly SCHEDULER_ROOT="${FORMAL_ROOT}/scheduler"
 readonly RUNNER="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults.py"
-readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v10.json"
+readonly RUNTIME_LOCK="${REPO_ROOT}/experiments/eacl2027/formal-runtime-lock-v11.json"
 readonly LAUNCH_SCRIPT="${REPO_ROOT}/experiments/eacl2027/run_scaling_faults_watgpu.sbatch"
 
 export PATH="/usr/local/bin:/usr/bin:/bin"
 export PAW_GPU_LAYERS=0
 export CUDA_VISIBLE_DEVICES=
-export PAW_CACHE_DIR="/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/programasweights"
+export PAW_CACHE_DIR="/u4/yuntian/rap-eacl-systems-formal-v3/runtime/cache/formal-v3-r07-programasweights"
 export PIP_CONFIG_FILE=/dev/null
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PIP_FIND_LINKS="${WHEELHOUSE_ROOT}"

@@ -109,6 +109,9 @@ FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT = (
 FORMAL_HOST_ROUTING_CORRECTION_AMENDMENT = (
     ROOT / "protocol-v3-amendment-014.json"
 )
+FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT = (
+    ROOT / "protocol-v3-amendment-015.json"
+)
 FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
 FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
     "For exact raw r03, study_mode is exactly "
@@ -184,9 +187,9 @@ SOCKET_CLEANUP_TIMEOUT_SECONDS = 2.0
 FORMAL_RAW_ATTEMPT_ROOT = Path("/u4/yuntian/rap-eacl-systems-formal-v3/attempts")
 FORMAL_SUPERVISOR_ROOT = Path(
     "/u4/yuntian/rap-eacl-systems-formal-v3/scheduler/supervisor-closeouts/"
-    "formal-v3-20260831t051023z-r06"
+    "formal-v3-20260831t051023z-r07"
 )
-FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r06"
+FORMAL_RAW_ATTEMPT_ID = "formal-v3-20260831t051023z-r07"
 _SUPERVISOR_SENSITIVE_ENV_MARKERS = (
     "API_KEY",
     "TOKEN",
@@ -7289,6 +7292,11 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         or not FORMAL_HOST_ROUTING_CORRECTION_AMENDMENT.is_file()
     ):
         raise SystemsHarnessError("protocol-v3 amendment 014 is absent or a symlink")
+    if (
+        FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT.is_symlink()
+        or not FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT.is_file()
+    ):
+        raise SystemsHarnessError("protocol-v3 amendment 015 is absent or a symlink")
 
     def reject_constant(value: str) -> None:
         raise ValueError(f"non-finite JSON number {value}")
@@ -7554,7 +7562,8 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
             or not str(host_routing.get("status", "")).startswith("frozen ")
             or not isinstance(host_identity, dict)
             or not isinstance(host_override, dict)
-            or host_override.get("successor_raw_attempt_id") != FORMAL_RAW_ATTEMPT_ID
+            or host_override.get("successor_raw_attempt_id")
+            != "formal-v3-20260831t051023z-r06"
             or host_override.get("requested_partition") != "ALL"
             or host_override.get("requested_node") != "watgpu108"
         ):
@@ -7565,6 +7574,46 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         contract["effective_protocol_identity"]["interpretation_order"] = (
             host_identity["interpretation_order"]
         )
+        try:
+            cache_isolation = json.loads(
+                FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT.read_text(
+                    encoding="utf-8"
+                ),
+                object_pairs_hook=unique_object,
+                parse_constant=reject_constant,
+            )
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise SystemsHarnessError(f"invalid strict amendment 015: {exc}") from exc
+        cache_identity = (
+            cache_isolation.get("effective_protocol_identity")
+            if isinstance(cache_isolation, dict)
+            else None
+        )
+        cache_override = (
+            cache_isolation.get("explicit_override")
+            if isinstance(cache_isolation, dict)
+            else None
+        )
+        if (
+            not isinstance(cache_isolation, dict)
+            or cache_isolation.get("amendment_id") != "protocol-v3-amendment-015"
+            or cache_isolation.get("parent_amendment")
+            != "protocol-v3-amendment-014"
+            or not str(cache_isolation.get("status", "")).startswith("frozen ")
+            or not isinstance(cache_identity, dict)
+            or not isinstance(cache_override, dict)
+            or cache_override.get("successor_raw_attempt_id") != FORMAL_RAW_ATTEMPT_ID
+            or cache_override.get("requested_partition") != "ALL"
+            or cache_override.get("requested_node") != "watgpu108"
+        ):
+            raise SystemsHarnessError("protocol-v3 amendment 015 is not frozen")
+        contract["effective_protocol_identity"]["required_git_topology"] = (
+            cache_identity["required_git_topology"]
+        )
+        contract["effective_protocol_identity"]["interpretation_order"] = (
+            cache_identity["interpretation_order"]
+        )
+        contract["cache_isolation_correction"] = cache_isolation
         fatal = contract["fatal_result_contract"]
         fatal["supervisor_closeout_root_exact"] = str(FORMAL_SUPERVISOR_ROOT)
         fatal["supervisor_start_path_exact"] = str(FORMAL_SUPERVISOR_ROOT / "start.json")
@@ -7585,7 +7634,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         "experiments/eacl2027/protocol-v3.json",
         *[
             f"experiments/eacl2027/protocol-v3-amendment-{index:03d}.json"
-            for index in range(1, 15)
+            for index in range(1, 16)
         ],
     ]
     if interpretation_order != expected_order:
@@ -7626,7 +7675,12 @@ def _formal_runtime_profile() -> dict[str, Any]:
         _formal_contract().get("corrected_direct_paw_cache_contract") or {}
     )
     dependency["formal_cache_dir"] = corrected.get("r03_paw_cache_dir_exact")
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v10.json"
+    dependency["formal_cache_dir"] = (
+        (_formal_contract().get("cache_isolation_correction") or {})
+        .get("explicit_override", {})
+        .get("dedicated_cache_root")
+    )
+    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v11.json"
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -7683,7 +7737,7 @@ def _required_git_state(contract: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "runtime_lock_commit_diff_paths_exactly": h4.get("diff_paths_exactly"),
         "head_must_equal_runtime_lock_commit": topology.get(
-            "head_must_equal_h4_before_r06_setup"
+            "head_must_equal_h4_before_r07_setup"
         ),
         "dirty_must_equal": topology.get("dirty_must_equal"),
         "dirty_scope": topology.get("dirty_scope"),
@@ -9775,7 +9829,7 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
     child_args.append("--supervised-child")
     attempt_root = _formal_attempt_dir_from_argv(child_args)
     if attempt_root is None or attempt_root.name != FORMAL_RAW_ATTEMPT_ID:
-        raise SystemsHarnessError("supervisor requires exact r06 --attempt-dir")
+        raise SystemsHarnessError("supervisor requires exact r07 --attempt-dir")
     contract = _formal_contract()["fatal_result_contract"]
     supervisor_root = Path(str(contract["supervisor_closeout_root_exact"]))
     if supervisor_root != FORMAL_SUPERVISOR_ROOT:

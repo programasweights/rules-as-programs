@@ -1569,7 +1569,7 @@ def test_component_successor_binding_requires_pushed_exact_h4_bytes(
                     "parent_must_equal_i4": True,
                     "diff_paths_exactly": paths["runtime_lock"],
                 },
-                "head_must_equal_h4_before_r06_setup": True,
+                "head_must_equal_h4_before_r07_setup": True,
             }
         }
     }
@@ -1642,10 +1642,11 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     )
     receipt.update(
         {
-            "schema_version": 5,
+            "schema_version": 6,
             "prepublication_failure": {"retained": "r03-terminal-archive"},
             "r04_prepublication_failure": {"retained": "r04-terminal-archive"},
             "r05_prepublication_failure": {"retained": "r05-terminal-archive"},
+            "r06_prepublication_failure": {"retained": "r06-terminal-archive"},
             "successor_source": {"external": "p4-i4-h4"},
             "whole_attempt_protocol_correction": {"source": "r03-full-430"},
         }
@@ -1677,6 +1678,11 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
         "r05_prepublication_failure_binding",
         lambda: receipt["r05_prepublication_failure"],
     )
+    monkeypatch.setattr(
+        attempts,
+        "r06_prepublication_failure_binding",
+        lambda: receipt["r06_prepublication_failure"],
+    )
 
     binding = attempts.replacement_launch_binding(successor, str(receipt_path))
 
@@ -1704,6 +1710,7 @@ def test_exact_whole_attempt_override_preserves_raw_r02_partial_tree(
     wrong_receipt.pop("prepublication_failure")
     wrong_receipt.pop("r04_prepublication_failure")
     wrong_receipt.pop("r05_prepublication_failure")
+    wrong_receipt.pop("r06_prepublication_failure")
     _write_json(receipt_path, wrong_receipt)
     with pytest.raises(attempts.SystemsHarnessError, match="not permitted"):
         attempts.replacement_launch_binding(wrong_edge, str(receipt_path))
@@ -2004,6 +2011,23 @@ def test_r05_prepublication_archive_binding_rehashes_closeout_and_every_member(
     archive.chmod(0o500)
     with pytest.raises(attempts.SystemsHarnessError, match="manifest rehash"):
         attempts.r05_prepublication_failure_binding(amendment)
+
+
+def test_r06_prepublication_archive_binding_fails_closed_when_archive_is_absent(
+    tmp_path,
+):
+    amendment = json.loads(json.dumps(attempts._load_component_amendment()))
+    observed = amendment["cache_isolation_correction"][
+        "observed_r06_terminal_boundary"
+    ]
+    observed["attempt_root"] = str(tmp_path / attempts._COMPONENT_BURNED_R06_ID)
+    observed["attempt_root_present"] = False
+    observed["measurement_started"] = False
+    observed["supervisor_quiescence_passed"] = True
+    observed["terminal_archive"]["path"] = str(tmp_path / "missing-r06-archive")
+
+    with pytest.raises(attempts.SystemsHarnessError, match="archive is unavailable"):
+        attempts.r06_prepublication_failure_binding(amendment)
 
 
 def test_historical_r03_roles_are_retained_and_derived_only_to_successor():

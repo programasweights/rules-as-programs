@@ -90,7 +90,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     assert "export PAW_GPU_LAYERS=0" in source
     assert "export CUDA_VISIBLE_DEVICES=" in source
     assert (
-        f'export PAW_CACHE_DIR="{FORMAL_ROOT}/runtime/cache/programasweights"'
+        f'export PAW_CACHE_DIR="{FORMAL_ROOT}/runtime/cache/formal-v3-r07-programasweights"'
         in source
     )
     assert 'unset OMP_NUM_THREADS OPENBLAS_NUM_THREADS MKL_NUM_THREADS' in source
@@ -107,7 +107,7 @@ def test_launcher_pins_sanitized_environment_and_contains_no_secret_material():
     ) in source
     assert (
         'readonly RUNTIME_LOCK="${REPO_ROOT}/'
-            'experiments/eacl2027/formal-runtime-lock-v10.json"'
+            'experiments/eacl2027/formal-runtime-lock-v11.json"'
     ) in source
     assert '! -f "${RUNTIME_LOCK}"' in source
 
