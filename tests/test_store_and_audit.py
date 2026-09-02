@@ -50,13 +50,13 @@ def test_old_database_is_replaced_by_strict_schema(tmp_path):
     path = tmp_path / "verdicts.db"
     with sqlite3.connect(path) as connection:
         connection.execute(
-            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, message TEXT)")
+            "CREATE TABLE verdicts (id INTEGER PRIMARY KEY, message TEXT)"
+        )
         connection.execute("INSERT INTO verdicts VALUES (1, 'old')")
     store = VerdictStore(path)
 
     with sqlite3.connect(path) as connection:
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(verdicts)")}
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(verdicts)")}
         version = connection.execute("PRAGMA user_version").fetchone()[0]
     assert version == FINDING_SCHEMA_VERSION
     assert "evaluation_json" in columns
@@ -74,6 +74,27 @@ def test_group_projects_only_latest_occurrence(tmp_path):
     assert group["id"] != first
     assert "occurrences" not in group
     assert group["evaluation"]["schema_version"] == 4
+
+
+def test_record_retries_a_transient_sqlite_busy_error(monkeypatch, tmp_path):
+    store = VerdictStore(tmp_path / "verdicts.db")
+    original_connect = store._connect
+    attempts = 0
+
+    def flaky_connect():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return original_connect()
+
+    monkeypatch.setattr(store, "_connect", flaky_connect)
+    monkeypatch.setattr("rules_as_programs.core.store.time.sleep", lambda _delay: None)
+
+    finding_id = store.record(_verdict(str(tmp_path)))
+
+    assert finding_id == 1
+    assert attempts == 2
 
 
 def test_suppressed_findings_stay_out_of_inbox_but_in_history(tmp_path):
@@ -117,12 +138,15 @@ def test_audit_lookup_requires_exact_finding_id(monkeypatch, tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     common = dict(
-        project_root=str(project), rule_id="verify", title="Verify",
-        severity="warn", message="", conversation_id="conversation")
-    audit.log_violation(
-        finding_id=11, trace=[], evaluation=_evaluation(), **common)
-    audit.log_violation(
-        finding_id=12, trace=[], evaluation=_evaluation(), **common)
+        project_root=str(project),
+        rule_id="verify",
+        title="Verify",
+        severity="warn",
+        message="",
+        conversation_id="conversation",
+    )
+    audit.log_violation(finding_id=11, trace=[], evaluation=_evaluation(), **common)
+    audit.log_violation(finding_id=12, trace=[], evaluation=_evaluation(), **common)
 
     assert audit.read_finding(str(project), 11)["finding_id"] == 11
     assert audit.read_finding(str(project), 99) is None
@@ -135,8 +159,8 @@ def test_audit_preserves_large_exact_input(monkeypatch, tmp_path):
     evaluation = _evaluation()
     evaluation["input"]["text"] = "😀" * 70000
     audit.log_violation(
-        str(project), 7, "verify", "Verify", "warn", "", [],
-        evaluation=evaluation)
+        str(project), 7, "verify", "Verify", "warn", "", [], evaluation=evaluation
+    )
 
     recorded = audit.read_finding(str(project), 7)["evaluation"]
     assert recorded["schema_version"] == 4
@@ -152,14 +176,11 @@ def test_review_by_fingerprint_handles_all_hidden_occurrences(tmp_path):
 
     assert group["occurrence_count"] == 125
     assert store.occurrence_count(group["fingerprint"]) == 125
-    assert store.acknowledge(
-        fingerprint=group["fingerprint"], reason="reviewed") == 125
+    assert store.acknowledge(fingerprint=group["fingerprint"], reason="reviewed") == 125
     assert store.by_project() == {}
 
 
-def test_reviewing_one_occurrence_keeps_group_until_all_are_reviewed(
-    tmp_path
-):
+def test_reviewing_one_occurrence_keeps_group_until_all_are_reviewed(tmp_path):
     store = VerdictStore(tmp_path / "verdicts.db")
     project = str(tmp_path)
     first = store.record(_verdict(project))
@@ -184,10 +205,8 @@ def test_development_reset_removes_db_ledgers_and_audits(monkeypatch, tmp_path):
     monkeypatch.setenv("RAP_STATE_DIR", str(state))
     state.mkdir()
     with sqlite3.connect(state / "verdicts.db") as connection:
-        connection.execute(
-            "CREATE TABLE verdicts (project_root TEXT)")
-        connection.execute(
-            "INSERT INTO verdicts VALUES (?)", (str(project),))
+        connection.execute("CREATE TABLE verdicts (project_root TEXT)")
+        connection.execute("INSERT INTO verdicts VALUES (?)", (str(project),))
     ledgers = state / "ledgers"
     ledgers.mkdir()
     (ledgers / "conversation.jsonl").write_text("{}\n")

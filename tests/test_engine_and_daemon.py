@@ -491,6 +491,12 @@ def test_oversized_trigger_input_is_rejected_without_paw_call(monkeypatch, tmp_p
 
     assert engine.evaluate(rule, ledger, event) is None
     assert errors == ["input too large: 8 bytes exceeds 4"]
+    row = evaluation_log.history(project)[0]
+    assert row["status"] == "failed"
+    assert row["outcome"]["error_code"] == "input_too_large"
+    assert row["input"]["text"] is None
+    assert row["input"]["byte_count"] == 8
+    assert row["input"]["sha256"] == hashlib.sha256(b"too long").hexdigest()
 
 
 def test_orphaned_findings_archive_but_fallback_findings_remain(monkeypatch, tmp_path):

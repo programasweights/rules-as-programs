@@ -77,22 +77,28 @@ def _worker_main(connection: Connection) -> None:
                 function = paw.function(program_id)
                 functions[program_id] = function
             output = function(str(request.get("text", "")))
-            connection.send({
-                "id": request_id,
-                "ok": True,
-                "output": output,
-            })
+            connection.send(
+                {
+                    "id": request_id,
+                    "ok": True,
+                    "output": output,
+                }
+            )
         except BaseException as exc:
-            connection.send({
-                "id": request_id,
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-            })
+            connection.send(
+                {
+                    "id": request_id,
+                    "ok": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
     connection.close()
 
 
 class PawInferenceProcess:
     """One serialized worker process; kill and replace it after any timeout."""
+
+    MAX_CALL_ATTEMPTS = 2
 
     def __init__(self):
         self._context = multiprocessing.get_context("spawn")
@@ -126,42 +132,48 @@ class PawInferenceProcess:
         self.generation += 1
         self.last_error = ""
 
-    def call(
-        self, program_id: str, text: str, timeout: float
-    ) -> str | None:
+    def call(self, program_id: str, text: str, timeout: float) -> str | None:
         # The lock starts the timeout only after this caller reaches the single
         # worker. Calls never overlap and queued callers do not time out early.
         with self._lock:
-            self._start_locked()
-            self._request_id += 1
-            request_id = str(self._request_id)
-            connection = self._connection
-            try:
-                connection.send({
-                    "type": "run",
-                    "id": request_id,
-                    "program_id": program_id,
-                    "text": text,
-                })
-                if not connection.poll(timeout):
-                    self.last_error = (
-                        f"local inference timed out after {timeout:.1f}s")
+            for attempt in range(self.MAX_CALL_ATTEMPTS):
+                self._start_locked()
+                self._request_id += 1
+                request_id = str(self._request_id)
+                connection = self._connection
+                try:
+                    connection.send(
+                        {
+                            "type": "run",
+                            "id": request_id,
+                            "program_id": program_id,
+                            "text": text,
+                        }
+                    )
+                    if not connection.poll(timeout):
+                        self.last_error = (
+                            f"local inference timed out after {timeout:.1f}s"
+                        )
+                        self._stop_locked()
+                        continue
+                    response = connection.recv()
+                except (BrokenPipeError, EOFError, OSError) as exc:
+                    self.last_error = f"worker exited: {exc}"
                     self._stop_locked()
+                    continue
+                if str(response.get("id", "")) != request_id or not response.get("ok"):
+                    self.last_error = str(
+                        response.get("error", "invalid worker response")
+                    )
                     return None
-                response = connection.recv()
-            except (BrokenPipeError, EOFError, OSError) as exc:
-                self.last_error = f"worker exited: {exc}"
+                output = response.get("output")
+                normalized = output.strip() if isinstance(output, str) else str(output)
+                if normalized:
+                    self.last_error = ""
+                    return normalized
+                self.last_error = "local inference returned an empty decision"
                 self._stop_locked()
-                return None
-            if (
-                str(response.get("id", "")) != request_id
-                or not response.get("ok")
-            ):
-                self.last_error = str(
-                    response.get("error", "invalid worker response"))
-                return None
-            output = response.get("output")
-            return output.strip() if isinstance(output, str) else str(output)
+            return None
 
     def _stop_locked(self) -> None:
         connection = self._connection

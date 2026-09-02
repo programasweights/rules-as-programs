@@ -83,15 +83,22 @@ CREATE INDEX IF NOT EXISTS idx_verdicts_project ON verdicts(project_root);
 CREATE INDEX IF NOT EXISTS idx_verdicts_ts ON verdicts(ts);
 """
 FINDING_SCHEMA_VERSION = 4
+SQLITE_BUSY_RETRIES = 2
+SQLITE_BUSY_RETRY_DELAY_SECONDS = 0.05
 
 
 def finding_fingerprint(
     project_root: str, rule_id: str, severity: str, source_hash: str = ""
 ) -> str:
     """Stable issue-like identity for repeated occurrences of one problem."""
-    raw = "\x00".join((
-        project_root or "", rule_id or "", source_hash or "no-source",
-        str(severity or "").lower()))
+    raw = "\x00".join(
+        (
+            project_root or "",
+            rule_id or "",
+            source_hash or "no-source",
+            str(severity or "").lower(),
+        )
+    )
     return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:24]
 
 
@@ -110,8 +117,10 @@ def reset_development_finding_history() -> None:
         try:
             with sqlite3.connect(str(db_path)) as conn:
                 project_roots = [
-                    str(row[0]) for row in conn.execute(
-                        "SELECT DISTINCT project_root FROM verdicts")
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT DISTINCT project_root FROM verdicts"
+                    )
                     if row[0]
                 ]
         except sqlite3.Error:
@@ -169,12 +178,11 @@ class VerdictStore:
                 )
             conn.executescript(_SCHEMA)
             columns = {
-                str(row[1]) for row in conn.execute(
-                    "PRAGMA table_info(verdicts)").fetchall()
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(verdicts)").fetchall()
             }
             if "behavior_hash" not in columns:
-                conn.execute(
-                    "ALTER TABLE verdicts ADD COLUMN behavior_hash TEXT")
+                conn.execute("ALTER TABLE verdicts ADD COLUMN behavior_hash TEXT")
             legacy_rows = conn.execute(
                 """SELECT id, rule_id, severity, project_root, source_hash,
                           evaluation_json
@@ -186,11 +194,10 @@ class VerdictStore:
                     evaluation = json.loads(row["evaluation_json"])
                 except (json.JSONDecodeError, TypeError):
                     evaluation = {}
-                rule = (evaluation.get("rule") or {})
+                rule = evaluation.get("rule") or {}
                 behavior = str(rule.get("behavior_hash") or "")
                 if not behavior and rule.get("source"):
-                    behavior = revisions.behavior_hash(
-                        str(rule["source"]))
+                    behavior = revisions.behavior_hash(str(rule["source"]))
                 if not behavior:
                     behavior = str(row["source_hash"] or "")
                 fingerprint = finding_fingerprint(
@@ -208,36 +215,62 @@ class VerdictStore:
             conn.execute(f"PRAGMA user_version={FINDING_SCHEMA_VERSION}")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_verdicts_fingerprint "
-                "ON verdicts(fingerprint)")
+                "ON verdicts(fingerprint)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_verdicts_open "
-                "ON verdicts(acknowledged, suppressed, ts)")
+                "ON verdicts(acknowledged, suppressed, ts)"
+            )
 
     def record(self, v: Verdict) -> int:
         fingerprint = v.fingerprint or finding_fingerprint(
-            v.project_root, v.rule_id, v.severity, v.source_hash)
-        with self._lock, self._connect() as conn:
-            cur = conn.execute(
-                """INSERT INTO verdicts
-                   (rule_id, rule_title, severity, conversation_id,
-                    project_root, evaluation_json, fingerprint,
-                    trigger_event_id, trigger_kind, suppressed,
-                    suppression_reason, source_hash, behavior_hash, ts)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    v.rule_id, v.rule_title, v.severity,
-                    v.conversation_id, v.project_root,
-                    json.dumps(v.evaluation, ensure_ascii=False),
-                    fingerprint, v.trigger_event_id,
-                    v.trigger_kind, 1 if v.suppressed else 0,
-                    v.suppression_reason, v.source_hash, v.behavior_hash, v.ts,
-                ),
-            )
-            return int(cur.lastrowid)
+            v.project_root, v.rule_id, v.severity, v.source_hash
+        )
+        with self._lock:
+            for attempt in range(SQLITE_BUSY_RETRIES + 1):
+                try:
+                    with self._connect() as conn:
+                        cur = conn.execute(
+                            """INSERT INTO verdicts
+                               (rule_id, rule_title, severity, conversation_id,
+                                project_root, evaluation_json, fingerprint,
+                                trigger_event_id, trigger_kind, suppressed,
+                                suppression_reason, source_hash, behavior_hash, ts)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (
+                                v.rule_id,
+                                v.rule_title,
+                                v.severity,
+                                v.conversation_id,
+                                v.project_root,
+                                json.dumps(v.evaluation, ensure_ascii=False),
+                                fingerprint,
+                                v.trigger_event_id,
+                                v.trigger_kind,
+                                1 if v.suppressed else 0,
+                                v.suppression_reason,
+                                v.source_hash,
+                                v.behavior_hash,
+                                v.ts,
+                            ),
+                        )
+                        return int(cur.lastrowid)
+                except sqlite3.OperationalError as exc:
+                    busy = any(
+                        marker in str(exc).lower() for marker in ("locked", "busy")
+                    )
+                    if not busy or attempt >= SQLITE_BUSY_RETRIES:
+                        raise
+                    time.sleep(SQLITE_BUSY_RETRY_DELAY_SECONDS)
+        raise RuntimeError("unreachable SQLite finding retry state")
 
-    def recent(self, limit: int = 100, project_root: str | None = None,
-               include_acknowledged: bool = False,
-               include_suppressed: bool = False) -> list[dict[str, Any]]:
+    def recent(
+        self,
+        limit: int = 100,
+        project_root: str | None = None,
+        include_acknowledged: bool = False,
+        include_suppressed: bool = False,
+    ) -> list[dict[str, Any]]:
         q = "SELECT * FROM verdicts"
         clauses: list[str] = []
         params: list[Any] = []
@@ -257,13 +290,18 @@ class VerdictStore:
         return [self._decode(r) for r in rows]
 
     @staticmethod
-    def _group_rows(rows: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
+    def _group_rows(
+        rows: list[dict[str, Any]], limit: int | None = None
+    ) -> list[dict[str, Any]]:
         grouped: dict[str, list[dict[str, Any]]] = {}
         order: list[str] = []
         for row in rows:
             fingerprint = row.get("fingerprint") or finding_fingerprint(
-                row.get("project_root", ""), row.get("rule_id", ""),
-                row.get("severity", ""), row.get("source_hash", ""))
+                row.get("project_root", ""),
+                row.get("rule_id", ""),
+                row.get("severity", ""),
+                row.get("source_hash", ""),
+            )
             if fingerprint not in grouped:
                 grouped[fingerprint] = []
                 order.append(fingerprint)
@@ -279,8 +317,7 @@ class VerdictStore:
                 key=lambda value: rank.get(value, 0),
                 default="info",
             )
-            latest["severity"] = (
-                "warn" if highest == "warning" else highest)
+            latest["severity"] = "warn" if highest == "warning" else highest
             latest["fingerprint"] = fingerprint
             latest["last_seen"] = max(float(row.get("ts", 0)) for row in occurrences)
             latest["occurrence_count"] = len(occurrences)
@@ -314,13 +351,12 @@ class VerdictStore:
             params.append(project_root)
         params.append(limit)
         query = (
-            "SELECT * FROM verdicts WHERE " + " AND ".join(clauses)
+            "SELECT * FROM verdicts WHERE "
+            + " AND ".join(clauses)
             + " ORDER BY ts DESC LIMIT ?"
         )
         with self._lock, self._connect() as conn:
-            rows = [
-                self._decode(row)
-                for row in conn.execute(query, params).fetchall()]
+            rows = [self._decode(row) for row in conn.execute(query, params).fetchall()]
         return self._group_rows(rows)
 
     def by_project(
@@ -330,7 +366,8 @@ class VerdictStore:
         out: dict[str, list[dict[str, Any]]] = {}
         with self._lock, self._connect() as conn:
             rows = [
-                self._decode(row) for row in conn.execute(
+                self._decode(row)
+                for row in conn.execute(
                     """SELECT verdicts.*, latest.occurrence_count
                        FROM verdicts
                        JOIN (
@@ -350,13 +387,18 @@ class VerdictStore:
         for proj, project_rows in per_project.items():
             out[proj] = (
                 project_rows[:limit_per_project]
-                if limit_per_project is not None else project_rows)
+                if limit_per_project is not None
+                else project_rows
+            )
         return out
 
-    def acknowledge(self, ids: list[int] | None = None,
-                    project_root: str | None = None,
-                    fingerprint: str | None = None,
-                    reason: str | None = None) -> int:
+    def acknowledge(
+        self,
+        ids: list[int] | None = None,
+        project_root: str | None = None,
+        fingerprint: str | None = None,
+        reason: str | None = None,
+    ) -> int:
         """Mark findings reviewed (hidden from the menu, kept in history)."""
         reviewed_at = time.time()
         with self._lock, self._connect() as conn:
@@ -405,18 +447,23 @@ class VerdictStore:
             )
             return cur.rowcount
 
-    def reopen(self, ids: list[int] | None = None,
-               fingerprint: str | None = None) -> int:
+    def reopen(
+        self, ids: list[int] | None = None, fingerprint: str | None = None
+    ) -> int:
         with self._lock, self._connect() as conn:
             if ids:
                 qs = ",".join("?" for _ in ids)
                 cur = conn.execute(
                     f"""UPDATE verdicts SET acknowledged=0, reviewed_at=NULL,
-                        review_reason=NULL WHERE id IN ({qs})""", list(ids))
+                        review_reason=NULL WHERE id IN ({qs})""",
+                    list(ids),
+                )
             elif fingerprint:
                 cur = conn.execute(
                     """UPDATE verdicts SET acknowledged=0, reviewed_at=NULL,
-                       review_reason=NULL WHERE fingerprint=?""", (fingerprint,))
+                       review_reason=NULL WHERE fingerprint=?""",
+                    (fingerprint,),
+                )
             else:
                 return 0
             return cur.rowcount
@@ -424,7 +471,8 @@ class VerdictStore:
     def get(self, finding_id: int) -> dict[str, Any] | None:
         with self._lock, self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM verdicts WHERE id=?", (finding_id,)).fetchone()
+                "SELECT * FROM verdicts WHERE id=?", (finding_id,)
+            ).fetchone()
         return self._decode(row) if row else None
 
     def occurrences(
@@ -434,8 +482,9 @@ class VerdictStore:
         *,
         include_reviewed: bool = True,
     ) -> list[dict[str, Any]]:
-        reviewed_clause = "" if include_reviewed else (
-            " AND acknowledged=0 AND suppressed=0")
+        reviewed_clause = (
+            "" if include_reviewed else (" AND acknowledged=0 AND suppressed=0")
+        )
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT * FROM verdicts
@@ -456,7 +505,9 @@ class VerdictStore:
     def clear(self, project_root: str | None = None) -> None:
         with self._lock, self._connect() as conn:
             if project_root:
-                conn.execute("DELETE FROM verdicts WHERE project_root = ?", (project_root,))
+                conn.execute(
+                    "DELETE FROM verdicts WHERE project_root = ?", (project_root,)
+                )
             else:
                 conn.execute("DELETE FROM verdicts")
 

@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 try:
     import psutil
@@ -97,24 +97,12 @@ FORMAL_BASE_AMENDMENT_SHA256 = (
 FORMAL_AMENDMENT = ROOT / "protocol-v3-amendment-008.json"
 FORMAL_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-009.json"
 FORMAL_ROUTING_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-010.json"
-FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT = (
-    ROOT / "protocol-v3-amendment-011.json"
-)
-FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT = (
-    ROOT / "protocol-v3-amendment-012.json"
-)
-FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT = (
-    ROOT / "protocol-v3-amendment-013.json"
-)
-FORMAL_HOST_ROUTING_CORRECTION_AMENDMENT = (
-    ROOT / "protocol-v3-amendment-014.json"
-)
-FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT = (
-    ROOT / "protocol-v3-amendment-015.json"
-)
-FORMAL_SUPERVISOR_CACHE_CORRECTION_AMENDMENT = (
-    ROOT / "protocol-v3-amendment-016.json"
-)
+FORMAL_PREPUBLICATION_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-011.json"
+FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-012.json"
+FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-013.json"
+FORMAL_HOST_ROUTING_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-014.json"
+FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-015.json"
+FORMAL_SUPERVISOR_CACHE_CORRECTION_AMENDMENT = ROOT / "protocol-v3-amendment-016.json"
 FORMAL_STUDY_MODE = "formal_protocol_v3_amendment_008"
 FORMAL_STUDY_MODE_OVERRIDE_TEXT = (
     "For exact raw r03, study_mode is exactly "
@@ -5172,6 +5160,21 @@ def _single_event(
     *,
     timeout: float,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    baseline_rows = {
+        str(project.root): _full_evaluation_history(project.root)
+        for project in fixture.projects
+    }
+    baseline_evaluation_ids = {
+        str(row.get("evaluation_id", ""))
+        for rows in baseline_rows.values()
+        for row in rows
+    }
+    baseline_finding_ids = {
+        int(finding.get("finding_id", finding.get("id")))
+        for project in fixture.projects
+        for finding in _full_findings(project.root)
+        if finding.get("finding_id", finding.get("id")) is not None
+    }
     started_wall = time.time()
     events = _build_events(fixture, condition_id, 1)
     samples, expected, rows, _wait = _invoke_event_group(
@@ -5182,12 +5185,21 @@ def _single_event(
         max_workers=1,
     )
     accounting = account_evaluations(
-        rows, expected, fixture.artifacts, started_wall_time=started_wall
+        rows,
+        expected,
+        fixture.artifacts,
+        started_wall_time=started_wall,
+        baseline_evaluation_ids=baseline_evaluation_ids,
     )
     findings = {
         str(project.root): _full_findings(project.root) for project in fixture.projects
     }
-    accounting["findings"] = account_findings(findings, rows, expected)
+    accounting["findings"] = account_findings(
+        findings,
+        rows,
+        expected,
+        baseline_finding_ids=baseline_finding_ids,
+    )
     return samples[0], accounting
 
 
@@ -5811,7 +5823,7 @@ def _fault_worker_timeout(
             "time_to_failed_outcome_ms": round(
                 (failed_visible_ns - started) / 1_000_000, 3
             ),
-            "failed_outcome": {
+            "faulting_outcome": {
                 "status": (row or {}).get("status", "missing"),
                 "error_code": ((row or {}).get("outcome") or {}).get("error_code"),
                 "error": ((row or {}).get("outcome") or {}).get("error"),
@@ -6295,13 +6307,13 @@ def _fault_passed(name: str, result: dict[str, Any]) -> bool:
             and recovery_hook_ok
         )
     if name == "worker_timeout":
+        faulting_outcome = dict(result.get("faulting_outcome") or {})
         return (
             cleanup_ok
             and integrity
             and result.get("old_worker_confirmed_stopped_before_dispatch") is True
-            and (result.get("failed_outcome") or {}).get("status") == "failed"
-            and (result.get("failed_outcome") or {}).get("error_code")
-            == "invalid_output"
+            and faulting_outcome.get("status") == "completed"
+            and not faulting_outcome.get("error_code")
             and bool((result.get("faulting_hook") or {}).get("contract_preserved"))
             and bool(result.get("worker_replaced"))
             and result.get("old_worker_confirmed_absent") is True
@@ -7225,9 +7237,7 @@ def run_study(
         ),
         "protocol_routing_correction_amendment": (
             {
-                "path": str(
-                    FORMAL_ROUTING_CORRECTION_AMENDMENT.relative_to(REPO_ROOT)
-                ),
+                "path": str(FORMAL_ROUTING_CORRECTION_AMENDMENT.relative_to(REPO_ROOT)),
                 "sha256": _sha256_file(FORMAL_ROUTING_CORRECTION_AMENDMENT),
             }
             if formal
@@ -7477,8 +7487,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         if (
             not isinstance(prepublication, dict)
             or prepublication.get("amendment_id") != "protocol-v3-amendment-011"
-            or prepublication.get("parent_amendment")
-            != "protocol-v3-amendment-010"
+            or prepublication.get("parent_amendment") != "protocol-v3-amendment-010"
             or not str(prepublication.get("status", "")).startswith("frozen ")
             or not isinstance(prepublication_identity, dict)
             or not isinstance(override, dict)
@@ -7507,14 +7516,10 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         fatal["supervisor_child_stderr_path_exact"] = str(
             supervisor_root / "child.stderr.bin"
         )
-        fatal["supervisor_closeout_path_exact"] = str(
-            supervisor_root / "closeout.json"
-        )
+        fatal["supervisor_closeout_path_exact"] = str(supervisor_root / "closeout.json")
         try:
             historical = json.loads(
-                FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT.read_text(
-                    encoding="utf-8"
-                ),
+                FORMAL_HISTORICAL_ROLE_CORRECTION_AMENDMENT.read_text(encoding="utf-8"),
                 object_pairs_hook=unique_object,
                 parse_constant=reject_constant,
             )
@@ -7541,9 +7546,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         )
         try:
             wait_correction = json.loads(
-                FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT.read_text(
-                    encoding="utf-8"
-                ),
+                FORMAL_SUPERVISOR_WAIT_CORRECTION_AMENDMENT.read_text(encoding="utf-8"),
                 object_pairs_hook=unique_object,
                 parse_constant=reject_constant,
             )
@@ -7562,8 +7565,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         if (
             not isinstance(wait_correction, dict)
             or wait_correction.get("amendment_id") != "protocol-v3-amendment-013"
-            or wait_correction.get("parent_amendment")
-            != "protocol-v3-amendment-012"
+            or wait_correction.get("parent_amendment") != "protocol-v3-amendment-012"
             or not str(wait_correction.get("status", "")).startswith("frozen ")
             or not isinstance(wait_identity, dict)
             or not isinstance(wait_override, dict)
@@ -7572,9 +7574,9 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         contract["effective_protocol_identity"]["required_git_topology"] = (
             wait_identity["required_git_topology"]
         )
-        contract["effective_protocol_identity"]["interpretation_order"] = (
-            wait_identity["interpretation_order"]
-        )
+        contract["effective_protocol_identity"]["interpretation_order"] = wait_identity[
+            "interpretation_order"
+        ]
         successor = str(wait_override["successor_raw_attempt_id"])
         if successor != "formal-v3-20260831t051023z-r05":
             raise SystemsHarnessError("amendment-013 successor identity differs")
@@ -7612,14 +7614,12 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         contract["effective_protocol_identity"]["required_git_topology"] = (
             host_identity["required_git_topology"]
         )
-        contract["effective_protocol_identity"]["interpretation_order"] = (
-            host_identity["interpretation_order"]
-        )
+        contract["effective_protocol_identity"]["interpretation_order"] = host_identity[
+            "interpretation_order"
+        ]
         try:
             cache_isolation = json.loads(
-                FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT.read_text(
-                    encoding="utf-8"
-                ),
+                FORMAL_CACHE_ISOLATION_CORRECTION_AMENDMENT.read_text(encoding="utf-8"),
                 object_pairs_hook=unique_object,
                 parse_constant=reject_constant,
             )
@@ -7638,8 +7638,7 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         if (
             not isinstance(cache_isolation, dict)
             or cache_isolation.get("amendment_id") != "protocol-v3-amendment-015"
-            or cache_isolation.get("parent_amendment")
-            != "protocol-v3-amendment-014"
+            or cache_isolation.get("parent_amendment") != "protocol-v3-amendment-014"
             or not str(cache_isolation.get("status", "")).startswith("frozen ")
             or not isinstance(cache_identity, dict)
             or not isinstance(cache_override, dict)
@@ -7678,10 +7677,8 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         )
         if (
             not isinstance(supervisor_cache, dict)
-            or supervisor_cache.get("amendment_id")
-            != "protocol-v3-amendment-016"
-            or supervisor_cache.get("parent_amendment")
-            != "protocol-v3-amendment-015"
+            or supervisor_cache.get("amendment_id") != "protocol-v3-amendment-016"
+            or supervisor_cache.get("parent_amendment") != "protocol-v3-amendment-015"
             or not str(supervisor_cache.get("status", "")).startswith("frozen ")
             or not isinstance(supervisor_identity, dict)
             or not isinstance(supervisor_override, dict)
@@ -7702,7 +7699,9 @@ def _formal_contract(*, require_frozen: bool = True) -> dict[str, Any]:
         contract["supervisor_cache_environment_correction"] = supervisor_cache
         fatal = contract["fatal_result_contract"]
         fatal["supervisor_closeout_root_exact"] = str(FORMAL_SUPERVISOR_ROOT)
-        fatal["supervisor_start_path_exact"] = str(FORMAL_SUPERVISOR_ROOT / "start.json")
+        fatal["supervisor_start_path_exact"] = str(
+            FORMAL_SUPERVISOR_ROOT / "start.json"
+        )
         fatal["supervisor_child_stdout_path_exact"] = str(
             FORMAL_SUPERVISOR_ROOT / "child.stdout.bin"
         )
@@ -7766,7 +7765,9 @@ def _formal_runtime_profile() -> dict[str, Any]:
         .get("explicit_override", {})
         .get("dedicated_cache_root")
     )
-    dependency["runtime_lock_path"] = "experiments/eacl2027/formal-runtime-lock-v12.json"
+    dependency["runtime_lock_path"] = (
+        "experiments/eacl2027/formal-runtime-lock-v12.json"
+    )
     profile["cache_and_dependency_receipt"] = dependency
     thread_environment = dict(profile.get("thread_environment") or {})
     thread_environment["PROGRAMASWEIGHTS_CACHE_DIR"] = "UNSET"
@@ -9122,9 +9123,7 @@ def _supervisor_environment() -> dict[str, str]:
     return dict(sorted(environment.items()))
 
 
-def _supervisor_exception_diagnostic(
-    stage: str, exc: BaseException
-) -> dict[str, str]:
+def _supervisor_exception_diagnostic(stage: str, exc: BaseException) -> dict[str, str]:
     return {
         "stage": stage,
         "type": f"{type(exc).__module__}.{type(exc).__qualname__}",
@@ -9933,7 +9932,9 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
         raise SystemsHarnessError("fatal supervisor root differs from frozen contract")
     supervisor_parent = Path(str(contract["supervisor_parent_exact"]))
     if supervisor_parent != supervisor_root.parent:
-        raise SystemsHarnessError("fatal supervisor parent differs from frozen contract")
+        raise SystemsHarnessError(
+            "fatal supervisor parent differs from frozen contract"
+        )
     _preclaim_formal_supervisor_root(supervisor_root)
     stream_paths = {
         "stdout": Path(str(contract["supervisor_child_stdout_path_exact"])),
@@ -10002,9 +10003,7 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
                 except (OSError, ValueError, SystemsHarnessError) as exc:
                     with diagnostics_lock:
                         supervisor_diagnostics.append(
-                            _supervisor_exception_diagnostic(
-                                "descendant_identity", exc
-                            )
+                            _supervisor_exception_diagnostic("descendant_identity", exc)
                         )
                     continue
                 registered[(descendant.pid, int(identity["proc_start_ticks"]))] = (
@@ -10167,7 +10166,9 @@ def _run_formal_supervisor(argv: Sequence[str]) -> int:
         any(path.parent != supervisor_root for path in contract_paths)
         or len({path.name for path in contract_paths}) != 4
     ):
-        raise SystemsHarnessError("frozen supervisor paths are not four distinct members")
+        raise SystemsHarnessError(
+            "frozen supervisor paths are not four distinct members"
+        )
     expected_members = sorted(path.name for path in contract_paths)
     if sorted(path.name for path in supervisor_root.iterdir()) != expected_members:
         raise SystemsHarnessError("sealed supervisor root membership differs")

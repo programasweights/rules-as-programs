@@ -10,6 +10,9 @@ import sys
 from ... import ipc
 from .adapter import normalize
 
+EVENT_DELIVERY_TIMEOUT_SECONDS = 1.5
+EVENT_DELIVERY_ATTEMPTS = 2
+
 
 def _spawn_daemon() -> None:
     try:
@@ -39,9 +42,12 @@ def main() -> int:
 
     daemon_down = False
     for event in events:
-        response = ipc.send_request(
-            {"type": "event", "event": event.to_dict()}, timeout=0.6
-        )
+        request = {"type": "event", "event": event.to_dict()}
+        response = None
+        for _attempt in range(EVENT_DELIVERY_ATTEMPTS):
+            response = ipc.send_request(request, timeout=EVENT_DELIVERY_TIMEOUT_SECONDS)
+            if response is not None:
+                break
         if response is None:
             daemon_down = True
             break

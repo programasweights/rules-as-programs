@@ -61,6 +61,36 @@ class FakeContext:
         return self.process
 
 
+class ScriptedConnection(FakeConnection):
+    def __init__(self, response=None):
+        super().__init__()
+        self.response = response
+
+    def poll(self, _timeout):
+        return self.response is not None
+
+    def recv(self):
+        return self.response
+
+
+class ScriptedContext:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.parents = []
+        self.processes = []
+
+    def Pipe(self, duplex=True):
+        parent = ScriptedConnection(self.responses.pop(0))
+        child = FakeConnection()
+        self.parents.append(parent)
+        return parent, child
+
+    def Process(self, **_kwargs):
+        process = FakeProcess()
+        self.processes.append(process)
+        return process
+
+
 def test_timeout_kills_poisoned_native_worker():
     worker = PawInferenceProcess()
     context = FakeContext()
@@ -73,6 +103,18 @@ def test_timeout_kills_poisoned_native_worker():
     assert context.process.terminated
     assert context.parent.closed
     assert worker.pid is None
+
+
+def test_timeout_retries_once_in_a_fresh_worker():
+    worker = PawInferenceProcess()
+    context = ScriptedContext([None, {"id": "2", "ok": True, "output": " WARNING \n"}])
+    worker._context = context
+
+    assert worker.call("program", "input", timeout=0.01) == "WARNING"
+    assert len(context.processes) == 2
+    assert context.processes[0].terminated
+    assert worker.generation == 2
+    assert worker.last_error == ""
 
 
 def test_llama_thread_settings_are_explicit_and_positive():
