@@ -14,7 +14,7 @@ from rules_as_programs.core.events import Event, MESSAGE
 from rules_as_programs.core.ledger import Ledger
 from rules_as_programs.core.rule import LoadedRule, new_rule_id
 from rules_as_programs.core.store import Verdict, VerdictStore
-from rules_as_programs.daemon import Daemon
+from rules_as_programs.daemon import Daemon, _Server
 
 
 class FakeRuntime:
@@ -44,6 +44,10 @@ class FakeRuntime:
 
     def run(self, _program_id, _text):
         return self.output
+
+
+def test_daemon_listener_backlog_covers_formal_burst_width():
+    assert _Server.request_queue_size >= 64
 
 
 def _ingress_test_daemon():

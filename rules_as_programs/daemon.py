@@ -4410,6 +4410,11 @@ class _Handler(socketserver.StreamRequestHandler):
 class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     allow_reuse_address = True
+    # Codex can start many hook clients together (for example, after a burst of
+    # parallel tool calls).  ``socketserver`` otherwise inherits a backlog of
+    # only five, allowing connection attempts to fail before the daemon can
+    # durably admit their events.
+    request_queue_size = 128
 
 
 _daemon_lock_handle = None

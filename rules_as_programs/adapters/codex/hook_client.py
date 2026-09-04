@@ -6,12 +6,14 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from ... import ipc
 from .adapter import normalize
 
-EVENT_DELIVERY_TIMEOUT_SECONDS = 1.5
-EVENT_DELIVERY_ATTEMPTS = 2
+EVENT_DELIVERY_TIMEOUT_SECONDS = 0.75
+EVENT_DELIVERY_ATTEMPTS = 4
+EVENT_DELIVERY_RETRY_DELAY_SECONDS = 0.05
 
 
 def _spawn_daemon() -> None:
@@ -44,11 +46,16 @@ def main() -> int:
     for event in events:
         request = {"type": "event", "event": event.to_dict()}
         response = None
-        for _attempt in range(EVENT_DELIVERY_ATTEMPTS):
+        for attempt in range(EVENT_DELIVERY_ATTEMPTS):
             response = ipc.send_request(request, timeout=EVENT_DELIVERY_TIMEOUT_SECONDS)
-            if response is not None:
+            # ``accepted=False`` is a successful idempotent duplicate.  An
+            # empty or error response is not an acknowledgement and must not
+            # silently discard the observed event.
+            if response and response.get("ok") is True:
                 break
-        if response is None:
+            if attempt + 1 < EVENT_DELIVERY_ATTEMPTS:
+                time.sleep(EVENT_DELIVERY_RETRY_DELAY_SECONDS * (attempt + 1))
+        if not response or response.get("ok") is not True:
             daemon_down = True
             break
     if daemon_down:
