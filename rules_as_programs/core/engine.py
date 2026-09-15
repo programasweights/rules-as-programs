@@ -192,16 +192,9 @@ class Engine:
         )
         rule_behavior_hash = (
             revisions.behavior_hash(rule_source) if rule_source else "")
-        initial_events = ledger.events()
-        trigger_index = next(
-            (
-                index for index, event in enumerate(initial_events)
-                if trigger_event is not None and event.id == trigger_event.id
-            ),
-            -1,
-        )
-        through_seq = (
-            trigger_index + 1 if trigger_index >= 0 else len(initial_events))
+        trigger_seq, event_count = ledger.event_position(
+            trigger_event.id if trigger_event is not None else None)
+        through_seq = trigger_seq if trigger_seq is not None else event_count
         hook_name = (
             trigger_event.hook_name if trigger_event else rule.trigger)
         raw_payload = (
@@ -450,15 +443,9 @@ def _evaluation_snapshot(
     evaluation_id: str,
 ) -> dict[str, Any]:
     input_bytes = input_text.encode("utf-8")
-    events = ledger.events()
-    trigger_index = next(
-        (
-            index for index, event in enumerate(events)
-            if trigger_event is not None and event.id == trigger_event.id
-        ),
-        -1,
-    )
-    through_seq = min(len(events), max(0, int(context_through_seq)))
+    trigger_seq, event_count = ledger.event_position(
+        trigger_event.id if trigger_event is not None else None)
+    through_seq = min(event_count, max(0, int(context_through_seq)))
     return {
         "schema_version": 4,
         "evaluation_id": evaluation_id,
@@ -488,7 +475,7 @@ def _evaluation_snapshot(
             "event_id": trigger_event.id if trigger_event else "",
             "kind": trigger_event.kind if trigger_event else "",
             "hook": trigger_event.hook_name if trigger_event else rule.trigger,
-            "seq": trigger_index + 1 if trigger_index >= 0 else None,
+            "seq": trigger_seq,
             "included_in_input": True,
             "event": (
                 {

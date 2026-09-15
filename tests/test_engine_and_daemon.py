@@ -284,6 +284,12 @@ def test_rule_context_and_detail_cut_off_events_appended_during_evaluation(
         payload={"text": "queued after trigger"},
     )
     ledger.append(queued_late)
+
+    def unexpected_full_scan(*_args, **_kwargs):
+        raise AssertionError(
+            "evaluation must use ledger positions without loading all payloads")
+
+    monkeypatch.setattr(ledger, "events", unexpected_full_scan)
     rule_path = project / "rule.py"
     rule_path.write_text("# frozen\n")
 
