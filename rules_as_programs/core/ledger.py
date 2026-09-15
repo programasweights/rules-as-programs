@@ -41,6 +41,7 @@ class Ledger:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in conversation_id)
         self.path: Path = config.ledger_dir() / f"{safe}.jsonl"
         self._lock = threading.Lock()
+        self._append_lock = threading.Lock()
         # Keep offsets and identifying metadata, never event payloads. Only our
         # own complete appends extend this cache; any other file change rebuilds
         # it, including same-size rewrites and truncation followed by regrowth.
@@ -52,22 +53,30 @@ class Ledger:
     def append(self, event: Event) -> None:
         data = event.to_dict()
         line = (json.dumps(data, ensure_ascii=False) + os.linesep).encode("utf-8")
-        with self._lock:
+        with self._append_lock:
             with self.path.open("ab") as f:
                 before = _signature(os.fstat(f.fileno()))
                 f.write(line)
                 f.flush()
                 after = _signature(os.fstat(f.fileno()))
-            if (
-                self._signature == before
-                and self._terminated
-                and before[:2] == after[:2]
-                and after[2] == before[2] + len(line)
-            ):
-                self._add_record(_Record(before[2], len(line), data["id"], data["ts"]))
-                self._signature = after
-            else:
-                self._signature = None
+            # Ingestion must not wait for an index rebuild or a context read.
+            # If the index is busy, its older file signature causes the next
+            # reader to rebuild; the current reader keeps its bounded snapshot.
+            if not self._lock.acquire(blocking=False):
+                return
+            try:
+                if (
+                    self._signature == before
+                    and self._terminated
+                    and before[:2] == after[:2]
+                    and after[2] == before[2] + len(line)
+                ):
+                    self._add_record(_Record(before[2], len(line), data["id"], data["ts"]))
+                    self._signature = after
+                # A reader may already have indexed this append. Otherwise the
+                # changed signature invalidates the cache on its next use.
+            finally:
+                self._lock.release()
 
     @staticmethod
     def _decode_event(raw: bytes) -> Event | None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -234,3 +235,37 @@ def test_concurrent_appends_and_windows_share_consistent_index(ledger):
     assert {event.id for event in events} == {str(index) for index in range(80)}
     assert ledger.context_window(start=0, limit=100) == _expected_window(
         ledger, events, start=0, limit=100)
+
+
+@pytest.mark.parametrize("phase", ["cold_rebuild", "warm_window"])
+def test_append_does_not_wait_for_index_read(ledger, monkeypatch, phase):
+    first, second = _event(0), _event(1)
+    ledger.append(first)
+    if phase == "warm_window":
+        ledger.event_position()
+    method_name = "_rebuild_index" if phase == "cold_rebuild" else "_read_event"
+    original = getattr(ledger, method_name)
+    reader_paused = threading.Event()
+    release_reader = threading.Event()
+
+    def paused_read(*args):
+        reader_paused.set()
+        assert release_reader.wait(5), "test did not release the ledger reader"
+        return original(*args)
+
+    monkeypatch.setattr(ledger, method_name, paused_read)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reader = executor.submit(ledger.context_window)
+        try:
+            assert reader_paused.wait(5), "ledger reader did not reach the pause"
+            # The reader is still paused while append must finish. Using two
+            # separate futures also lets a failing test release both workers.
+            executor.submit(ledger.append, second).result(timeout=5)
+        finally:
+            release_reader.set()
+        assert reader.result(timeout=5) == _expected_window(ledger, [first])
+
+    assert ledger.event_position(second.id) == (2, 2)
+    assert ledger.context_window() == _expected_window(ledger, [first, second])
+    assert ledger.context_window(through_seq=1) == _expected_window(
+        ledger, [first, second], through_seq=1)
