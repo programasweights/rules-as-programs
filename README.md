@@ -18,22 +18,17 @@ input. If the rule gets it wrong, revise it and test it against saved examples.
 
 ## See a rule come to life
 
-Suppose your rule is: **When claiming a change works, report what you checked.**
+Suppose your rule is: **Never use rsync to sync code; use GitHub instead.**
 
-The agent replies:
+The agent invokes:
 
-> Implemented the parser and everything works.
+```bash
+rsync -av src/ server:/app/src/
+```
 
-Your rule checks that response and flags the unsupported success claim. Open the
-finding to see exactly what it judged:
-
-![Finding Inspector showing a warning on “Implemented the parser and everything works.”](docs/images/finding-inspector.png)
-
-*A demonstration rule checking an assistant response in the macOS app.*
-
-A response such as “I ran pytest; all 42 tests passed” reports a check and its
-result. “I changed the parser but could not run the tests” states the limitation.
-Your specification defines the distinction you want the rule to make.
+Your rule checks the tool invocation and flags the source-code transfer. The
+intended workflow is to push the changes to GitHub, then pull them on the other
+machine. Even if the agent forgets the rule, the rule still checks the command.
 
 RAP reports findings without blocking or changing the agent's work. You review
 the findings and decide what needs attention.
@@ -74,13 +69,29 @@ should pass and what should be flagged.
 
 For example, you can write a rule to:
 
+- Flag rsync commands that synchronize source code.
 - Flag success claims that do not report a check and its result.
-- Flag a tool command that copies source code to a remote machine.
 - Check that a response asking for help actually requests the missing decision.
 
 A basic rule checks its selected input, not the entire conversation. You can
 assign rules to selected projects or share them across projects. For precise
 conditions, you can also write checks directly in Python.
+
+For a more semantic example, take **When claiming a change works, report what
+you checked.** The agent replies:
+
+> Implemented the parser and everything works.
+
+The rule flags the unsupported success claim. Open the finding to see exactly
+what it judged:
+
+![Finding Inspector showing a warning on “Implemented the parser and everything works.”](docs/images/finding-inspector.png)
+
+*A demonstration rule checking an assistant response in the macOS app.*
+
+A response such as “I ran pytest; all 42 tests passed” reports a check and its
+result. “I changed the parser but could not run the tests” states the limitation.
+Your specification defines the distinction you want the rule to make.
 
 [Learn to write and deploy rules →](docs/writing-rules.md)
 
