@@ -136,17 +136,17 @@ and the network. See [Data and privacy](docs/reference.md#data-and-privacy).
 
 For the PAW foundation of Rules as Programs, cite Program-as-Weights. Also cite Compile by Training when using the training compiler.
 
-**[Program-as-Weights: A Programming Paradigm for Fuzzy Functions](https://arxiv.org/abs/2607.02512)**
+**[Program-as-Weights: A Programming Paradigm for Fuzzy Functions](https://openreview.net/forum?id=ppCD0mb6ty)**
+
+NeurIPS 2026 · [Preprint](https://arxiv.org/abs/2607.02512)
 
 ```bibtex
-@misc{paw_2607_02512,
+@inproceedings{zhang2026programasweights,
   title = {{Program-as-Weights: A Programming Paradigm for Fuzzy Functions}},
   author = {Zhang, Wentao and Hotsko, Liliana and Kim, Woojeong and Nie, Pengyu and Shieber, Stuart and Deng, Yuntian},
+  booktitle = {The Fortieth Annual Conference on Neural Information Processing Systems},
   year = {2026},
-  note = {arXiv preprint},
-  eprint = {2607.02512},
-  archivePrefix = {arXiv},
-  url = {https://arxiv.org/abs/2607.02512}
+  url = {https://openreview.net/forum?id=ppCD0mb6ty}
 }
 ```
 
