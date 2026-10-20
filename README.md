@@ -132,6 +132,38 @@ and the network. See [Data and privacy](docs/reference.md#data-and-privacy).
 - [Commands, configuration, and data](docs/reference.md)
 - [Contributing and code structure](CONTRIBUTING.md)
 
+## Citation
+
+For the PAW foundation of Rules as Programs, cite Program-as-Weights. Also cite Compile by Training when using the training compiler.
+
+**[Program-as-Weights: A Programming Paradigm for Fuzzy Functions](https://arxiv.org/abs/2607.02512)**
+
+```bibtex
+@misc{paw_2607_02512,
+  title = {{Program-as-Weights: A Programming Paradigm for Fuzzy Functions}},
+  author = {Zhang, Wentao and Hotsko, Liliana and Kim, Woojeong and Nie, Pengyu and Shieber, Stuart and Deng, Yuntian},
+  year = {2026},
+  note = {arXiv preprint},
+  eprint = {2607.02512},
+  archivePrefix = {arXiv},
+  url = {https://arxiv.org/abs/2607.02512}
+}
+```
+
+**[Compile by Training: Turning Natural-Language Specifications into Local Neural Functions](https://arxiv.org/abs/2609.04199)**
+
+```bibtex
+@misc{paw_2609_04199,
+  title = {{Compile by Training: Turning Natural-Language Specifications into Local Neural Functions}},
+  author = {Deng, Yuntian and Nie, Pengyu and Shieber, Stuart},
+  year = {2026},
+  note = {arXiv preprint},
+  eprint = {2609.04199},
+  archivePrefix = {arXiv},
+  url = {https://arxiv.org/abs/2609.04199}
+}
+```
+
 ## License
 
 [MIT](LICENSE).
